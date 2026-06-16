@@ -19,12 +19,20 @@ fi
 
 REMOTE_BASE="origin/${BASE_BRANCH}"
 if ! git rev-parse --verify "$REMOTE_BASE" >/dev/null 2>&1; then
-    # If origin/<base> doesn't exist, try just the branch name
-    if ! git rev-parse --verify "$BASE_BRANCH" >/dev/null 2>&1; then
-        echo '{"error":"Cannot resolve base branch","base_branch":"'"$BASE_BRANCH"'"}' >&2
-        exit 1
+    # Shallow clone may not have the remote ref — try to fetch it.
+    if git remote get-url origin >/dev/null 2>&1; then
+        echo "  Fetching ${BASE_BRANCH}..." >&2
+        git fetch origin "${BASE_BRANCH}" --depth=1 >/dev/null 2>&1 || true
     fi
-    REMOTE_BASE="$BASE_BRANCH"
+    # Re-check after fetch attempt.
+    if ! git rev-parse --verify "$REMOTE_BASE" >/dev/null 2>&1; then
+        # Try local branch name as last resort.
+        if ! git rev-parse --verify "$BASE_BRANCH" >/dev/null 2>&1; then
+            echo '{"error":"Cannot resolve base branch","base_branch":"'"$BASE_BRANCH"'"}' >&2
+            exit 1
+        fi
+        REMOTE_BASE="$BASE_BRANCH"
+    fi
 fi
 
 MERGE_BASE=$(git merge-base HEAD "$REMOTE_BASE" 2>/dev/null || true)
