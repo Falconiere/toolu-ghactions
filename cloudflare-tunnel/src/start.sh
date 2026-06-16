@@ -9,6 +9,7 @@
 #
 # Inputs (env, mapped from action.yml):
 #   INPUT_NAME              instance name (slugified for tmpfile paths)
+#   INPUT_HOST              local host for quick mode (default localhost)
 #   INPUT_PORT              local port for quick mode (default 3000)
 #   INPUT_TUNNEL_TOKEN      named-tunnel token (optional)
 #   INPUT_TUNNEL_CONFIG     path to user-supplied config.yml (named mode only)
@@ -32,6 +33,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 NAME="${INPUT_NAME:-}"
 SLUG=$(slugify "$NAME")
 NAME_FOR_OUTPUT="$SLUG"
+HOST="${INPUT_HOST:-localhost}"
 PORT="${INPUT_PORT:-3000}"
 TUNNEL_TOKEN="${INPUT_TUNNEL_TOKEN:-}"
 TUNNEL_CONFIG="${INPUT_TUNNEL_CONFIG:-}"
@@ -62,15 +64,20 @@ if [ -n "$TUNNEL_TOKEN" ]; then
     fi
     OUTPUT_FIELD="tunnel-id"
 else
-    # Quick-tunnel mode: ephemeral URL, no auth needed.
-    CLOUDFLARED_ARGS+=(tunnel --url "http://localhost:${PORT}")
+    # Quick-tunnel mode: ephemeral URL, no auth needed. HOST:PORT resolves on
+    # the runner host (composite action), so it reaches the app under test.
+    CLOUDFLARED_ARGS+=(tunnel --url "http://${HOST}:${PORT}")
     OUTPUT_FIELD="tunnel-url"
 fi
 
-# --- Phase 3: spawn cloudflared in background ---
+# --- Phase 3: spawn cloudflared, detached so it outlives this step ---
+# nohup + </dev/null detaches from the step's controlling shell: when the
+# composite step's bash exits, cloudflared is reparented to init and keeps
+# running, so later steps (and other jobs, via the public URL) can use the
+# tunnel. Portable to bash 3.2 (macOS) — no setsid/disown.
 log "Starting cloudflared (mode: $([ -n "$TUNNEL_TOKEN" ] && echo named || echo quick))..."
 : > "$LOG_FILE"
-cloudflared "${CLOUDFLARED_ARGS[@]}" >>"$LOG_FILE" 2>&1 &
+nohup cloudflared "${CLOUDFLARED_ARGS[@]}" >>"$LOG_FILE" 2>&1 </dev/null &
 PID=$!
 echo "$PID" > "$PID_FILE"
 log "Spawned cloudflared pid=$PID, log=$LOG_FILE"

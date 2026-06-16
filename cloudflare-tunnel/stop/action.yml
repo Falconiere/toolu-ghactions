@@ -1,7 +1,8 @@
 name: 'Toolu Cloudflare Tunnel — Stop'
 description: |
-  Stops a Cloudflare Tunnel started by the matching `start` step. Idempotent
-  and safe to run on job failure or cancellation — pair with `if: always()`.
+  Stops a Cloudflare Tunnel started by the matching `start` step. Runs on the
+  runner host (Linux + macOS). Idempotent and safe to run on job failure or
+  cancellation — pair with `if: always()`.
 author: 'Falconiere'
 branding:
   icon: 'x-circle'
@@ -18,10 +19,10 @@ inputs:
     default: '5'
 
 runs:
-  using: 'docker'
-  image: 'docker://ghcr.io/falconiere/toolu-ghactions/cloudflare-tunnel:v1'
-  args:
-    - 'stop'
-  env:
-    INPUT_NAME: ${{ inputs.name }}
-    INPUT_STOP_TIMEOUT: ${{ inputs.stop-timeout }}
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        INPUT_NAME: ${{ inputs.name }}
+        INPUT_STOP_TIMEOUT: ${{ inputs.stop-timeout }}
+      run: bash "$GITHUB_ACTION_PATH/../src/stop.sh"

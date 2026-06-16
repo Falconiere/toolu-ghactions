@@ -36,6 +36,14 @@ teardown() {
     [[ "$output" == *"SHA256 mismatch"* || "$output" == *"ERROR"* ]]
 }
 
+@test "BSD '*'-prefixed checksum filename is parsed — mismatch still caught" {
+    stub_curl_corrupt_binary_star
+    export INPUT_VERIFY_CHECKSUM="true"
+    run bash "$SRC_DIR/install-cloudflared.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"SHA256 mismatch"* ]]
+}
+
 @test "checksum verification skipped when INPUT_VERIFY_CHECKSUM is false (default)" {
     stub_curl_deliver_quick_probe_ok
     export INPUT_VERIFY_CHECKSUM="false"
@@ -63,4 +71,15 @@ teardown() {
     run bash "$SRC_DIR/install-cloudflared.sh"
     [ "$status" -eq 0 ]
     [ -x "$INSTALL_DEST" ]
+}
+
+@test "macOS: darwin .tgz asset is downloaded and extracted to INSTALL_DEST" {
+    export CF_OS=darwin CF_ARCH=arm64
+    stub_curl_deliver_darwin_tgz
+    run bash "$SRC_DIR/install-cloudflared.sh"
+    [ "$status" -eq 0 ]
+    [ -x "$INSTALL_DEST" ]
+    # The extracted (fake) binary is what got installed, not the raw .tgz.
+    run "$INSTALL_DEST"
+    [[ "$output" == *"fake-cloudflared darwin"* ]]
 }

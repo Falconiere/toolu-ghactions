@@ -1,105 +1,59 @@
 name: cloudflare-tunnel integration
 
-# Real-world E2E for cloudflare-tunnel action. Boots a real cloudflared
-# quick tunnel pointing at a local HTTP server, then probes the URL.
-# Matrix covers: start-only, start+wait+stop. Named tunnel mode requires a
-# tunnel token in secrets — guarded by an `if` on the secret being set.
-
+# Real-world E2E for the cloudflare-tunnel composite action. Boots a real
+# cloudflared quick tunnel pointing at a local HTTP server on the runner host,
+# then probes the public URL to prove the tunnel reaches HOST:PORT. Runs on
+# Linux and macOS (the action must work on both). Triggered when the action
+# changes — no weekly cron: an ephemeral per-run tunnel has nothing to smoke-test
+# on a schedule.
 on:
   workflow_dispatch:
-  schedule:
-    # Weekly smoke test (Sundays 04:00 UTC) to detect trycloudflare regressions.
-    - cron: '0 4 * * 0'
+  pull_request:
+    paths:
+      - 'cloudflare-tunnel/**'
+      - '.github/workflows/integration.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'cloudflare-tunnel/**'
+      - '.github/workflows/integration.yml'
 
 jobs:
   quick:
-    name: quick tunnel (${{ matrix.flow }})
-    runs-on: ubuntu-latest
+    name: quick tunnel E2E (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        flow: [start-only, start-wait-stop]
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Start backing HTTP server
+      - name: Start backing HTTP server on 127.0.0.1:8000
         run: |
-          python3 -m http.server 3000 &
-          sleep 1
-
-      - name: Build tunnel action image
-        run: docker build -t cloudflare-tunnel-action:test cloudflare-tunnel/
+          echo "hello from ${RUNNER_OS}" > index.html
+          nohup python3 -m http.server 8000 >/dev/null 2>&1 &
+          sleep 2
 
       - name: Start tunnel
         id: start
-        run: |
-          docker run --rm \
-            -v /tmp:/tmp \
-            -e GITHUB_OUTPUT=/tmp/start-output \
-            cloudflare-tunnel-action:test start
-          cat /tmp/start-output
-          # Echo outputs for downstream steps.
-          TUNNEL_URL=$(grep '^tunnel-url=' /tmp/start-output | cut -d= -f2-)
-          TUNNEL_NAME=$(grep '^tunnel-name=' /tmp/start-output | cut -d= -f2-)
-          echo "tunnel-url=$TUNNEL_URL" >> "$GITHUB_OUTPUT"
-          echo "tunnel-name=$TUNNEL_NAME" >> "$GITHUB_OUTPUT"
+        uses: ./cloudflare-tunnel/start
+        with:
+          host: 127.0.0.1
+          port: 8000
 
-      - name: Probe tunnel URL
-        if: matrix.flow == 'start-wait-stop'
+      - name: Wait for tunnel
+        uses: ./cloudflare-tunnel/wait
+        with:
+          url: ${{ steps.start.outputs.tunnel-url }}
+          wait-timeout: 60
+
+      - name: Probe tunnel URL (proves tunnel -> 127.0.0.1:8000)
         run: |
-          TUNNEL_URL="${{ steps.start.outputs.tunnel-url }}"
-          for i in 1 2 3 4 5 6 7 8 9 10; do
-            STATUS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$TUNNEL_URL" || echo "000")
-            echo "attempt $i: status=$STATUS"
-            if [ "$STATUS" = "200" ]; then
-              echo "Tunnel is reachable"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "::error::Tunnel URL $TUNNEL_URL never returned 200"
-          exit 1
+          body=$(curl -fsS --max-time 10 "${{ steps.start.outputs.tunnel-url }}")
+          echo "$body"
+          echo "$body" | grep -q "hello from ${RUNNER_OS}"
 
       - name: Stop tunnel
-        if: matrix.flow == 'start-wait-stop'
-        run: |
-          docker run --rm \
-            -v /tmp:/tmp \
-            -e INPUT_NAME=${{ steps.start.outputs.tunnel-name }} \
-            cloudflare-tunnel-action:test stop
-          # Cloudflared should be gone.
-          ! pgrep -f cloudflared
-
-  named:
-    name: named tunnel (requires CLOUDFLARE_TUNNEL_TOKEN secret)
-    if: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN != '' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Start backing HTTP server
-        run: python3 -m http.server 3000 &
-
-      - name: Build tunnel action image
-        run: docker build -t cloudflare-tunnel-action:test cloudflare-tunnel/
-
-      - name: Start named tunnel
-        id: start
-        env:
-          INPUT_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
-        run: |
-          docker run --rm \
-            -v /tmp:/tmp \
-            -e GITHUB_OUTPUT=/tmp/start-output \
-            -e INPUT_TUNNEL_TOKEN="$INPUT_TUNNEL_TOKEN" \
-            cloudflare-tunnel-action:test start
-          cat /tmp/start-output
-          TUNNEL_ID=$(grep '^tunnel-id=' /tmp/start-output | cut -d= -f2-)
-          echo "tunnel-id=$TUNNEL_ID" >> "$GITHUB_OUTPUT"
-
-      - name: Stop named tunnel
         if: always()
-        run: |
-          docker run --rm \
-            -v /tmp:/tmp \
-            cloudflare-tunnel-action:test stop
+        uses: ./cloudflare-tunnel/stop

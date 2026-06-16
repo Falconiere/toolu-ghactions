@@ -48,9 +48,10 @@ teardown() { common_teardown; }
 }
 
 @test "AC #7: SIGTERM-immune process: stop escalates to SIGKILL after stop-timeout" {
-    # Spawn a bash process that ignores SIGTERM. `exec sleep 60` replaces
-    # bash with sleep so SIGKILL on the PID kills the sleep too (no orphan).
-    setsid bash -c 'trap "" TERM; exec sleep 60' >/dev/null 2>&1 &
+    # Spawn a process that ignores SIGTERM. `exec sleep 60` replaces bash with
+    # sleep, so PID == sleep (no child to orphan) and the ignored TERM handler
+    # (SIG_IGN) is inherited across exec. No setsid — unavailable on macOS.
+    bash -c 'trap "" TERM; exec sleep 60' >/dev/null 2>&1 &
     PID=$!
     # Give the trap a moment to register.
     sleep 0.1
@@ -59,9 +60,7 @@ teardown() { common_teardown; }
     export INPUT_STOP_TIMEOUT=1
     run bash "$SRC_DIR/stop.sh"
     [ "$status" -eq 0 ]
-    # Process must be dead — SIGKILL worked even though SIGTERM was ignored
-    # (setsid ensures the process is in its own session so SIGKILL on bash
-    # also kills the underlying sleep child).
+    # Process must be dead — SIGKILL worked even though SIGTERM was ignored.
     ! kill -0 "$PID" 2>/dev/null
     [ ! -f /tmp/cf-tunnel-default.pid ]
     # Final safety: ensure no orphan sleep survives past the test.

@@ -20,6 +20,12 @@ common_setup() {
 
     export INSTALL_DEST="$STUB_BIN/cloudflared"
 
+    # Pin the install platform so the curl stubs (which match the
+    # cloudflared-linux-amd64 asset) stay valid regardless of the host running
+    # the suite — Linux CI or a macOS dev box. Darwin-specific tests override.
+    export CF_OS="${CF_OS:-linux}"
+    export CF_ARCH="${CF_ARCH:-amd64}"
+
     export GITHUB_OUTPUT="$BATS_TEST_TMPDIR/output"
     : > "$GITHUB_OUTPUT"
 
@@ -140,6 +146,36 @@ SCRIPT
     chmod +x "$STUB_BIN/curl"
 }
 
+# Curl delivers a real macOS .tgz containing a fake cloudflared binary, so the
+# darwin extraction path in install-cloudflared.sh runs for real (tar xzf).
+stub_curl_deliver_darwin_tgz() {
+    local stage="$BATS_TEST_TMPDIR/darwin-stage"
+    mkdir -p "$stage"
+    cat > "$stage/cloudflared" <<'FAKE'
+#!/usr/bin/env bash
+echo "fake-cloudflared darwin"
+FAKE
+    chmod +x "$stage/cloudflared"
+    local tgz="$BATS_TEST_TMPDIR/cloudflared-darwin-arm64.tgz"
+    tar -czf "$tgz" -C "$stage" cloudflared
+    cat > "$STUB_BIN/curl" <<EOF
+#!/usr/bin/env bash
+url=""; outfile=""
+while [ \$# -gt 0 ]; do
+    case "\$1" in
+        -o) outfile="\$2"; shift 2 ;;
+        -*) shift ;;
+        *)  url="\$1"; shift ;;
+    esac
+done
+case "\$url" in
+    *cloudflared-darwin-arm64.tgz) cp "$tgz" "\$outfile" ;;
+    *) exit 22 ;;
+esac
+EOF
+    chmod +x "$STUB_BIN/curl"
+}
+
 # Curl always returns a fixed status (for wait.sh tests).
 stub_curl_status() {
     local s="$1"
@@ -167,6 +203,34 @@ i=\$((i + 1))
 echo "\$i" > "\$COUNTER_FILE"
 printf '%s' "\${S[\$i]}"
 EOF
+    chmod +x "$STUB_BIN/curl"
+}
+
+# Like stub_curl_corrupt_binary, but the checksums.txt uses the BSD '*'
+# (binary-mode) prefix on the filename. Exercises the star-stripping path so a
+# mismatch is still caught instead of silently skipped.
+stub_curl_corrupt_binary_star() {
+    cat > "$STUB_BIN/curl" <<'SCRIPT'
+#!/usr/bin/env bash
+url=""; outfile=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o) outfile="$2"; shift 2 ;;
+        -*) shift ;;
+        *) url="$1"; shift ;;
+    esac
+done
+case "$url" in
+    *cloudflared-linux-amd64)
+        echo "I am a corrupted binary" > "$outfile"
+        chmod +x "$outfile"
+        ;;
+    *checksums.txt)
+        echo "abandoned00000000000000000000000000000000000000000000000000000000 *cloudflared-linux-amd64" > "$outfile"
+        ;;
+    *) exit 22 ;;
+esac
+SCRIPT
     chmod +x "$STUB_BIN/curl"
 }
 

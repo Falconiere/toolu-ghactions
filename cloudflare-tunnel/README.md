@@ -1,6 +1,8 @@
 # Toolu Cloudflare Tunnel
 
-Expose a local port from your GitHub Actions runner to the public internet via a Cloudflare Tunnel. Quick tunnels (no account, ephemeral `*.trycloudflare.com` URL) work out of the box. Named tunnels (account-bound, persistent URL) activate when `tunnel-token` is set.
+Expose a local `HOST:PORT` from your GitHub Actions runner to the public internet via a Cloudflare Tunnel. Quick tunnels (no account, ephemeral `*.trycloudflare.com` URL) work out of the box. Named tunnels (account-bound, persistent URL) activate when `tunnel-token` is set.
+
+These are **composite actions**: `cloudflared` runs directly on the runner host (Linux and macOS), not inside a container. That means `HOST:PORT` resolves to a service on the runner — e.g. an app you started with `docker run -p 8000:8000` or `npm run dev` — and the tunnel process survives across steps so later steps (and external clients, via the public URL) can reach it. Pair `start` with `stop` (`if: always()`) to tear the tunnel down on success, failure, or cancellation.
 
 ## Quick start
 
@@ -13,13 +15,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Run preview server
+        run: npm run dev &
       - name: Start tunnel
         id: tunnel
         uses: falconiere/toolu-ghactions/cloudflare-tunnel/start@v1
         with:
+          host: 127.0.0.1
           port: 3000
-      - name: Run preview server
-        run: npm run dev &
       - name: Wait for tunnel
         uses: falconiere/toolu-ghactions/cloudflare-tunnel/wait@v1
         with:
@@ -49,6 +52,7 @@ The `start` step writes the tunnel URL to `${{ steps.tunnel.outputs.tunnel-url }
 | Input | Required | Default | Description |
 |---|---|---|---|
 | `name` | no | `default` | Instance name. Use distinct names to run multiple tunnels in one job. |
+| `host` | no | `localhost` | Local host to expose (quick mode only). Resolves on the runner host — e.g. `127.0.0.1` for a port published by `docker run -p`. |
 | `port` | no | `3000` | Local port to expose (quick mode only). |
 | `tunnel-token` | no | *(empty)* | Cloudflare tunnel token. Setting this switches to named-tunnel mode. |
 | `tunnel-config` | no | *(empty)* | Path to a `cloudflared` config.yml with custom ingress rules (named mode only). |
@@ -91,7 +95,7 @@ The `start` step writes the tunnel URL to `${{ steps.tunnel.outputs.tunnel-url }
 
 ### Cloudflared download blocked
 
-Some corporate networks block `github.com` asset CDN. The `start` step downloads `cloudflared` from `https://github.com/cloudflare/cloudflared/releases/download/<version>/cloudflared-linux-amd64` on every run. If your runner is firewalled, set `cloudflared-version` to a known-good release and ensure egress is open.
+Some corporate networks block `github.com` asset CDN. The `start` step downloads `cloudflared` from `https://github.com/cloudflare/cloudflared/releases/download/<version>/<asset>` on every run, where `<asset>` is `cloudflared-linux-<arch>` on Linux or `cloudflared-darwin-<arch>.tgz` on macOS (`<arch>` is `amd64` or `arm64`). If your runner is firewalled, set `cloudflared-version` to a known-good release and ensure egress is open.
 
 ### trycloudflare URL never appears / regex timeout
 
@@ -115,7 +119,8 @@ The `name` input is slugified. Empty string is treated as unset → falls back t
 
 ## Notes
 
-- The action is published as a Docker image: `ghcr.io/falconiere/toolu-ghactions/cloudflare-tunnel:v1`. Sub-actions (`start`, `stop`, `wait`) share this image and dispatch via `runs.args`.
-- cloudflared is downloaded at runtime, not baked into the image. This keeps the image small and lets you pin the version via input. Trade-off: each `start` run adds ~5s for the download.
+- The sub-actions (`start`, `stop`, `wait`) are **composite actions** — they run `cloudflared` on the runner host, not in a container. Supported runners: Linux and macOS (`amd64` and `arm64`). Container/Windows runners are not supported.
+- `cloudflared` is downloaded at runtime and pinned via `cloudflared-version`. Linux pulls a bare binary; macOS pulls the `.tgz` and extracts it. Trade-off: each `start` run adds a few seconds for the download.
+- Cleanup: `stop` (`if: always()`) terminates the tunnel on success/failure/cancellation. On GitHub-hosted runners the VM is destroyed at job end regardless, so an ephemeral quick tunnel never outlives the job.
 - Repo: [github.com/Falconiere/toolu-ghactions](https://github.com/Falconiere/toolu-ghactions)
 - License: MIT
