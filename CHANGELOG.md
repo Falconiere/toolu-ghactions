@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/Falconiere/toolu-ghactions/compare/v1.2.0...v1.2.1) (2026-06-16)
+
+
+### Bug Fixes
+
+* add setup-buildx-action for GHA cache backend support ([e4a6cae](https://github.com/Falconiere/toolu-ghactions/commit/e4a6caeee891b1feb874e63da1f2e20e5531d2ae))
+
 ## [1.2.0](https://github.com/Falconiere/toolu-ghactions/compare/v1.1.0...v1.2.0) (2026-06-16)
 
 
