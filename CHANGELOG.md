@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/Falconiere/toolu-ghactions/compare/v1.0.1...v1.0.2) (2026-06-16)
+
+
+### Features
+
+* **code-review:** parallel multi-dimension review with inline suggestions ([#3](https://github.com/Falconiere/toolu-ghactions/issues/3)) ([8beac4d](https://github.com/Falconiere/toolu-ghactions/commit/8beac4d54f1fcb255689fbf4eb3f3d4a169f870e))
+
 ## [1.0.1](https://github.com/Falconiere/toolu-ghactions/compare/v1.0.0...v1.0.1) (2026-06-16)
 
 
