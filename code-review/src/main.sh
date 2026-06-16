@@ -118,6 +118,25 @@ fi
 
 echo "  Files: $TOTAL_FILES, Lines: $(echo "$DIFF_DATA" | jq -r '.total_lines')" >&2
 
+# --- Post in-progress comment ---
+echo "  Posting in-progress comment..." >&2
+IN_PROGRESS_BODY="**AI Code Review running** —— [View job](${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-unknown}/actions/runs/${GITHUB_RUN_ID:-?})
+
+---
+### PR Review in Progress
+
+- [ ] Read repository context and PR diff
+- [ ] Review changed files
+- [ ] Analyze correctness, security, performance
+- [ ] Post findings
+- [ ] Set verdict label
+"
+# Post the in-progress comment (post-comment.sh will create a new one).
+# We don't capture the URL here — the final verdict edit finds it by marker.
+echo "$IN_PROGRESS_BODY" | bash "$SCRIPT_DIR/post-comment.sh" > /dev/null 2>&1 || {
+    echo "  Warning: Could not post in-progress comment" >&2
+}
+
 # --- Phase 3: Build prompt ---
 echo "[2/5] Building review prompt..." >&2
 REQUEST_BODY=$(echo "$DIFF_DATA" | bash "$SCRIPT_DIR/build-prompt.sh" 2>/dev/null) || {

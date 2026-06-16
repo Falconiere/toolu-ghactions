@@ -2,15 +2,15 @@
 # build-prompt.sh — assemble the system + user prompt into a valid JSON
 # request body for the OpenRouter chat completions API.
 #
-# Reads INPUT_MODEL, INPUT_REVIEW_PROMPT, INPUT_CODEBASE_OVERVIEW from env.
+# Reads INPUT_MODEL, INPUT_REVIEW_PROMPT_FILE, INPUT_CODEBASE_OVERVIEW from env.
 # Reads diff data from stdin (JSON from fetch-diff.sh).
 # Outputs to stdout: complete JSON request body.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-MODEL="${INPUT_MODEL:-anthropic/claude-sonnet-4}"
-CUSTOM_PROMPT="${INPUT_REVIEW_PROMPT:-}"
+MODEL="${INPUT_MODEL:-qwen/qwen3.7-max}"
+PROMPT_FILE="${INPUT_REVIEW_PROMPT_FILE:-}"
 OVERVIEW="${INPUT_CODEBASE_OVERVIEW:-}"
 # Resolve checklist path: try Docker path first, then relative to script dir.
 if [ -f "/action/prompts/review-checklist.txt" ]; then
@@ -27,12 +27,23 @@ fi
 DIFF_DATA=$(cat)
 
 # Determine system prompt.
-if [ -n "$CUSTOM_PROMPT" ]; then
-    SYSTEM_PROMPT="$CUSTOM_PROMPT"
-elif [ -f "$CHECKLIST_FILE" ]; then
+if [ -n "$PROMPT_FILE" ]; then
+    # Read custom prompt from file (absolute path or relative to workspace root).
+    if [[ "$PROMPT_FILE" == /* ]]; then
+        PROMPT_PATH="$PROMPT_FILE"
+    else
+        PROMPT_PATH="${GITHUB_WORKSPACE:-/github/workspace}/${PROMPT_FILE}"
+    fi
+    if [ -f "$PROMPT_PATH" ]; then
+        SYSTEM_PROMPT=$(cat "$PROMPT_PATH")
+    else
+        echo "{\"error\":\"Custom review prompt file not found: $PROMPT_FILE\"}" >&2
+        exit 1
+    fi
+elif [ -n "$CHECKLIST_FILE" ] && [ -f "$CHECKLIST_FILE" ]; then
     SYSTEM_PROMPT=$(cat "$CHECKLIST_FILE")
 else
-    echo '{"error":"No review prompt available — provide review-prompt input or ensure review-checklist.txt is in the image"}' >&2
+    echo '{"error":"No review prompt available — provide review-prompt-file input or ensure review-checklist.txt is in the image"}' >&2
     exit 1
 fi
 

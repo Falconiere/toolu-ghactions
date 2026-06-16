@@ -31,10 +31,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: falconiere/toolu-ghactions/code-review@v1
         with:
-          openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 ```
 
-On every PR push, the action fetches the diff, sends it to Claude (via OpenRouter), and posts a verdict comment directly on the PR.
+On every PR push, the action fetches the diff, sends it to the configured model via OpenRouter, and posts a verdict comment directly on the PR.
+
+While the review runs, an in-progress comment appears on the PR with unchecked checkboxes tracking each phase. When the review completes, that same comment is edited in place with the full verdict — findings, severity breakdown, a review plan showing which dimensions were checked, and the machine-readable merge label.
 
 ## How it works
 
@@ -102,7 +104,7 @@ Use outputs in downstream workflow steps:
 - uses: falconiere/toolu-ghactions/code-review@v1
   id: review
   with:
-    openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+    OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 - if: steps.review.outputs.verdict == 'changes'
   run: echo "PR needs work — ${{ steps.review.outputs.findings-count }} findings"
 ```

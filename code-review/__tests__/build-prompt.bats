@@ -10,7 +10,7 @@ load helpers
     [ "$status" -eq 0 ]
 
     # Validate JSON structure.
-    echo "$output" | jq -e '.model == "anthropic/claude-sonnet-4"'
+    echo "$output" | jq -e '.model == "qwen/qwen3.7-max"'
     echo "$output" | jq -e '.messages | length == 2'
     echo "$output" | jq -e '.messages[0].role == "system"'
     echo "$output" | jq -e '.messages[1].role == "user"'
@@ -32,8 +32,13 @@ load helpers
     [[ "$sys" == *"PERFORMANCE"* ]]
 }
 
-@test "build-prompt: uses custom review-prompt when provided" {
-    INPUT_REVIEW_PROMPT="Only check for SQL injection patterns." \
+@test "build-prompt: uses custom review prompt from file when review-prompt-file is set" {
+    # Write a custom prompt to a temp dir that simulates the workspace.
+    WS=$(mktemp -d)
+    echo "Only check for SQL injection patterns." > "$WS/custom-prompt.md"
+
+    INPUT_REVIEW_PROMPT_FILE="custom-prompt.md" \
+        GITHUB_WORKSPACE="$WS" \
         diff_data=$(cat "$FIXTURES_DIR/sample-diff.txt" | jq -Rsc '{diff: ., changed_files: ["src/auth/login.ts"], binary_files: [], total_lines: 10, total_files: 1, truncated: false}') \
         run bash "$SRC_DIR/build-prompt.sh" <<< "$diff_data"
 
@@ -41,6 +46,17 @@ load helpers
     sys=$(echo "$output" | jq -r '.messages[0].content')
     [[ "$sys" == *"SQL injection"* ]]
     [[ "$sys" != *"CORRECTNESS"* ]]
+
+    rm -rf "$WS"
+}
+
+@test "build-prompt: fails when review-prompt-file points to nonexistent file" {
+    INPUT_REVIEW_PROMPT_FILE="nonexistent/path.md" \
+        GITHUB_WORKSPACE="/nonexistent" \
+        diff_data=$(echo "test" | jq -Rsc '{diff: ., changed_files: ["a.ts"], binary_files: [], total_lines: 1, total_files: 1, truncated: false}') \
+        run bash "$SRC_DIR/build-prompt.sh" <<< "$diff_data"
+
+    [ "$status" -ne 0 ]
 }
 
 @test "build-prompt: truncation notice appears when truncated=true" {
