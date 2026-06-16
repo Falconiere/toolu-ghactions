@@ -12,7 +12,8 @@ set -euo pipefail
 
 PRIMED=$(mktemp)
 PAIRS=$(mktemp)
-trap 'rm -f "$PRIMED" "$PAIRS"' EXIT
+FILES=$(mktemp)
+trap 'rm -f "$PRIMED" "$PAIRS" "$FILES"' EXIT
 
 awk -v pf="$PRIMED" -v cf="$PAIRS" '
   /^diff --git / { print > pf; next }
@@ -34,16 +35,18 @@ awk -v pf="$PRIMED" -v cf="$PAIRS" '
   { print > pf }   # index/mode/rename headers, "\ No newline", blank lines
 '
 
-DIFF_JSON=$(jq -Rs . < "$PRIMED")
-
 if [ -s "$PAIRS" ]; then
-    FILES_JSON=$(jq -Rn '
+    jq -Rn '
         [inputs | split("\t") | {path: .[0], line: (.[1] | tonumber)}]
         | group_by(.path)
         | map({path: .[0].path, changed_lines: (map(.line) | unique)})
-    ' < "$PAIRS")
+    ' < "$PAIRS" > "$FILES"
 else
-    FILES_JSON="[]"
+    printf '[]' > "$FILES"
 fi
 
-jq -nc --argjson diff "$DIFF_JSON" --argjson files "$FILES_JSON" '{diff: $diff, files: $files}'
+# Read large payloads from files (--rawfile/--slurpfile), never argv: a big
+# diff blown into a command-line argument overflows ARG_MAX ("Argument list
+# too long"). --rawfile reads $PRIMED verbatim as a JSON string (replacing the
+# old `jq -Rs .`); --slurpfile wraps $FILES in a one-element array, hence [0].
+jq -nc --rawfile diff "$PRIMED" --slurpfile files "$FILES" '{diff: $diff, files: $files[0]}'
