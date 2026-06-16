@@ -13,7 +13,7 @@ setup() {
     export GITHUB_HEAD_REF="feat/add-login"
     export GITHUB_EVENT_PATH="$FIXTURES_DIR/test-pr-event.json"
     export GITHUB_BASE_REF="main"
-    export INPUT_MODEL="qwen/qwen3.7-max"
+    export INPUT_MODEL="minimax/minimax-m3"
     export INPUT_BASE_BRANCH="main"
     export INPUT_MAX_FILES="100"
     export INPUT_MAX_DIFF_LINES="8000"

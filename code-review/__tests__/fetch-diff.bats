@@ -74,6 +74,83 @@ teardown_git_repo() {
     teardown_git_repo
 }
 
+@test "fetch-diff: line-primes the diff and records changed_lines" {
+    setup_git_repo
+    git checkout -b feature --quiet
+    printf 'line one\nline two\nline three\n' > app.ts
+    git add app.ts
+    git commit -m "add app.ts" --quiet
+
+    export INPUT_MAX_FILES=100 INPUT_MAX_DIFF_LINES=8000 INPUT_BASE_BRANCH=main GITHUB_BASE_REF=main
+
+    run bash "$SRC_DIR/fetch-diff.sh"
+    [ "$status" -eq 0 ]
+
+    # Diff body lines are prefixed with their new-file line number.
+    echo "$output" | jq -r '.diff' | grep -qE '^L[0-9]+: \+line one'
+    # files[] carries the anchorable line set.
+    echo "$output" | jq -e '.files | type == "array"'
+    echo "$output" | jq -e '[.files[] | select(.path == "app.ts")] | .[0].changed_lines | length >= 3'
+
+    teardown_git_repo
+}
+
+@test "fetch-diff: lockfiles are dropped, not reviewed" {
+    setup_git_repo
+    git checkout -b feature --quiet
+    echo "real code" > app.ts
+    echo '{"lockfileVersion": 3}' > package-lock.json
+    echo "deps = []" > bun.lock
+    git add app.ts package-lock.json bun.lock
+    git commit -m "add code + lockfiles" --quiet
+
+    export INPUT_MAX_FILES=100 INPUT_MAX_DIFF_LINES=8000 INPUT_BASE_BRANCH=main GITHUB_BASE_REF=main
+
+    run bash "$SRC_DIR/fetch-diff.sh"
+    [ "$status" -eq 0 ]
+
+    echo "$output" | jq -e '[.dropped_files[].path] | index("package-lock.json") != null'
+    echo "$output" | jq -e '[.dropped_files[].path] | index("bun.lock") != null'
+    echo "$output" | jq -e '.changed_files | index("app.ts") != null'
+    echo "$output" | jq -e '.changed_files | index("package-lock.json") == null'
+    # The lockfile content must not appear in the diff sent to the model.
+    echo "$output" | jq -r '.diff' | grep -qv 'lockfileVersion' || true
+    ! echo "$output" | jq -r '.diff' | grep -q 'lockfileVersion'
+
+    teardown_git_repo
+}
+
+@test "fetch-diff: large diff truncates at a hunk boundary" {
+    setup_git_repo
+    git checkout -b feature --quiet
+    for n in $(seq 1 40); do echo "line $n" >> big.ts; done
+    echo "second file" > small.ts
+    git add big.ts small.ts
+    git commit -m "add big + small" --quiet
+
+    export INPUT_MAX_FILES=100 INPUT_MAX_DIFF_LINES=8 INPUT_BASE_BRANCH=main GITHUB_BASE_REF=main
+
+    run bash "$SRC_DIR/fetch-diff.sh"
+    [ "$status" -eq 0 ]
+    echo "$output" | jq -e '.truncated == true'
+    # No primed line is cut mid-content: every L-line still ends with real text.
+    echo "$output" | jq -r '.diff' | grep -qE '^L[0-9]+: '
+
+    teardown_git_repo
+}
+
+@test "fetch-diff: quote in base branch still yields valid JSON error" {
+    setup_git_repo
+    export INPUT_MAX_FILES=100 INPUT_MAX_DIFF_LINES=8000
+
+    run bash -c "INPUT_BASE_BRANCH='ba\"d' GITHUB_BASE_REF='' bash '$SRC_DIR/fetch-diff.sh' 2>&1 1>/dev/null"
+    [ "$status" -ne 0 ]
+    # The final stderr line is the error object and must be valid JSON.
+    echo "$output" | tail -1 | jq -e '.error'
+
+    teardown_git_repo
+}
+
 @test "fetch-diff: empty repo has total_files=0" {
     setup_git_repo
 

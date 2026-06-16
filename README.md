@@ -50,11 +50,23 @@ While the review runs, an in-progress comment appears on the PR with unchecked c
 
 ## How it works
 
-The action runs in two phases:
+In the default `parallel` mode the action runs a fan-out → validate → coordinate pipeline:
 
-**Phase 1 — Review plan.** The model analyzes which files changed, what kind of changes they are (feature, bugfix, refactor, config), and which review dimensions actually apply. A docs-only change doesn't get a security review. A CSS tweak doesn't get a performance audit. The plan is shown in the comment so you can see what was checked and what was skipped.
+**1 — Fetch & shape the diff.** Resolves the merge-base, strips noise (lockfiles, minified, generated, source maps), drops binaries, and line-primes every diff line with its real source line number so findings anchor to actual lines.
 
-**Phase 2 — Targeted review.** The model reviews only against the dimensions it committed to in Phase 1. Every finding includes the exact file path, line number, severity, and a specific description — no "consider improving error handling" hand-waving.
+**2 — Parallel sub-reviewers.** One narrowly-scoped reviewer runs per dimension group — `correctness`, `security`, `performance+migration`, `tests+assertions+docs` — each with negative constraints ("no style, no general advice, only HIGH-confidence findings, cite the exact line"). Scoped reviewers produce far less noise than one catch-all prompt.
+
+**3 — Deterministic validation.** Every finding is checked against the diff: a finding whose line isn't actually in the changes is dropped (no hallucinated locations), low-confidence findings are gated out, and a code suggestion is kept only when it's high-confidence and fully anchored.
+
+**4 — Coordinator pass.** A final model call deduplicates across reviewers, filters for reasonableness, sets the verdict, and writes the review plan + top must-fix list.
+
+**5 — Post.** A summary verdict comment (machine-readable label for `pr-babysit`), plus — when `INLINE_COMMENTS` is on — per-line review comments with committable ` ```suggestion ` blocks via the GitHub Reviews API (advisory `COMMENT` event; it never hard-blocks merge).
+
+Set `REVIEW_MODE: single` for one combined call instead of the fan-out — cheaper, lower quality. The `parallel` default makes roughly `(number of dimension groups + 1)` API calls per review; budget accordingly.
+
+### Inline comments & suggestions
+
+With `INLINE_COMMENTS: true` (default), findings are posted as inline review comments anchored to the exact file and line. When the model has a concrete, high-confidence fix it attaches a ` ```suggestion ` block you can commit straight from the PR. Set `INLINE_COMMENTS: false` for a summary-comment-only review.
 
 The verdict comment is compatible with [`parse-verdict.sh`](https://github.com/Falconiere/toolu/blob/main/plugins/pr-babysit/scripts/parse-verdict.sh) and the [`pr-babysit`](https://github.com/Falconiere/toolu/tree/main/plugins/pr-babysit) automation loop, so toolu users can drop this into CI and their existing babysit workflow consumes the verdict without changes.
 
@@ -91,8 +103,14 @@ The verdict label at the bottom is machine-readable: `` `agent-merge-approved` `
 
 | Input | Required | Default | Description |
 |---|---|---|---|
-| `OPENROUTER_API_KEY` | yes | — | OpenRouter API key |
-| `MODEL` | no | `qwen/qwen3.7-max` | OpenRouter model identifier |
+| `OPENROUTER_API_KEY` | no* | — | OpenRouter API key. *Required — pass via `with:` or a step-level `env:` block. |
+| `MODEL` | no | `minimax/minimax-m3` | OpenRouter model identifier |
+| `FALLBACK_MODEL` | no | `anthropic/claude-sonnet-4-5` | Second model tried via the OpenRouter `models[]` fallback array when the primary errors or is unavailable |
+| `MAX_TOKENS` | no | `4096` | Max completion tokens per request (always sent — omitting it makes OpenRouter reserve the model's full output capacity against your budget) |
+| `REVIEW_MODE` | no | `parallel` | `parallel` = one scoped sub-reviewer per dimension group + a coordinator pass (higher quality, ~5× API cost); `single` = one combined call (cheapest) |
+| `MIN_CONFIDENCE` | no | `high` | Drop findings below this confidence unless severity is blocker/high (`high` or `medium`) |
+| `ENFORCE_JSON_SCHEMA` | no | `true` | Use `response_format` json_schema + provider routing; set `false` for free-text + regex fallback |
+| `INLINE_COMMENTS` | no | `true` | Post per-line review comments with committable code suggestions (Reviews API), in addition to the summary comment |
 | `BASE_BRANCH` | no | `main` | Base branch for diff comparison. Falls back to `GITHUB_BASE_REF` if unset. |
 | `REVIEW_PROMPT_FILE` | no | *(7-dimension checklist)* | Path to a markdown file (relative to repo root) with a custom review prompt. Overrides the default checklist. |
 | `CODEBASE_OVERVIEW` | no | — | High-level context about the codebase (framework, patterns, architecture) injected into the review prompt. |
@@ -140,16 +158,16 @@ The monorepo is structured for future actions to share conventions and utilities
 
 ```bash
 # Run all tests (requires bats, jq, git)
-bats actions/*/__tests__/*.bats
+bats code-review/__tests__/*.bats
 
 # Build the Docker image
-docker build -f code-review/Dockerfile -t code-review-action:test .
+docker build -t code-review-action:test code-review/
 
-# Lint all shell scripts
-shellcheck actions/*/src/*.sh
+# Lint all shell scripts (style/info advisory; warnings+ block CI)
+shellcheck --severity=warning code-review/src/*.sh scripts/*.sh
 
 # Validate action.yml against GitHub's schema
-npx action-validator code-review/action.yml
+npx @action-validator/cli code-review/action.yml
 ```
 
 Tests are hermetic — they use recorded fixtures for OpenRouter responses and mock `curl` for GitHub API calls. No API key needed for the unit test suite.

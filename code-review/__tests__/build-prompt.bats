@@ -10,13 +10,44 @@ load helpers
     [ "$status" -eq 0 ]
 
     # Validate JSON structure.
-    echo "$output" | jq -e '.model == "qwen/qwen3.7-max"'
+    echo "$output" | jq -e '.model == "minimax/minimax-m3"'
     echo "$output" | jq -e '.messages | length == 2'
     echo "$output" | jq -e '.messages[0].role == "system"'
     echo "$output" | jq -e '.messages[1].role == "user"'
     echo "$output" | jq -e '.temperature == 0.1'
     echo "$output" | jq -e '.response_format.type == "json_schema"'
     echo "$output" | jq -e '.response_format.json_schema.schema.required | contains(["review_plan"])'
+}
+
+@test "build-prompt: dimension mode builds a scoped prompt with models[], max_tokens, provider routing" {
+    diff_data=$(cat "$FIXTURES_DIR/sample-diff.txt" | jq -Rsc '{diff: ., changed_files: ["src/auth/login.ts"], binary_files: [], dropped_files: [], total_lines: 10, total_files: 1, truncated: false}')
+
+    INPUT_DIMENSION="security" run bash "$SRC_DIR/build-prompt.sh" <<< "$diff_data"
+    [ "$status" -eq 0 ]
+
+    sys=$(echo "$output" | jq -r '.messages[0].content')
+    [[ "$sys" == *"Your dimension: security"* ]]
+    [[ "$sys" == *"SECURITY"* ]]
+
+    echo "$output" | jq -e '.max_tokens == 4096'
+    echo "$output" | jq -e '.models | length == 2'
+    echo "$output" | jq -e '.models[0] == "minimax/minimax-m3"'
+    echo "$output" | jq -e '.models[1] == "anthropic/claude-sonnet-4-5"'
+    echo "$output" | jq -e '.provider.require_parameters == true'
+    # Sub-reviewer schema: reasoning first, findings carry confidence/suggestion.
+    echo "$output" | jq -e '.response_format.json_schema.schema.required | contains(["reasoning"])'
+    echo "$output" | jq -e '.response_format.json_schema.schema.properties.findings.items.properties | has("confidence") and has("suggestion") and has("end_line")'
+}
+
+@test "build-prompt: ENFORCE_JSON_SCHEMA=false omits response_format and provider" {
+    diff_data=$(cat "$FIXTURES_DIR/sample-diff.txt" | jq -Rsc '{diff: ., changed_files: ["a.ts"], binary_files: [], dropped_files: [], total_lines: 1, total_files: 1, truncated: false}')
+
+    INPUT_ENFORCE_JSON_SCHEMA="false" run bash "$SRC_DIR/build-prompt.sh" <<< "$diff_data"
+    [ "$status" -eq 0 ]
+    echo "$output" | jq -e '.response_format == null'
+    echo "$output" | jq -e '.provider == null'
+    echo "$output" | jq -e '.max_tokens == 4096'
+    echo "$output" | jq -e '.models | length == 2'
 }
 
 @test "build-prompt: system prompt includes review dimensions from checklist" {

@@ -47,6 +47,16 @@ The available review dimensions are:
    renamed APIs) must surface actionable in-session warnings, not silent
    failures.
 
+## Noise control (follow exactly)
+
+- Report ONLY findings you are HIGH-confidence are real problems in THIS diff. If
+  in doubt, omit it — precision over recall.
+- No style, formatting, or naming preferences.
+- No general advice ("consider adding error handling"). A finding must name a
+  specific failure at a specific line.
+- No findings on code outside this diff.
+- The diff may be line-primed with `Lnnn:` prefixes — cite those exact numbers.
+
 Output your review as a JSON object with:
 - review_plan: (string, markdown) — the Phase 1 plan
 - verdict: ("approved"|"changes") — overall verdict

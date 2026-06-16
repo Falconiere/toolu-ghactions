@@ -64,6 +64,28 @@ load helpers
     [[ "$comment" == *"View job"* ]]
 }
 
+@test "format-verdict: renders category and confidence when present" {
+    review='{"review_plan":"plan","verdict":"changes","other_checks":"","top_must_fix":[],"findings":[{"path":"src/a.ts","line":12,"severity":"high","category":"security","confidence":"high","text":"Unsanitized input reaches the query."}]}'
+
+    run bash "$SRC_DIR/format-verdict.sh" <<< "$review"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"src/a.ts:12"* ]]
+    [[ "$output" == *"_(security · high)_"* ]]
+
+    # Still parse-verdict.sh-compatible: the finding line parses to one finding.
+    n=$(printf '%s\n' "$output" | bash "$REPO_ROOT/scripts/parse-verdict.sh" | jq '.findings | length')
+    [ "$n" -eq 1 ]
+}
+
+@test "format-verdict: tolerates findings missing category/confidence" {
+    review='{"review_plan":"","verdict":"approved","other_checks":"","top_must_fix":[],"findings":[{"path":"src/b.ts","line":3,"severity":"low","text":"Minor nit."}]}'
+
+    run bash "$SRC_DIR/format-verdict.sh" <<< "$review"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"src/b.ts:3"* ]]
+    [[ "$output" != *"_("* ]]
+}
+
 @test "format-verdict: no findings produces zero-count message" {
     # Construct a review with zero findings.
     review='{"review_plan":"","verdict":"approved","findings":[],"other_checks":"","top_must_fix":[]}'

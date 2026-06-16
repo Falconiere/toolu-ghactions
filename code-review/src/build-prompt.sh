@@ -1,88 +1,110 @@
 #!/usr/bin/env bash
-# build-prompt.sh — assemble the system + user prompt into a valid JSON
-# request body for the OpenRouter chat completions API.
+# build-prompt.sh — assemble the OpenRouter chat-completions request body.
 #
-# Reads INPUT_MODEL, INPUT_REVIEW_PROMPT_FILE, INPUT_CODEBASE_OVERVIEW from env.
-# Reads diff data from stdin (JSON from fetch-diff.sh).
-# Outputs to stdout: complete JSON request body.
+# Two modes:
+#   - dimension mode (INPUT_DIMENSION set): a narrowly-scoped sub-reviewer prompt
+#     built from prompts/dimension-base.txt + that dimension's focus.
+#   - single mode (default): the combined 7-dimension checklist (legacy), or a
+#     caller-supplied INPUT_REVIEW_PROMPT_FILE.
+#
+# Reads INPUT_MODEL, INPUT_FALLBACK_MODEL, INPUT_MAX_TOKENS,
+# INPUT_ENFORCE_JSON_SCHEMA, INPUT_DIMENSION, INPUT_REVIEW_PROMPT_FILE,
+# INPUT_CODEBASE_OVERVIEW from env; diff JSON (fetch-diff.sh) from stdin.
+# Outputs the complete JSON request body to stdout.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-MODEL="${INPUT_MODEL:-qwen/qwen3.7-max}"
+MODEL="${INPUT_MODEL:-minimax/minimax-m3}"
+FALLBACK_MODEL="${INPUT_FALLBACK_MODEL:-anthropic/claude-sonnet-4-5}"
+MAX_TOKENS="${INPUT_MAX_TOKENS:-4096}"
+ENFORCE_SCHEMA="${INPUT_ENFORCE_JSON_SCHEMA:-true}"
+DIMENSION="${INPUT_DIMENSION:-}"
 PROMPT_FILE="${INPUT_REVIEW_PROMPT_FILE:-}"
 OVERVIEW="${INPUT_CODEBASE_OVERVIEW:-}"
-# Resolve checklist path: try Docker path first, then relative to script dir.
-if [ -f "/action/prompts/review-checklist.txt" ]; then
-    CHECKLIST_FILE="/action/prompts/review-checklist.txt"
-elif [ -f "$SCRIPT_DIR/../prompts/review-checklist.txt" ]; then
-    CHECKLIST_FILE="$SCRIPT_DIR/../prompts/review-checklist.txt"
-elif [ -f "code-review/prompts/review-checklist.txt" ]; then
-    CHECKLIST_FILE="code-review/prompts/review-checklist.txt"
-else
-    CHECKLIST_FILE=""
-fi
 
-# Read diff data.
+# Resolve a prompts file by name across the Docker path, the repo layout, and CWD.
+prompt_path() {
+    local name="$1"
+    if [ -f "/action/prompts/$name" ]; then echo "/action/prompts/$name"
+    elif [ -f "$SCRIPT_DIR/../prompts/$name" ]; then echo "$SCRIPT_DIR/../prompts/$name"
+    elif [ -f "code-review/prompts/$name" ]; then echo "code-review/prompts/$name"
+    else echo ""; fi
+}
+
+# Per-dimension focus appended to the shared sub-reviewer base prompt.
+dimension_focus() {
+    case "$1" in
+        correctness) echo "CORRECTNESS — logic errors, edge cases, error handling. Flag swallowed errors and @ts-ignore/eslint-disable/#[allow] that paper over real problems." ;;
+        security)    echo "SECURITY — input validation, injection vectors, hardcoded secrets, unsafe file/symlink operations." ;;
+        performance) echo "PERFORMANCE & MIGRATION — hot-path work (per render/hook/request), allocations or subprocess spawns in loops; and breaking changes (moved paths, removed symlinks, renamed APIs) that need actionable warnings." ;;
+        tests)       echo "TESTS, ASSERTIONS & DOCS — new code paths missing a colocated real-data test; loose test assertions (suffix/partial instead of full identity); comments or docs that no longer match behavior." ;;
+        *)           echo "GENERAL — review the diff for correctness and obvious defects." ;;
+    esac
+}
+
 DIFF_DATA=$(cat)
 
-# Determine system prompt.
+# --- Determine the system prompt + the output schema for this mode ---
 if [ -n "$PROMPT_FILE" ]; then
-    # Read custom prompt from file (absolute path or relative to workspace root).
-    if [[ "$PROMPT_FILE" == /* ]]; then
-        PROMPT_PATH="$PROMPT_FILE"
-    else
-        PROMPT_PATH="${GITHUB_WORKSPACE:-/github/workspace}/${PROMPT_FILE}"
-    fi
+    if [[ "$PROMPT_FILE" == /* ]]; then PROMPT_PATH="$PROMPT_FILE"; else PROMPT_PATH="${GITHUB_WORKSPACE:-/github/workspace}/${PROMPT_FILE}"; fi
     if [ -f "$PROMPT_PATH" ]; then
         SYSTEM_PROMPT=$(cat "$PROMPT_PATH")
     else
-        echo "{\"error\":\"Custom review prompt file not found: $PROMPT_FILE\"}" >&2
+        jq -nc --arg f "$PROMPT_FILE" '{error: ("Custom review prompt file not found: " + $f)}' >&2
         exit 1
     fi
-elif [ -n "$CHECKLIST_FILE" ] && [ -f "$CHECKLIST_FILE" ]; then
-    SYSTEM_PROMPT=$(cat "$CHECKLIST_FILE")
+    MODE="single"
+elif [ -n "$DIMENSION" ]; then
+    BASE=$(prompt_path "dimension-base.txt")
+    if [ -z "$BASE" ]; then
+        jq -nc '{error: "dimension-base.txt not found in image"}' >&2
+        exit 1
+    fi
+    SYSTEM_PROMPT="$(cat "$BASE")
+
+## Your dimension: ${DIMENSION}
+$(dimension_focus "$DIMENSION")"
+    MODE="dimension"
 else
-    echo '{"error":"No review prompt available — provide review-prompt-file input or ensure review-checklist.txt is in the image"}' >&2
-    exit 1
+    CHECKLIST=$(prompt_path "review-checklist.txt")
+    if [ -z "$CHECKLIST" ]; then
+        jq -nc '{error: "No review prompt available — set INPUT_REVIEW_PROMPT_FILE or ship review-checklist.txt"}' >&2
+        exit 1
+    fi
+    SYSTEM_PROMPT=$(cat "$CHECKLIST")
+    MODE="single"
 fi
 
-# Extract fields from diff data.
+# --- Build the user prompt from the diff data ---
 DIFF_TEXT=$(echo "$DIFF_DATA" | jq -r '.diff // ""')
-CHANGED_FILES=$(echo "$DIFF_DATA" | jq -r '.changed_files | join(", ") // "none"')
-BINARY_FILES=$(echo "$DIFF_DATA" | jq -r '.binary_files[]? // empty' || true)
+CHANGED_FILES=$(echo "$DIFF_DATA" | jq -r '(.changed_files // []) | join(", ")')
+BINARY_FILES=$(echo "$DIFF_DATA" | jq -r '[.binary_files[]?] | join("\n")')
+DROPPED_FILES=$(echo "$DIFF_DATA" | jq -r '[.dropped_files[]? | .path + " (" + .reason + ")"] | join("\n")')
 TRUNCATED=$(echo "$DIFF_DATA" | jq -r '.truncated // false')
 TOTAL_LINES=$(echo "$DIFF_DATA" | jq -r '.total_lines // 0')
 TOTAL_FILES=$(echo "$DIFF_DATA" | jq -r '.total_files // 0')
 
-# Build the user prompt.
 USER_PROMPT="Review the following pull request diff."
-
-if [ -n "$OVERVIEW" ]; then
-    USER_PROMPT+="
+[ -n "$OVERVIEW" ] && USER_PROMPT+="
 
 ## Codebase Overview
 $OVERVIEW"
-fi
-
 USER_PROMPT+="
 
 ## Changed Files ($TOTAL_FILES total)
 $CHANGED_FILES"
-
-if [ -n "$BINARY_FILES" ]; then
-    USER_PROMPT+="
+[ -n "$BINARY_FILES" ] && USER_PROMPT+="
 
 ## Binary Files (not reviewed)
 $(echo "$BINARY_FILES" | while read -r f; do echo "- $f"; done)"
-fi
+[ -n "$DROPPED_FILES" ] && USER_PROMPT+="
 
-if [ "$TRUNCATED" = "true" ]; then
-    USER_PROMPT+="
+## Skipped Files (lockfiles/generated/minified — not reviewed)
+$(echo "$DROPPED_FILES" | while read -r f; do echo "- $f"; done)"
+[ "$TRUNCATED" = "true" ] && USER_PROMPT+="
 
-[Diff truncated at $TOTAL_LINES lines; some files omitted. Review what is shown.]"
-fi
-
+[Diff truncated at $TOTAL_LINES lines; some hunks omitted. Review what is shown.]"
 USER_PROMPT+="
 
 ## Diff
@@ -90,51 +112,83 @@ USER_PROMPT+="
 $DIFF_TEXT
 \`\`\`"
 
-# Escape for JSON.
+# --- Output schema (shared finding item; mode-specific envelope) ---
+FINDING_ITEM=$(jq -nc '{
+    type: "object",
+    required: ["path", "line", "severity", "text"],
+    properties: {
+        path: {type: "string"},
+        line: {type: "integer"},
+        end_line: {type: "integer"},
+        severity: {type: "string", enum: ["blocker", "high", "medium", "low", "nit"]},
+        category: {type: "string"},
+        confidence: {type: "string", enum: ["high", "medium"]},
+        quoted_line: {type: "string"},
+        suggestion: {type: "string"},
+        text: {type: "string"}
+    }
+}')
+
+if [ "$MODE" = "dimension" ]; then
+    SCHEMA=$(jq -nc --argjson item "$FINDING_ITEM" '{
+        name: "code_review_dimension",
+        schema: {
+            type: "object",
+            required: ["reasoning", "verdict", "findings"],
+            properties: {
+                reasoning: {type: "string"},
+                verdict: {type: "string", enum: ["approved", "changes"]},
+                findings: {type: "array", items: $item}
+            }
+        }
+    }')
+else
+    SCHEMA=$(jq -nc --argjson item "$FINDING_ITEM" '{
+        name: "code_review_verdict",
+        schema: {
+            type: "object",
+            required: ["review_plan", "verdict", "findings", "other_checks", "top_must_fix"],
+            properties: {
+                review_plan: {type: "string"},
+                verdict: {type: "string", enum: ["approved", "changes"]},
+                findings: {type: "array", items: $item},
+                other_checks: {type: "string"},
+                top_must_fix: {type: "array", items: {type: "string"}}
+            }
+        }
+    }')
+fi
+
 SYSTEM_ESCAPED=$(echo "$SYSTEM_PROMPT" | jq -Rs .)
 USER_ESCAPED=$(echo "$USER_PROMPT" | jq -Rs .)
 
-jq -nc \
+# Base body: model + fallback array + token cap (always — omitting max_tokens makes
+# OpenRouter reserve the model's full output capacity against the credit budget).
+BODY=$(jq -nc \
     --arg model "$MODEL" \
+    --arg fallback "$FALLBACK_MODEL" \
+    --argjson maxtok "$MAX_TOKENS" \
     --argjson system "$SYSTEM_ESCAPED" \
     --argjson user "$USER_ESCAPED" \
     '{
         model: $model,
+        models: [$model, $fallback],
         messages: [
             {role: "system", content: $system},
             {role: "user", content: $user}
         ],
         temperature: 0.1,
-        response_format: {
-            type: "json_schema",
-            json_schema: {
-                name: "code_review_verdict",
-                schema: {
-                    type: "object",
-                    required: ["review_plan", "verdict", "findings", "other_checks", "top_must_fix"],
-                    properties: {
-                        review_plan: {type: "string"},
-                        verdict: {type: "string", enum: ["approved", "changes"]},
-                        findings: {
-                            type: "array",
-                            items: {
-                                type: "object",
-                                required: ["path", "severity", "text"],
-                                properties: {
-                                    path: {type: "string"},
-                                    line: {type: "integer"},
-                                    severity: {type: "string", enum: ["blocker", "high", "medium", "low", "nit"]},
-                                    text: {type: "string"}
-                                }
-                            }
-                        },
-                        other_checks: {type: "string"},
-                        top_must_fix: {
-                            type: "array",
-                            items: {type: "string"}
-                        }
-                    }
-                }
-            }
-        }
-    }'
+        max_tokens: $maxtok
+    }')
+
+# Structured output: route only to providers that support it (require_parameters),
+# unless the caller opted out.
+if [ "$ENFORCE_SCHEMA" != "false" ]; then
+    BODY=$(echo "$BODY" | jq -c --argjson schema "$SCHEMA" '
+        . + {
+            response_format: {type: "json_schema", json_schema: $schema},
+            provider: {require_parameters: true, allow_fallbacks: true}
+        }')
+fi
+
+echo "$BODY"

@@ -65,7 +65,15 @@ build_findings_section() {
         return
     fi
 
-    echo "$FINDINGS" | jq -r '.[] | "`" + .path + (if .line then ":" + (.line|tostring) else "" end) + "`: " + .severity + ": " + .text'
+    # Category/confidence are appended AFTER the text so the line still matches
+    # parse-verdict.sh's `path:line`: severity: text regex (text just carries the
+    # suffix). Both fields are optional — older single-call output omits them.
+    echo "$FINDINGS" | jq -r '
+        .[]
+        | "`" + .path + (if .line then ":" + (.line|tostring) else "" end) + "`: "
+          + .severity + ": " + .text
+          + ( [ (.category // empty), (.confidence // empty) ]
+              | if length > 0 then " _(" + join(" · ") + ")_" else "" end )'
 }
 
 # Build top must-fix section.
