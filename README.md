@@ -85,7 +85,7 @@ match. Tighten to assert full identity.
 `agent-merge-approved`
 ```
 
-The `` `agent-merge-approved` `` label at the bottom is machine-readable. `pr-babysit` parses it to decide whether the PR is ready to merge.
+The verdict label at the bottom is machine-readable: `` `agent-merge-approved` `` or `` `agent-request-changes` ``. `pr-babysit` parses it to decide whether the PR is ready to merge.
 
 ## Inputs
 

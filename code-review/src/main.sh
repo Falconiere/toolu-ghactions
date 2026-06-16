@@ -34,7 +34,7 @@ fail() {
 
 **Error:** $message
 
-\`agent-merge-changes-requested\`
+\`agent-request-changes\`
 "
         COMMENT_URL=$(echo "$ERROR_BODY" | bash "$SCRIPT_DIR/post-comment.sh" 2>/dev/null || echo "")
         if [ -n "$COMMENT_URL" ]; then

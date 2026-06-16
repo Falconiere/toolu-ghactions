@@ -68,7 +68,7 @@ done <<< "$CONTENT"
 # Check for approval signals in raw text.
 if echo "$CONTENT" | grep -qiE 'agent-merge-approved|\*\*Approved\*\*|verdict.*approved'; then
     VERDICT="approved"
-elif echo "$CONTENT" | grep -qiE 'agent-merge-changes|\*\*Changes requested\*\*|verdict.*changes'; then
+elif echo "$CONTENT" | grep -qiE 'agent-request-changes|\*\*Changes requested\*\*|verdict.*changes'; then
     VERDICT="changes"
 fi
 

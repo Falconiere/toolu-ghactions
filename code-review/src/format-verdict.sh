@@ -39,7 +39,7 @@ if [ "$VERDICT" = "approved" ]; then
     VERDICT_LABEL='`agent-merge-approved`'
     VERDICT_BADGE="✅ Approved"
 else
-    VERDICT_LABEL='`agent-merge-changes-requested`'
+    VERDICT_LABEL='`agent-request-changes`'
     VERDICT_BADGE="⚠️ Changes requested"
 fi
 

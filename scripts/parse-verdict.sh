@@ -33,7 +33,7 @@ _empty() { jq -nc '{is_review_comment:false, state:"unknown", complete:false, ve
 # (review headings, the [View job] CI link, a backticked agent-merge label) so a
 # stray "actions/runs/…" or "agent-merge-…" in arbitrary prose won't false-positive.
 is_review=false
-if printf '%s' "$input" | grep -qE '^### Code Review|^### PR Review in Progress|\[View job\]\([^)]*actions/runs/[0-9]+|`agent-merge-[a-z]'; then
+if printf '%s' "$input" | grep -qE '^### Code Review|^### PR Review in Progress|\[View job\]\([^)]*actions/runs/[0-9]+|`agent-(merge|request)-[a-z]'; then
   is_review=true
 fi
 if [ "$is_review" != true ]; then _empty; exit 0; fi
@@ -53,7 +53,7 @@ complete=false; [ "$state" = complete ] && complete=true
 # "Changes requested"/"approved" (e.g. a finding about verdict parsing itself),
 # and a whole-body grep would misclassify an approved PR as "changes". Fall back
 # to prose only when no label is present (changes-first there, as the safe bias).
-verdict_label=$(printf '%s' "$input" | grep -oE 'agent-merge-[a-z-]+' | head -1 || true)
+verdict_label=$(printf '%s' "$input" | grep -oE 'agent-(merge|request)-[a-z-]+' | head -1 || true)
 if [[ "$verdict_label" == *approved* ]]; then
   verdict="approved"
 elif [[ "$verdict_label" == *blocked* || "$verdict_label" == *changes* ]]; then

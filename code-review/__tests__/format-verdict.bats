@@ -39,7 +39,7 @@ load helpers
     [ "$status" -eq 0 ]
 
     [[ "$output" == *"Changes requested"* ]]
-    [[ "$output" == *"agent-merge-changes-requested"* ]]
+    [[ "$output" == *"agent-request-changes"* ]]
     [[ "$output" == *"🔴"*"blocker"* ]]  # Blocker badge.
     [[ "$output" == *"src/auth/login.ts:42"* ]]
     [[ "$output" == *"SQL injection"* ]]
@@ -60,7 +60,7 @@ load helpers
 
     # The comment must contain markers parse-verdict.sh looks for.
     [[ "$comment" == *"### Code Review"* ]]
-    [[ "$comment" == *'`agent-merge-'* ]]  # Backtick-wrapped verdict label.
+    [[ "$comment" == *'`agent-'* ]]  # Backtick-wrapped verdict label.
     [[ "$comment" == *"View job"* ]]
 }
 

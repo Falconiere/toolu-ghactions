@@ -35,7 +35,7 @@ The entrypoint `main.sh` orchestrates four phases:
 The action reuses the verdict comment format already consumed by `parse-verdict.sh` (see `pr-babysit/scripts/parse-verdict.sh` in the toolu repo). The contract is:
 - Header: `### Code Review — \`<branch-name>\`` (complete) or `### PR Review in Progress` (running)
 - Checkbox checklist tracking progress
-- Machine-readable verdict label: `` `agent-merge-approved` `` or `` `agent-merge-changes-requested` ``
+- Machine-readable verdict label: `` `agent-merge-approved` `` or `` `agent-request-changes` ``
 - `### Findings` block with lines of form `` `path:line`: severity: text ``
 - `### Other checks` and `### Top-N must-fix` sections
 
@@ -321,9 +321,9 @@ Standard GitHub Actions env vars also available: `GITHUB_REPOSITORY`, `GITHUB_RE
 ### `parse-verdict.sh` Contract (consumer-side, for backward compatibility)
 
 The comment must satisfy these parse-verdict.sh expectations:
-- **Marker:** comment contains one of: `### Code Review`, `### PR Review in Progress`, `[View job](...actions/runs/...)`, or `` `agent-merge-` `` (backtick-wrapped, machine-readable)
+- **Marker:** comment contains one of: `### Code Review`, `### PR Review in Progress`, `[View job](...actions/runs/...)`, or `` `agent-` `` (backtick-wrapped, machine-readable)
 - **Completeness:** tracked via unchecked/checked `- [ ]`/`- [x]` checkboxes. All checked → `state: complete`.
-- **Verdict label:** `` `agent-merge-approved` `` or `` `agent-merge-changes-requested` `` in the comment body (backtick-wrapped, authoritative)
+- **Verdict label:** `` `agent-merge-approved` `` or `` `agent-request-changes` `` in the comment body (backtick-wrapped, authoritative)
 - **Findings:** in `### Findings` section, each line matching `` `path:line`: severity: text ``
 
 ## Acceptance Criteria
@@ -341,7 +341,7 @@ The comment must satisfy these parse-verdict.sh expectations:
 11. **Verdict comment — subsequent run** — On a PR where the bot already has a comment, the action edits the existing comment in place rather than creating a new one.
 12. **Verdict comment — parse-verdict.sh compatible** — The final comment, when piped through `parse-verdict.sh`, returns `{is_review_comment: true, state: "complete", verdict: "approved"|"changes", findings: [<matching>]}`.
 13. **Approved verdict** — Given a diff with no correctness/security findings, the action posts a comment with `` `agent-merge-approved` `` and `verdict: "approved"`.
-14. **Changes-requested verdict** — Given a diff with at least one high-severity finding, the action posts a comment with `` `agent-merge-changes-requested` `` and `verdict: "changes"`.
+14. **Changes-requested verdict** — Given a diff with at least one high-severity finding, the action posts a comment with `` `agent-request-changes` `` and `verdict: "changes"`.
 15. **Custom prompt override** — Given `review-prompt: "Only check for SQL injection"`, the action uses that as the system prompt instead of the default checklist.
 16. **Codebase overview injection** — Given `codebase-overview: "React + Express monorepo"`, the overview text appears in the user prompt before the diff.
 17. **Empty diff** — On a PR with no file changes (e.g., only merge commits), the action posts a comment noting "No file changes to review" and exits successfully.
