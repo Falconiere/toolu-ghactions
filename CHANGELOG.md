@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.1.0](https://github.com/Falconiere/toolu-ghactions/compare/v1.0.2...v1.1.0) (2026-06-16)
+
+
+### Features
+
+* **code-review:** apply PR verdict label chips ([bb696d0](https://github.com/Falconiere/toolu-ghactions/commit/bb696d0c4104ff4a1205910911488e3a66a02eb3))
+
+
+### Bug Fixes
+
+* **code-review:** bound shallow fetches and encode label path ([52ed4ef](https://github.com/Falconiere/toolu-ghactions/commit/52ed4ef5af41dd36a9821a274520743ba5dbd3bf))
+* **code-review:** resolve merge-base on shallow checkouts ([0ec9457](https://github.com/Falconiere/toolu-ghactions/commit/0ec945776c164ef7f77a051e9475d71e71bbcf99))
+
 ## [1.0.2](https://github.com/Falconiere/toolu-ghactions/compare/v1.0.1...v1.0.2) (2026-06-16)
 
 
