@@ -6,8 +6,8 @@ RUN apk add --no-cache \
     jq \
     curl
 
-COPY code-review/src/ /action/src/
-COPY code-review/prompts/ /action/prompts/
+COPY src/ /action/src/
+COPY prompts/ /action/prompts/
 
 WORKDIR /github/workspace
 
