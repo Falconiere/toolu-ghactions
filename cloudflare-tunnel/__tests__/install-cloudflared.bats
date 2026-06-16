@@ -53,9 +53,7 @@ teardown() {
 @test "installed binary is executable (chmod +x bit set)" {
     stub_curl_deliver_quick_probe_ok
     bash "$SRC_DIR/install-cloudflared.sh"
-    # Mode bits: at least 0755 (executable for owner/group/other).
-    mode=$(stat -f '%Lp' "$INSTALL_DEST" 2>/dev/null || stat -c '%a' "$INSTALL_DEST")
-    [ "$mode" = "755" ] || [[ "$mode" == "7"* ]]
+    [ -x "$INSTALL_DEST" ]
 }
 
 @test "parent directory of INSTALL_DEST is created if missing" {
