@@ -1,53 +1,35 @@
 #!/usr/bin/env bash
-# build-prompt.bats — tests for build-prompt.sh
+# build-prompt.bats — tests for build-prompt.sh (provider-agnostic envelope).
 
 load helpers
 
-@test "build-prompt: produces valid OpenRouter request JSON" {
+@test "build-prompt: produces provider-agnostic envelope with system + user + max_tokens + enforce_json_schema" {
     diff_data=$(cat "$FIXTURES_DIR/sample-diff.txt" | jq -Rsc '{diff: ., changed_files: ["src/auth/login.ts","src/utils/format.ts"], binary_files: [], total_lines: 30, total_files: 4, truncated: false}')
 
     run bash "$SRC_DIR/build-prompt.sh" <<< "$diff_data"
     [ "$status" -eq 0 ]
 
-    # Validate JSON structure.
-    echo "$output" | jq -e '.model == "minimax/minimax-m3"'
-    echo "$output" | jq -e '.messages | length == 2'
-    echo "$output" | jq -e '.messages[0].role == "system"'
-    echo "$output" | jq -e '.messages[1].role == "user"'
-    echo "$output" | jq -e '.temperature == 0.1'
-    echo "$output" | jq -e '.response_format.type == "json_schema"'
-    echo "$output" | jq -e '.response_format.json_schema.schema.required | contains(["review_plan"])'
-}
-
-@test "build-prompt: dimension mode builds a scoped prompt with models[], max_tokens, provider routing" {
-    diff_data=$(cat "$FIXTURES_DIR/sample-diff.txt" | jq -Rsc '{diff: ., changed_files: ["src/auth/login.ts"], binary_files: [], dropped_files: [], total_lines: 10, total_files: 1, truncated: false}')
-
-    INPUT_DIMENSION="security" run bash "$SRC_DIR/build-prompt.sh" <<< "$diff_data"
-    [ "$status" -eq 0 ]
-
-    sys=$(echo "$output" | jq -r '.messages[0].content')
-    [[ "$sys" == *"Your dimension: security"* ]]
-    [[ "$sys" == *"SECURITY"* ]]
-
+    # Envelope shape — no OpenRouter/OpenAI-specific fields here.
+    echo "$output" | jq -e '.system | type == "string" and length > 0'
+    echo "$output" | jq -e '.user | type == "string" and length > 0'
     echo "$output" | jq -e '.max_tokens == 4096'
-    echo "$output" | jq -e '.models | length == 2'
-    echo "$output" | jq -e '.models[0] == "minimax/minimax-m3"'
-    echo "$output" | jq -e '.models[1] == "anthropic/claude-sonnet-4-5"'
-    echo "$output" | jq -e '.provider.require_parameters == true'
-    # Sub-reviewer schema: reasoning first, findings carry confidence/suggestion.
-    echo "$output" | jq -e '.response_format.json_schema.schema.required | contains(["reasoning"])'
-    echo "$output" | jq -e '.response_format.json_schema.schema.properties.findings.items.properties | has("confidence") and has("suggestion") and has("end_line")'
+    echo "$output" | jq -e '.enforce_json_schema == true'
+
+    # No legacy OpenRouter-specific fields.
+    echo "$output" | jq -e '.model == null'
+    echo "$output" | jq -e '.messages == null'
+    echo "$output" | jq -e '.response_format == null'
+    echo "$output" | jq -e '.temperature == null'
+    echo "$output" | jq -e '.models == null'
+    echo "$output" | jq -e '.provider == null'
 }
 
-@test "build-prompt: ENFORCE_JSON_SCHEMA=false omits response_format and provider" {
+@test "build-prompt: ENFORCE_JSON_SCHEMA=false propagates" {
     diff_data=$(cat "$FIXTURES_DIR/sample-diff.txt" | jq -Rsc '{diff: ., changed_files: ["a.ts"], binary_files: [], dropped_files: [], total_lines: 1, total_files: 1, truncated: false}')
 
     INPUT_ENFORCE_JSON_SCHEMA="false" run bash "$SRC_DIR/build-prompt.sh" <<< "$diff_data"
     [ "$status" -eq 0 ]
-    echo "$output" | jq -e '.response_format == null'
-    echo "$output" | jq -e '.provider == null'
-    echo "$output" | jq -e '.max_tokens == 4096'
-    echo "$output" | jq -e '.models | length == 2'
+    echo "$output" | jq -e '.enforce_json_schema == false'
 }
 
 @test "build-prompt: system prompt includes review dimensions from checklist" {
@@ -56,15 +38,13 @@ load helpers
     run bash "$SRC_DIR/build-prompt.sh" <<< "$diff_data"
     [ "$status" -eq 0 ]
 
-    # System content must reference key dimensions.
-    sys=$(echo "$output" | jq -r '.messages[0].content')
+    sys=$(echo "$output" | jq -r '.system')
     [[ "$sys" == *"CORRECTNESS"* ]]
     [[ "$sys" == *"SECURITY"* ]]
     [[ "$sys" == *"PERFORMANCE"* ]]
 }
 
 @test "build-prompt: uses custom review prompt from file when review-prompt-file is set" {
-    # Write a custom prompt to a temp dir that simulates the workspace.
     WS=$(mktemp -d)
     echo "Only check for SQL injection patterns." > "$WS/custom-prompt.md"
 
@@ -74,7 +54,7 @@ load helpers
         run bash "$SRC_DIR/build-prompt.sh" <<< "$diff_data"
 
     [ "$status" -eq 0 ]
-    sys=$(echo "$output" | jq -r '.messages[0].content')
+    sys=$(echo "$output" | jq -r '.system')
     [[ "$sys" == *"SQL injection"* ]]
     [[ "$sys" != *"CORRECTNESS"* ]]
 
@@ -96,7 +76,7 @@ load helpers
     run bash "$SRC_DIR/build-prompt.sh" <<< "$diff_data"
     [ "$status" -eq 0 ]
 
-    user=$(echo "$output" | jq -r '.messages[1].content')
+    user=$(echo "$output" | jq -r '.user')
     [[ "$user" == *"truncated"* ]]
 }
 
@@ -106,7 +86,7 @@ load helpers
         run bash "$SRC_DIR/build-prompt.sh" <<< "$diff_data"
 
     [ "$status" -eq 0 ]
-    user=$(echo "$output" | jq -r '.messages[1].content')
+    user=$(echo "$output" | jq -r '.user')
     [[ "$user" == *"React + Express"* ]]
 }
 
@@ -116,7 +96,7 @@ load helpers
     run bash "$SRC_DIR/build-prompt.sh" <<< "$diff_data"
     [ "$status" -eq 0 ]
 
-    user=$(echo "$output" | jq -r '.messages[1].content')
+    user=$(echo "$output" | jq -r '.user')
     [[ "$user" == *"Binary Files"* ]]
     [[ "$user" == *"icon.png"* ]]
     [[ "$user" == *"app.wasm"* ]]
