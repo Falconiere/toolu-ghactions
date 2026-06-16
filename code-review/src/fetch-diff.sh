@@ -7,6 +7,10 @@
 # total_lines, truncated (bool).
 set -euo pipefail
 
+# GitHub Actions mounts the host workspace; container runs as root but host
+# files are owned by the runner user — newer git rejects this as dubious.
+git config --global --add safe.directory /github/workspace 2>/dev/null || true
+
 BASE_BRANCH="${INPUT_BASE_BRANCH:-main}"
 MAX_FILES="${INPUT_MAX_FILES:-100}"
 MAX_DIFF_LINES="${INPUT_MAX_DIFF_LINES:-8000}"
