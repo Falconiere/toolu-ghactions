@@ -151,6 +151,43 @@ teardown_git_repo() {
     teardown_git_repo
 }
 
+@test "fetch-diff: recovers merge-base from a shallow clone" {
+    # Origin: main = A-B-C-D, feature branches at B and adds feat.ts.
+    ORIGIN=$(mktemp -d)
+    (
+        cd "$ORIGIN"
+        git init --initial-branch=main --quiet
+        git config user.email "test@test.com"; git config user.name "Test"
+        echo a > f.txt; git add f.txt; git commit -m A --quiet
+        echo b >> f.txt; git add f.txt; git commit -m B --quiet
+        git checkout -b feature --quiet
+        echo "export const x = 1" > feat.ts; git add feat.ts; git commit -m E --quiet
+        git checkout main --quiet
+        echo c >> f.txt; git add f.txt; git commit -m C --quiet
+        echo d >> f.txt; git add f.txt; git commit -m D --quiet
+    )
+
+    # Shallow clone (depth 1) of feature with all remote-tracking refs — mirrors
+    # actions/checkout's default fetch-depth: 1, so merge-base starts empty.
+    TMPDIR=$(mktemp -d)
+    git clone --depth=1 --no-single-branch --branch feature "file://$ORIGIN" "$TMPDIR" --quiet
+    cd "$TMPDIR"
+    git config user.email "test@test.com"; git config user.name "Test"
+
+    [ "$(git rev-parse --is-shallow-repository)" = "true" ]
+    [ -z "$(git merge-base HEAD origin/main 2>/dev/null || true)" ]  # empty before fix
+
+    export INPUT_MAX_FILES=100 INPUT_MAX_DIFF_LINES=8000 INPUT_BASE_BRANCH=main GITHUB_BASE_REF=main
+
+    run bash "$SRC_DIR/fetch-diff.sh"
+    [ "$status" -eq 0 ]
+    # Progress lines go to stderr; the JSON payload is the final stdout line.
+    echo "$output" | tail -n1 | jq -e '.changed_files | index("feat.ts") != null'
+
+    cd /
+    rm -rf "$ORIGIN" "$TMPDIR"
+}
+
 @test "fetch-diff: empty repo has total_files=0" {
     setup_git_repo
 

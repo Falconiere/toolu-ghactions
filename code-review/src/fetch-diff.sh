@@ -39,6 +39,26 @@ if ! git rev-parse --verify "$REMOTE_BASE" >/dev/null 2>&1; then
 fi
 
 MERGE_BASE=$(git merge-base HEAD "$REMOTE_BASE" 2>/dev/null || true)
+
+# actions/checkout defaults to fetch-depth: 1, so both HEAD and the base tip are
+# grafted shallow and share no visible ancestor — merge-base comes back empty.
+# Progressively deepen the shallow history until they reconnect, then unshallow
+# as a last resort. Skipped for full clones (deepen is a no-op there anyway).
+if [ -z "$MERGE_BASE" ] \
+    && [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ] \
+    && git remote get-url origin >/dev/null 2>&1; then
+    echo "  Deepening shallow history to find merge-base..." >&2
+    for depth in 100 500 2000; do
+        git fetch origin --deepen="$depth" >/dev/null 2>&1 || true
+        MERGE_BASE=$(git merge-base HEAD "$REMOTE_BASE" 2>/dev/null || true)
+        [ -n "$MERGE_BASE" ] && break
+    done
+    if [ -z "$MERGE_BASE" ]; then
+        git fetch origin --unshallow >/dev/null 2>&1 || true
+        MERGE_BASE=$(git merge-base HEAD "$REMOTE_BASE" 2>/dev/null || true)
+    fi
+fi
+
 if [ -z "$MERGE_BASE" ]; then
     jq -nc --arg base "$BASE_BRANCH" '{error: "Cannot compute merge-base", base_branch: $base}' >&2
     exit 1
