@@ -1,51 +1,53 @@
 #!/usr/bin/env bash
-# coordinate-findings.sh — coordinator pass. Sends the validated finding union to
-# the coordinator LLM (prompts/coordinator.txt) to deduplicate, filter for
-# reasonableness, set the verdict, and write the review plan + top must-fix list.
+# coordinate-findings.sh — multi-provider verdict merger (deterministic, no LLM).
 #
-# stdin : { findings: [ ... ] }   (validated union from validate-findings.sh)
-# stdout: { review_plan, verdict, findings, other_checks, top_must_fix }
+# stdin : { providers: [ {provider, verdict|error, findings, top_must_fix, other_checks, ...} ],
+#           strategy: "conservative"|"majority"|"all_approve" }
+# stdout: { verdict, findings, review_plan, other_checks, top_must_fix }
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-MODEL="${INPUT_MODEL:-minimax/minimax-m3}"
-FALLBACK_MODEL="${INPUT_FALLBACK_MODEL:-anthropic/claude-sonnet-4-5}"
-MAX_TOKENS="${INPUT_MAX_TOKENS:-4096}"
+INPUT=$(cat)
+STRATEGY=$(echo "$INPUT" | jq -r '.strategy // "conservative"')
 
-UNION=$(cat)
-
-# No findings → approved without spending a coordinator call.
-N=$(printf '%s' "$UNION" | jq '(.findings // []) | length')
-if [ "$N" -eq 0 ]; then
-    jq -nc '{review_plan:"No findings from any dimension.", verdict:"approved", findings:[], other_checks:"", top_must_fix:[]}'
+N_PROVIDERS=$(echo "$INPUT" | jq '.providers | length')
+if [ "$N_PROVIDERS" -eq 0 ]; then
+    jq -nc '{review_plan:"No providers configured.", verdict:"changes", findings:[], other_checks:"", top_must_fix:[]}'
     exit 0
 fi
 
-COORD=""
-for p in "/action/prompts/coordinator.txt" "$SCRIPT_DIR/../prompts/coordinator.txt" "code-review/prompts/coordinator.txt"; do
-    [ -f "$p" ] && { COORD="$p"; break; }
-done
-if [ -z "$COORD" ]; then
-    jq -nc '{error:"coordinator.txt not found in image"}' >&2
-    exit 1
-fi
+DISPOSITIONS=$(echo "$INPUT" | jq -c '[.providers[] | {provider: .provider, d: (if .error then "error" else .verdict end)}]')
+N_CHANGES=$(echo "$DISPOSITIONS" | jq '[.[] | select(.d == "changes")] | length')
+N_APPROVED=$(echo "$DISPOSITIONS" | jq '[.[] | select(.d == "approved")] | length')
+N_ERROR=$(echo "$DISPOSITIONS" | jq '[.[] | select(.d == "error")] | length')
 
-SYS=$(cat "$COORD")
-USERMSG=$(printf '%s' "$UNION" | jq -c '{findings: (.findings // [])}')
+case "$STRATEGY" in
+    conservative)
+        if [ "$N_CHANGES" -eq 0 ] && [ "$N_ERROR" -eq 0 ]; then VERDICT="approved"; else VERDICT="changes"; fi ;;
+    majority)
+        THRESHOLD=$(( (N_PROVIDERS / 2) + 1 ))
+        if [ "$N_CHANGES" -ge "$THRESHOLD" ]; then VERDICT="changes"; else VERDICT="approved"; fi ;;
+    all_approve)
+        if [ "$N_APPROVED" -eq "$N_PROVIDERS" ]; then VERDICT="approved"; else VERDICT="changes"; fi ;;
+    *)
+        jq -nc --arg s "$STRATEGY" '{error:("unknown strategy: " + $s)}' >&2; exit 1 ;;
+esac
 
-# The findings payload scales with the review and overflows ARG_MAX ("jq:
-# Argument list too long") if passed via --argjson. Route both messages
-# through temp files: --rawfile reads each verbatim as a JSON string.
-SYS_FILE=$(mktemp)
-USER_FILE=$(mktemp)
-trap 'rm -f "$SYS_FILE" "$USER_FILE"' EXIT
-printf '%s' "$SYS" > "$SYS_FILE"
-printf '%s' "$USERMSG" > "$USER_FILE"
+# Dedupe findings by (path, line, end_line, text-fingerprint-80). Max severity within group.
+DEDUPED=$(echo "$INPUT" | jq -c '
+    [ (.providers // [])[] | (.findings // [])[]? | { path: (.path // ""), line: (.line // null), end_line: (.end_line // .line // null), severity: (.severity // "low"), category: (.category // null), confidence: (.confidence // null), quoted_line: (.quoted_line // null), suggestion: (.suggestion // null), text: (.text // "") } ] |
+    group_by(.path + "|" + (.line|tostring) + "|" + (.end_line|tostring) + "|" + (.text | ascii_downcase | gsub("[^a-z0-9 ]"; "") | gsub("\\s+"; " ") | .[0:80])) |
+    map({ path: .[0].path, line: .[0].line, end_line: .[0].end_line, severity: ([.[].severity] | min_by(if . == "blocker" then 0 elif . == "high" then 1 elif . == "medium" then 2 elif . == "low" then 3 else 4 end)), category: (map(.category) | map(select(. != null)) | .[0] // null), confidence: (map(.confidence) | map(select(. != null)) | .[0] // null), quoted_line: (map(.quoted_line) | map(select(. != null)) | .[0] // null), suggestion: (map(.suggestion) | map(select(. != null)) | .[0] // null), text: .[0].text })
+')
 
-BODY=$(jq -nc \
-    --arg model "$MODEL" --arg fb "$FALLBACK_MODEL" --argjson maxtok "$MAX_TOKENS" \
-    --rawfile sys "$SYS_FILE" --rawfile user "$USER_FILE" \
-    '{model:$model, models:[$model,$fb], messages:[{role:"system",content:$sys},{role:"user",content:$user}], temperature:0.1, max_tokens:$maxtok}')
+# top_must_fix: dedupe by path, cap 3.
+TOP_MUST_FIX=$(echo "$INPUT" | jq -c '[ (.providers // [])[] | (.top_must_fix // [])[]? ] | unique | .[0:3]')
 
-RESPONSE=$(printf '%s' "$BODY" | bash "$SCRIPT_DIR/call-openrouter.sh")
-printf '%s' "$RESPONSE" | bash "$SCRIPT_DIR/parse-response.sh"
+PROVIDER_LIST=$(echo "$INPUT" | jq -r '[.providers[].provider] | join(", ")')
+AGREEMENT=$(echo "$DISPOSITIONS" | jq -r '.[] | "\(.provider)=\(.d)"' | paste -sd ", " -)
+REVIEW_PLAN="Reviewed by ${N_PROVIDERS} providers: ${PROVIDER_LIST}. Merged with ${STRATEGY}."
+[ "$N_ERROR" -gt 0 ] && REVIEW_PLAN+=" ($N_ERROR errored)."
+OTHER_CHECKS="Per-provider: ${AGREEMENT}. Merged $(echo "$DEDUPED" | jq 'length') findings from $N_PROVIDERS providers."
+
+VERDICT_JSON=$(printf '%s' "$VERDICT" | jq -R .)
+jq -nc --argjson v "$VERDICT_JSON" --argjson findings "$DEDUPED" --argjson top_must_fix "$TOP_MUST_FIX" --arg review_plan "$REVIEW_PLAN" --arg other_checks "$OTHER_CHECKS" \
+    '{ verdict: $v, findings: $findings, review_plan: $review_plan, other_checks: $other_checks, top_must_fix: $top_must_fix }'

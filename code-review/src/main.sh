@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 # main.sh — entrypoint for the AI Code Review GitHub Action.
 #
-# parallel mode (default): fetch-diff → fan out one run-dimension.sh per dimension
-#   group → validate-findings → coordinate-findings → format-verdict →
-#   post-comment (summary) → post-review (inline, non-fatal).
-# single mode: fetch-diff → build-prompt → call-openrouter → parse-response → …
+# Reads $INPUT_PROVIDERS (a JSON array of {provider, model, api_key} entries).
+# Falls back to legacy single-provider inputs (OPENROUTER_API_KEY + MODEL + MAX_TOKENS
+# + ENFORCE_JSON_SCHEMA) when PROVIDERS is empty.
 #
-# Sets GitHub Actions outputs: verdict, findings-count, comment-url.
+# Pipeline (multi-provider):
+#   1. Validate env
+#   2. Fetch diff + post in-progress comment
+#   3. Spawn N parallel `run-provider.sh` jobs (one per provider entry)
+#   4. Merge N results via `coordinate-findings.sh` (with $INPUT_MERGE_STRATEGY)
+#   5. Format verdict, post comment + label + inline review
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GITHUB_OUTPUT="${GITHUB_OUTPUT:-/dev/stdout}"
-REVIEW_MODE="${INPUT_REVIEW_MODE:-parallel}"
-DIMENSIONS="correctness security performance tests"
+MERGE_STRATEGY="${INPUT_MERGE_STRATEGY:-conservative}"
 
 REVIEW_START_TIME=$(date +%s)
 export REVIEW_START_TIME
@@ -49,12 +52,48 @@ fail() {
     exit 1
 }
 
-# --- Phase 1: Validate environment ---
-if [ -z "${OPENROUTER_API_KEY:-}" ] && [ -n "${INPUT_OPENROUTER_API_KEY:-}" ]; then
-    export OPENROUTER_API_KEY="$INPUT_OPENROUTER_API_KEY"
-fi
-[ -z "${OPENROUTER_API_KEY:-}" ] && fail "OPENROUTER_API_KEY is not set (pass via env: block or with: input)"
-[ -z "${GITHUB_TOKEN:-}" ] && fail "GITHUB_TOKEN is not set"
+# --- Phase 1: Build the providers list (multi or legacy) ---
+build_providers_list() {
+    # Translate INPUT_OPENROUTER_API_KEY → OPENROUTER_API_KEY (legacy action.yml env mapping).
+    if [ -z "${OPENROUTER_API_KEY:-}" ] && [ -n "${INPUT_OPENROUTER_API_KEY:-}" ]; then
+        export OPENROUTER_API_KEY="$INPUT_OPENROUTER_API_KEY"
+    fi
+
+    if [ -n "${INPUT_PROVIDERS:-}" ]; then
+        # If legacy OPENROUTER_API_KEY is also set, warn and use PROVIDERS.
+        if [ -n "${OPENROUTER_API_KEY:-}" ]; then
+            echo "[WARN] OPENROUTER_API_KEY (and other legacy single-provider inputs) ignored; using PROVIDERS" >&2
+        fi
+        if ! echo "$INPUT_PROVIDERS" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1; then
+            echo "INPUT_PROVIDERS is set but is not a non-empty JSON array." >&2
+            return 1
+        fi
+        echo "$INPUT_PROVIDERS"
+        return 0
+    fi
+
+    # Legacy: build a 1-element list.
+    if [ -n "${OPENROUTER_API_KEY:-}" ]; then
+        echo "[WARN] OPENROUTER_API_KEY is the legacy single-provider input; prefer PROVIDERS for multi-provider configurations" >&2
+        [ -n "${INPUT_FALLBACK_MODEL:-}" ] && echo "[WARN] FALLBACK_MODEL is dropped (was OpenRouter-specific; multi-provider IS the fallback)" >&2
+        [ -n "${INPUT_REVIEW_MODE:-}" ] && [ "${INPUT_REVIEW_MODE}" != "single" ] && echo "[WARN] REVIEW_MODE is a no-op; multi-provider replaces per-dim fan-out" >&2
+        jq -nc --arg model "${INPUT_MODEL:-minimax/minimax-m3}" \
+                  --arg key "${OPENROUTER_API_KEY}" \
+                  --argjson enforce "${INPUT_ENFORCE_JSON_SCHEMA:-true}" \
+                  --argjson maxtok "${INPUT_MAX_TOKENS:-4096}" \
+            '[{provider: "openrouter", model: $model, api_key: $key, enforce_json_schema: $enforce, max_tokens: $maxtok}]'
+        return 0
+    fi
+
+    echo "Set PROVIDERS (preferred) or OPENROUTER_API_KEY (legacy) before running this action." >&2
+    return 1
+}
+
+PROVIDERS_LIST=$(build_providers_list) || fail "No providers configured"
+N=$(echo "$PROVIDERS_LIST" | jq 'length')
+echo "Configured $N provider(s): $(echo "$PROVIDERS_LIST" | jq -r '[.[].provider] | join(", ")')" >&2
+
+[ -n "${GITHUB_TOKEN:-}" ] || fail "GITHUB_TOKEN is not set"
 
 # --- Phase 2: Fetch diff ---
 echo "[1/5] Fetching PR diff..." >&2
@@ -122,52 +161,58 @@ IN_PROGRESS_BODY="**AI Code Review running** —— [View job](${GITHUB_SERVER_U
 "
 echo "$IN_PROGRESS_BODY" | bash "$SCRIPT_DIR/post-comment.sh" >/dev/null || echo "  Warning: could not post in-progress comment" >&2
 
-# --- Phase 3: Produce the final review object (PARSED) ---
-if [ "$REVIEW_MODE" = "single" ]; then
-    echo "[2/5] Single-pass review..." >&2
-    REQ_ERR=$(mktemp)
-    REQUEST_BODY=$(echo "$DIFF_DATA" | bash "$SCRIPT_DIR/build-prompt.sh" 2>"$REQ_ERR") || fail "Failed to build review prompt" "$(cat "$REQ_ERR")"
-    API_ERR=$(mktemp)
-    API_RESPONSE=$(echo "$REQUEST_BODY" | bash "$SCRIPT_DIR/call-openrouter.sh" 2>"$API_ERR") || fail "OpenRouter API call failed" "$(cat "$API_ERR")"
-    PARSE_ERR=$(mktemp)
-    PARSED=$(echo "$API_RESPONSE" | bash "$SCRIPT_DIR/parse-response.sh" 2>"$PARSE_ERR") || fail "Failed to parse review response" "$(cat "$PARSE_ERR")"
-else
-    echo "[2/5] Parallel sub-reviewers: $DIMENSIONS" >&2
-    TMPD=$(mktemp -d)
-    declare -A PID
-    for dim in $DIMENSIONS; do
-        ( echo "$DIFF_DATA" | INPUT_DIMENSION="$dim" bash "$SCRIPT_DIR/run-dimension.sh" > "$TMPD/$dim.json" 2> "$TMPD/$dim.err" ) &
-        PID[$dim]=$!
-    done
+# --- Phase 3: Parallel provider reviews ---
+echo "[2/5] Parallel provider reviews (strategy: $MERGE_STRATEGY)..." >&2
+TMPD=$(mktemp -d)
+trap 'rm -rf "$TMPD"' EXIT
+declare -A PID
+declare -A ERR_TMP
 
-    OK=0
-    UNION="[]"
-    for dim in $DIMENSIONS; do
-        if wait "${PID[$dim]}"; then
-            OK=$((OK + 1))
-            DF=$(jq -c '.findings // []' "$TMPD/$dim.json" || echo "[]")
-            UNION=$(jq -cn --argjson a "$UNION" --argjson b "$DF" '$a + $b')
-        else
-            echo "  [warn] dimension '$dim' failed: $(cat "$TMPD/$dim.err")" >&2
-        fi
-    done
-    [ "$OK" -eq 0 ] && fail "All dimension reviewers failed" "$(cat "$TMPD"/*.err)"
-    echo "  $OK dimension(s) succeeded; $(echo "$UNION" | jq 'length') findings before validation" >&2
+for i in $(seq 0 $((N - 1))); do
+    ENTRY=$(echo "$PROVIDERS_LIST" | jq -c ".[$i]")
+    OUT="$TMPD/result-$i.json"
+    ERR_FILE="$TMPD/err-$i.log"
+    ERR_TMP[$i]="$ERR_FILE"
+    ENTRY_FILE="$TMPD/entry-$i.json"
+    printf '%s' "$ENTRY" > "$ENTRY_FILE"
+    (
+        echo "$DIFF_DATA" | bash "$SCRIPT_DIR/run-provider.sh" "$ENTRY_FILE" "$OUT" >/dev/null 2>"$ERR_FILE"
+    ) &
+    PID[$i]=$!
+done
 
-    FILES=$(echo "$DIFF_DATA" | jq -c '.files // []')
-    AGG=$(jq -cn --argjson files "$FILES" --argjson findings "$UNION" '{files:$files, findings:$findings}')
+# Wait on all jobs; non-zero exit is recorded as {provider, error} by run-provider.sh.
+OK=0
+for i in $(seq 0 $((N - 1))); do
+    if wait "${PID[$i]}"; then
+        OK=$((OK + 1))
+    else
+        RC=$?
+        ENTRY=$(echo "$PROVIDERS_LIST" | jq -c ".[$i]")
+        PROVIDER_NAME=$(echo "$ENTRY" | jq -r '.provider')
+        MODEL_NAME=$(echo "$ENTRY" | jq -r '.model')
+        ERR_TAIL=$(tail -c 200 "${ERR_TMP[$i]}" 2>/dev/null | tr '\n' ' ' | head -c 200)
+        jq -nc --arg p "$PROVIDER_NAME" --arg m "$MODEL_NAME" --arg e "job exited $RC: $ERR_TAIL" \
+            '{provider:$p, model:$m, error:$e, verdict:null, findings:[]}' > "$TMPD/result-$i.json"
+        echo "  [warn] provider '$PROVIDER_NAME' failed: $ERR_TAIL" >&2
+    fi
+done
+echo "  $OK/$N provider jobs succeeded" >&2
 
-    VAL_ERR=$(mktemp)
-    VALIDATED=$(echo "$AGG" | bash "$SCRIPT_DIR/validate-findings.sh" 2>"$VAL_ERR") || fail "Failed to validate findings" "$(cat "$VAL_ERR")"
-    COORD_ERR=$(mktemp)
-    PARSED=$(echo "$VALIDATED" | bash "$SCRIPT_DIR/coordinate-findings.sh" 2>"$COORD_ERR") || fail "Coordinator pass failed" "$(cat "$COORD_ERR")"
-fi
+# --- Phase 4: Merge N results ---
+MERGE_INPUT=$(jq -nc \
+    --argjson providers "$(jq -c -s '.' "$TMPD"/result-*.json)" \
+    --arg strategy "$MERGE_STRATEGY" \
+    '{providers: $providers, strategy: $strategy}')
+
+MERGE_ERR=$(mktemp)
+PARSED=$(echo "$MERGE_INPUT" | bash "$SCRIPT_DIR/coordinate-findings.sh" 2>"$MERGE_ERR") || fail "Multi-provider merge failed" "$(cat "$MERGE_ERR")"
 
 VERDICT=$(echo "$PARSED" | jq -r '.verdict // "changes"')
 FINDINGS_COUNT=$(echo "$PARSED" | jq '.findings | length')
 echo "[3/5] Verdict: $VERDICT, Findings: $FINDINGS_COUNT" >&2
 
-# --- Phase 4: Format + post summary comment ---
+# --- Phase 5: Format + post summary comment ---
 echo "[4/5] Posting verdict comment..." >&2
 FMT_ERR=$(mktemp)
 COMMENT_BODY=$(echo "$PARSED" | bash "$SCRIPT_DIR/format-verdict.sh" 2>"$FMT_ERR") || fail "Failed to format verdict comment" "$(cat "$FMT_ERR")"
@@ -177,7 +222,8 @@ COMMENT_URL=$(echo "$COMMENT_BODY" | bash "$SCRIPT_DIR/post-comment.sh" 2>"$POST
 # Set the real verdict label on the PR (non-fatal).
 bash "$SCRIPT_DIR/post-label.sh" "$VERDICT" || echo "  Warning: could not set verdict label" >&2
 
-# --- Phase 5: Inline review comments + suggestions (non-fatal) ---
+# --- Phase 6: Inline review comments + suggestions (non-fatal) ---
+# Always consumes the MERGED findings only — never per-provider raw output.
 echo "[5/5] Posting inline review comments..." >&2
 echo "$PARSED" | bash "$SCRIPT_DIR/post-review.sh" || echo "  Warning: inline review step failed (summary comment still posted)" >&2
 

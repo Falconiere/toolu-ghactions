@@ -57,12 +57,16 @@ load helpers
     [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
 }
 
-@test "parse-response: fails on empty input" {
-    run bash "$SRC_DIR/parse-response.sh" <<< ''
-    [ "$status" -ne 0 ]
+@test "parse-response: returns structured error on empty input (does not crash)" {
+    PROVIDER=openrouter run bash "$SRC_DIR/parse-response.sh" <<< ''
+    [ "$status" -eq 0 ]
+    echo "$output" | jq -e '.verdict == null'
+    echo "$output" | jq -e '.error | length > 0'
+    echo "$output" | jq -e '.findings == []'
 }
 
-@test "parse-response: fails on non-JSON input with no extractable findings" {
-    run bash "$SRC_DIR/parse-response.sh" <<< 'this is just random text with nothing parseable'
-    [ "$status" -ne 0 ]
+@test "parse-response: returns findings=[] on non-JSON input with no extractable findings" {
+    PROVIDER=openrouter run bash "$SRC_DIR/parse-response.sh" <<< 'this is just random text with nothing parseable'
+    [ "$status" -eq 0 ]
+    echo "$output" | jq -e '.findings | type == "array"'
 }
