@@ -120,8 +120,8 @@ The verdict label at the bottom is machine-readable: `` `agent-merge-approved` `
 | `BASE_BRANCH` | no | `main` | Base branch for diff comparison. Falls back to `GITHUB_BASE_REF` if unset. |
 | `REVIEW_PROMPT_FILE` | no | *(7-dimension checklist)* | Path to a markdown file (relative to repo root) with a custom review prompt. Overrides the default checklist. |
 | `CODEBASE_OVERVIEW` | no | — | High-level context about the codebase (framework, patterns, architecture) injected into the review prompt. |
-| `MAX_FILES` | no | `100` | Maximum changed files before the action skips. Prevents massive PRs from running up API costs. |
-| `MAX_DIFF_LINES` | no | `8000` | Maximum diff lines before truncation. First N lines kept (lexicographic by file path); a truncation notice is appended. |
+| `MAX_FILES` | no | `0` (unlimited) | Maximum changed files before the action skips. `0` reviews any number of files — the only ceiling is your OpenRouter billing balance. Set a positive value to opt into a hard skip on huge PRs. |
+| `MAX_DIFF_LINES` | no | `0` (unlimited) | Maximum diff lines before truncation. `0` reviews the whole diff. Set a positive value to keep the first N lines (lexicographic by file path) and append a truncation notice. |
 | `TOKEN` | no | `${{ github.token }}` | GitHub token for posting and editing comments. |
 
 ## Outputs

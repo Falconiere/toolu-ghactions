@@ -56,13 +56,13 @@ inputs:
     description: 'High-level description of the codebase (framework, patterns, business context) to give the reviewer context'
     required: false
   MAX_FILES:
-    description: 'Maximum number of changed files before the action skips (avoids massive PR cost/timeout)'
+    description: 'Maximum number of changed files before the action skips. 0 (default) = unlimited; the only ceiling is your OpenRouter billing balance. Set a positive value to opt into a hard skip.'
     required: false
-    default: '100'
+    default: '0'
   MAX_DIFF_LINES:
-    description: 'Maximum diff lines before truncation (first N lines kept, lexicographic by file path)'
+    description: 'Maximum diff lines before truncation (first N lines kept, lexicographic by file path). 0 (default) = unlimited; review the whole diff. Set a positive value to opt into truncation.'
     required: false
-    default: '8000'
+    default: '0'
   TOKEN:
     description: 'GitHub token for posting/editing comments'
     required: false

@@ -61,6 +61,14 @@ echo "[1/5] Fetching PR diff..." >&2
 DIFF_ERR=$(mktemp)
 DIFF_DATA=$(bash "$SCRIPT_DIR/fetch-diff.sh" 2>"$DIFF_ERR") || fail "Failed to fetch PR diff" "$(cat "$DIFF_ERR")"
 
+# Guard: fetch-diff always prints a JSON object on success (even the skip/empty
+# cases). Empty stdout means an exit-0 path forgot to emit — fail loudly here
+# rather than feeding "" into the jq calls below (which would surface as the
+# cryptic "invalid JSON text passed to --argjson").
+if [ -z "${DIFF_DATA//[[:space:]]/}" ]; then
+    fail "Diff fetch produced no output" "$(cat "$DIFF_ERR")"
+fi
+
 SKIP_ERROR=$(echo "$DIFF_DATA" | jq -r '.error // ""' || true)
 if [ -n "$SKIP_ERROR" ]; then
     echo "[SKIP] $SKIP_ERROR" >&2

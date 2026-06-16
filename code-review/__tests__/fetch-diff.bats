@@ -203,3 +203,46 @@ teardown_git_repo() {
 
     teardown_git_repo
 }
+
+@test "fetch-diff: unlimited by default — many files are reviewed, not skipped" {
+    setup_git_repo
+    git checkout -b feature --quiet
+    for i in $(seq 1 12); do echo "content $i" > "f$i.ts"; done
+    git add -A
+    git commit -m "twelve files" --quiet
+
+    # No INPUT_MAX_FILES / INPUT_MAX_DIFF_LINES: both default to 0 = unlimited.
+    export INPUT_BASE_BRANCH=main GITHUB_BASE_REF=main
+
+    run bash "$SRC_DIR/fetch-diff.sh"
+    [ "$status" -eq 0 ]
+    # Reviewed, not skipped: real payload with no skip error.
+    echo "$output" | jq -e '.error == null'
+    [ "$(echo "$output" | jq -r '.total_files')" -eq 12 ]
+    [ "$(echo "$output" | jq '.files | length')" -eq 12 ]
+    echo "$output" | jq -e '.truncated == false'
+
+    teardown_git_repo
+}
+
+@test "fetch-diff: a positive MAX_FILES skips via stdout (not stderr)" {
+    # Regression: the skip-error must land on stdout so main.sh can detect it
+    # and post a skip comment. Emitting it to stderr left stdout empty and
+    # crashed downstream with "invalid JSON text passed to --argjson".
+    setup_git_repo
+    git checkout -b feature --quiet
+    for i in $(seq 1 3); do echo "content $i" > "f$i.ts"; done
+    git add -A
+    git commit -m "three files" --quiet
+
+    export INPUT_MAX_FILES=2 INPUT_BASE_BRANCH=main GITHUB_BASE_REF=main
+
+    run bash "$SRC_DIR/fetch-diff.sh"
+    [ "$status" -eq 0 ]
+    # The skip error is on stdout (run captures stdout into $output).
+    echo "$output" | jq -e '.error | test("exceeds file limit")'
+    [ "$(echo "$output" | jq -r '.total_files')" -eq 3 ]
+    [ "$(echo "$output" | jq -r '.max_files')" -eq 2 ]
+
+    teardown_git_repo
+}
