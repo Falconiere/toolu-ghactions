@@ -26,8 +26,11 @@ git_fetch() {
 }
 
 BASE_BRANCH="${INPUT_BASE_BRANCH:-main}"
-MAX_FILES="${INPUT_MAX_FILES:-100}"
-MAX_DIFF_LINES="${INPUT_MAX_DIFF_LINES:-8000}"
+# 0 (the default) means unlimited: review any number of files / diff lines.
+# The only real ceiling is the OpenRouter billing balance + model context. A
+# positive value opts back into a hard file-count skip / diff-line truncation.
+MAX_FILES="${INPUT_MAX_FILES:-0}"
+MAX_DIFF_LINES="${INPUT_MAX_DIFF_LINES:-0}"
 
 # Prefer the PR base ref when the caller left the default.
 if [ -n "${GITHUB_BASE_REF:-}" ] && [ "$BASE_BRANCH" = "main" ]; then
@@ -88,10 +91,14 @@ if [ "$TOTAL_FILES" -eq 0 ]; then
     exit 0
 fi
 
-# Enforce the file-count limit before doing expensive diff work.
-if [ "$TOTAL_FILES" -gt "$MAX_FILES" ]; then
+# Enforce the file-count limit before doing expensive diff work (opt-in:
+# MAX_FILES > 0). Emit on stdout (not stderr): main.sh reads `.error` from this
+# script's stdout to detect a skip and post the skip comment. Writing it to
+# stderr left stdout empty, so main saw no skip, fed "" downstream, and crashed
+# in jq --argjson.
+if [ "$MAX_FILES" -gt 0 ] && [ "$TOTAL_FILES" -gt "$MAX_FILES" ]; then
     jq -nc --argjson total "$TOTAL_FILES" --argjson max "$MAX_FILES" \
-        '{error: "PR exceeds file limit", total_files: $total, max_files: $max}' >&2
+        '{error: "PR exceeds file limit (\($total) changed files > \($max) max). Raise MAX_FILES to review it.", total_files: $total, max_files: $max}'
     exit 0  # Not a failure — main posts a skip comment.
 fi
 
@@ -149,9 +156,9 @@ else
 fi
 
 # Hunk-boundary truncation: stop at the next file/hunk boundary once the budget
-# is reached, so a hunk is never cut mid-line.
+# is reached, so a hunk is never cut mid-line. Opt-in: MAX_DIFF_LINES > 0.
 TRUNCATED=false
-if [ "$DIFF_LINES" -gt "$MAX_DIFF_LINES" ]; then
+if [ "$MAX_DIFF_LINES" -gt 0 ] && [ "$DIFF_LINES" -gt "$MAX_DIFF_LINES" ]; then
     DIFF=$(printf '%s\n' "$DIFF" | awk -v max="$MAX_DIFF_LINES" '
         (/^diff --git / || /^@@ /) && n >= max { stop = 1 }
         stop { next }
