@@ -78,6 +78,6 @@ outputs:
 
 runs:
   using: 'docker'
-  image: 'Dockerfile'
+  image: 'docker://ghcr.io/falconiere/toolu-ghactions/code-review:v1'
   env:
     GITHUB_TOKEN: ${{ inputs.TOKEN }}
