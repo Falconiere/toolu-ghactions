@@ -173,11 +173,19 @@ else
     BINARY_JSON="[]"
 fi
 
-DIFF_ESCAPED=$(printf '%s' "$DIFF" | jq -Rs .)
+# The diff and per-file line map both scale with the PR and overflow ARG_MAX
+# ("jq: Argument list too long") if passed via --argjson on the command line.
+# Route them through temp files: --rawfile reads the diff verbatim as a JSON
+# string; --slurpfile wraps the files array in a one-element array (hence [0]).
+DIFF_FILE=$(mktemp)
+FILES_FILE=$(mktemp)
+trap 'rm -f "$DIFF_FILE" "$FILES_FILE"' EXIT
+printf '%s' "$DIFF" > "$DIFF_FILE"
+printf '%s' "$FILES_JSON" > "$FILES_FILE"
 
 jq -nc \
-    --argjson diff "$DIFF_ESCAPED" \
-    --argjson files "$FILES_JSON" \
+    --rawfile diff "$DIFF_FILE" \
+    --slurpfile files "$FILES_FILE" \
     --argjson changed "$CHANGED_JSON" \
     --argjson binary "$BINARY_JSON" \
     --argjson dropped "$DROPPED_JSON" \
@@ -186,7 +194,7 @@ jq -nc \
     --argjson truncated "$TRUNCATED" \
     '{
         diff: $diff,
-        files: $files,
+        files: $files[0],
         changed_files: $changed,
         binary_files: $binary,
         dropped_files: $dropped,

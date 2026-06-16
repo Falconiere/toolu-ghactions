@@ -159,8 +159,14 @@ else
     }')
 fi
 
-SYSTEM_ESCAPED=$(echo "$SYSTEM_PROMPT" | jq -Rs .)
-USER_ESCAPED=$(echo "$USER_PROMPT" | jq -Rs .)
+# The user prompt embeds the full diff and overflows ARG_MAX ("jq: Argument
+# list too long") if passed via --argjson. Route both messages through temp
+# files: --rawfile reads each verbatim as a JSON string (replacing `jq -Rs .`).
+SYSTEM_FILE=$(mktemp)
+USER_FILE=$(mktemp)
+trap 'rm -f "$SYSTEM_FILE" "$USER_FILE"' EXIT
+printf '%s\n' "$SYSTEM_PROMPT" > "$SYSTEM_FILE"
+printf '%s\n' "$USER_PROMPT" > "$USER_FILE"
 
 # Base body: model + fallback array + token cap (always — omitting max_tokens makes
 # OpenRouter reserve the model's full output capacity against the credit budget).
@@ -168,8 +174,8 @@ BODY=$(jq -nc \
     --arg model "$MODEL" \
     --arg fallback "$FALLBACK_MODEL" \
     --argjson maxtok "$MAX_TOKENS" \
-    --argjson system "$SYSTEM_ESCAPED" \
-    --argjson user "$USER_ESCAPED" \
+    --rawfile system "$SYSTEM_FILE" \
+    --rawfile user "$USER_FILE" \
     '{
         model: $model,
         models: [$model, $fallback],
