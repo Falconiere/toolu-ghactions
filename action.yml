@@ -1,0 +1,56 @@
+name: 'AI Code Review'
+description: |
+  Automated AI code review for pull requests. Reviews every changed file
+  against a 7-dimension checklist (correctness, security, performance, test
+  coverage, doc accuracy, tight assertions, migration warnings) and posts a
+  structured verdict with actionable findings.
+author: 'Falconiere'
+branding:
+  icon: 'check-circle'
+  color: 'green'
+
+inputs:
+  openrouter-api-key:
+    description: 'OpenRouter API key'
+    required: true
+  model:
+    description: 'OpenRouter model identifier'
+    required: false
+    default: 'anthropic/claude-sonnet-4'
+  base-branch:
+    description: 'Base branch for diff comparison'
+    required: false
+    default: 'main'
+  review-prompt:
+    description: 'Custom system prompt overriding the default 7-dimension checklist'
+    required: false
+  codebase-overview:
+    description: 'High-level description of the codebase (framework, patterns, business context) to give the reviewer context'
+    required: false
+  max-files:
+    description: 'Maximum number of changed files before the action skips (avoids massive PR cost/timeout)'
+    required: false
+    default: '100'
+  max-diff-lines:
+    description: 'Maximum diff lines before truncation (first N lines kept, lexicographic by file path)'
+    required: false
+    default: '8000'
+  token:
+    description: 'GitHub token for posting/editing comments. Use ${{ secrets.GITHUB_TOKEN }}'
+    required: false
+    default: '${{ github.token }}'
+
+outputs:
+  verdict:
+    description: 'Review verdict: approved, changes, or error'
+  findings-count:
+    description: 'Number of findings reported'
+  comment-url:
+    description: 'URL of the posted verdict comment'
+
+runs:
+  using: 'docker'
+  image: 'Dockerfile'
+  env:
+    OPENROUTER_API_KEY: ${{ inputs.openrouter-api-key }}
+    GITHUB_TOKEN: ${{ inputs.token }}

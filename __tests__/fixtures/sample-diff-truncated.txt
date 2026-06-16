@@ -1,0 +1,17 @@
+diff --git a/src/auth/login.ts b/src/auth/login.ts
+index 1234567..abcdefg 100644
+--- a/src/auth/login.ts
++++ b/src/auth/login.ts
+@@ -38,7 +38,10 @@ export async function login(req: Request): Promise<Response> {
+   const { username, password } = await req.json();
+ 
+   // Find user by username
+-  const user = await db.query('SELECT * FROM users WHERE username = ?', [username]);
++  const user = await db.query(
++    `SELECT * FROM users WHERE username = '${username}'`,
++  );
++
+   if (!user) {
+     return Response.json({ error: 'User not found' }, { status: 404 });
+   }
+[Diff truncated at 5 lines; 2 files omitted]
