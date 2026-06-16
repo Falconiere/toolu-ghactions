@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.3](https://github.com/Falconiere/toolu-ghactions/compare/v1.2.2...v1.2.3) (2026-06-16)
+
+
+### Bug Fixes
+
+* **code-review:** route remaining large jq payloads off argv ([9355dcd](https://github.com/Falconiere/toolu-ghactions/commit/9355dcd8802e92c1ac5f4430d2221ac3cab89add))
+
 ## [1.2.2](https://github.com/Falconiere/toolu-ghactions/compare/v1.2.1...v1.2.2) (2026-06-16)
 
 
