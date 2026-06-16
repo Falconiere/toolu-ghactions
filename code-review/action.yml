@@ -11,8 +11,8 @@ branding:
 
 inputs:
   OPENROUTER_API_KEY:
-    description: 'OpenRouter API key'
-    required: true
+    description: 'OpenRouter API key. Prefer passing via step-level env: block for better secret hygiene.'
+    required: false
   MODEL:
     description: 'OpenRouter model identifier'
     required: false
@@ -52,5 +52,4 @@ runs:
   using: 'docker'
   image: 'Dockerfile'
   env:
-    OPENROUTER_API_KEY: ${{ inputs.OPENROUTER_API_KEY }}
     GITHUB_TOKEN: ${{ inputs.TOKEN }}
