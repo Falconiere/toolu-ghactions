@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/Falconiere/toolu-ghactions/compare/v1.1.0...v1.2.0) (2026-06-16)
+
+
+### Features
+
+* publish Docker image to GHCR on release ([2805583](https://github.com/Falconiere/toolu-ghactions/commit/280558325a77ffda92f00d2fb4fc9af6d1b31117))
+
 ## [1.1.0](https://github.com/Falconiere/toolu-ghactions/compare/v1.0.2...v1.1.0) (2026-06-16)
 
 
