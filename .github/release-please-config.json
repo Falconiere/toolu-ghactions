@@ -1,0 +1,13 @@
+{
+  "release-type": "simple",
+  "include-component-in-tag": false,
+  "bump-minor-pre-major": false,
+  "bump-patch-for-minor-pre-major": false,
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "package-name": "toolu-ghactions",
+      "changelog-path": "CHANGELOG.md"
+    }
+  }
+}

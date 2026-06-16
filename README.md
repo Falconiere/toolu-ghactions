@@ -119,17 +119,6 @@ Use outputs in downstream workflow steps:
   run: echo "PR needs work — ${{ steps.review.outputs.findings-count }} findings"
 ```
 
-## Versioning
-
-This repo uses **movable major-version tags**. `@v1` always points to the latest v1.x release with bug fixes and backwards-compatible improvements.
-
-| Tag | Meaning |
-|---|---|
-| `@v1` | Latest v1.x — **recommended**. Bug fixes, safe improvements. |
-| `@v1.0.0` | Immutable initial release. Pin for reproducible builds. |
-
-Breaking changes (input renames, removed features, incompatible output format) will ship as `@v2`.
-
 ## Repository structure
 
 ```
@@ -164,6 +153,32 @@ npx action-validator code-review/action.yml
 ```
 
 Tests are hermetic — they use recorded fixtures for OpenRouter responses and mock `curl` for GitHub API calls. No API key needed for the unit test suite.
+
+## Release Process
+
+Releases are fully automated via [release-please](https://github.com/googleapis/release-please). A release is cut on every push to `main` when conventional-commit-triggered changes are detected.
+
+### How it works
+
+1. **Commit convention** — use [Conventional Commits](https://www.conventionalcommits.org/) in PR titles and merge commits:
+   - `fix: ...` → patch bump
+   - `feat: ...` → minor bump
+   - `feat!: ...` or `fix!: ...` (breaking change, `!` after type) → major bump
+   - `docs:`, `chore:`, `test:`, `ci:` → no version bump (but appear in changelog)
+2. **release-please PR** — on push to `main`, release-please opens (or updates) a release PR with the version bump and changelog entry.
+3. **Merge the release PR** — merging it triggers the `release.yml` workflow which:
+   - Creates a Git tag (e.g. `v1.0.1`)
+   - Creates a GitHub Release with the changelog
+   - Force-moves the floating major alias (e.g. `v1` → latest `v1.x.y` tag)
+
+### Versioning scheme
+
+- `@v1` — floating major alias, tracks latest `v1.x.y`. **Recommended for callers.**
+- `@v1.0.0` — pin to exact semver for maximum stability.
+
+### Making a release
+
+No manual steps. Push to `main` with conventional-commit messages and release-please handles the rest. To force a specific bump, include `Release-As: X.Y.Z` in the footer of a commit message.
 
 ## License
 
