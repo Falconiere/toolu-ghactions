@@ -77,7 +77,12 @@ jobs:
   publish-image:
     name: Build & push ${{ matrix.action }} image to GHCR
     needs: [version]
-    if: ${{ needs.version.result == 'success' }}
+    # !cancelled() is required: `version` transitively depends on the
+    # release-please job, which is SKIPPED on the release event. Without
+    # !cancelled(), GitHub propagates that skip and skips this job too, even
+    # though `version` itself succeeded. !cancelled() forces the if to evaluate;
+    # the result check then gates on version actually having succeeded.
+    if: ${{ !cancelled() && needs.version.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -128,7 +133,12 @@ jobs:
   move-major-alias:
     name: Move v<major> alias
     needs: [version]
-    if: ${{ needs.version.result == 'success' }}
+    # !cancelled() is required: `version` transitively depends on the
+    # release-please job, which is SKIPPED on the release event. Without
+    # !cancelled(), GitHub propagates that skip and skips this job too, even
+    # though `version` itself succeeded. !cancelled() forces the if to evaluate;
+    # the result check then gates on version actually having succeeded.
+    if: ${{ !cancelled() && needs.version.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
