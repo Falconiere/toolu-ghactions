@@ -1,9 +1,11 @@
 name: 'Toolu Cloudflare Tunnel — Start'
 description: |
-  Boots a Cloudflare Tunnel in the workflow job, exposing a local port
-  (default 3000) to the public internet. Quick tunnels (no account, ephemeral
-  *.trycloudflare.com URL) by default; set `tunnel-token` to use a named
-  tunnel. Pair with the matching `stop` step (use `if: always()`) to clean up.
+  Boots a Cloudflare Tunnel directly on the runner host (Linux + macOS),
+  exposing a local HOST:PORT to the public internet. Quick tunnels (no account,
+  ephemeral *.trycloudflare.com URL) by default; set `tunnel-token` to use a
+  named tunnel. Because cloudflared runs on the host (not in a container),
+  HOST:PORT resolves to your app and the tunnel survives across steps. Pair with
+  the matching `stop` step (use `if: always()`) to clean up.
 author: 'Falconiere'
 branding:
   icon: 'cloud'
@@ -14,6 +16,10 @@ inputs:
     description: 'Tunnel instance name. Namespaces PID/URL tmpfiles so multiple tunnels can run in the same job.'
     required: false
     default: 'default'
+  host:
+    description: 'Local host to expose (quick mode only — ignored when `tunnel-token` is set). Resolves on the runner host.'
+    required: false
+    default: 'localhost'
   port:
     description: 'Local port to expose (quick mode only — ignored when `tunnel-token` is set).'
     required: false
@@ -42,23 +48,29 @@ inputs:
 outputs:
   tunnel-url:
     description: 'Public URL of the tunnel (quick mode only; empty in named mode unless ingress exposes a hostname).'
+    value: ${{ steps.tunnel.outputs.tunnel-url }}
   tunnel-id:
-    description: 'Tunnel ID (named mode only). Extracted by parsing the UUID from cloudflared stderr line matching `Registered tunnel connection.*<uuid>`, falling back to `cloudflared tunnel info <id-from-stdout>` after a 2s grace.'
+    description: 'Tunnel ID (named mode only). Extracted by parsing the UUID from cloudflared stderr line matching `Registered tunnel connection.*<uuid>`.'
+    value: ${{ steps.tunnel.outputs.tunnel-id }}
   tunnel-pid:
     description: 'PID of the cloudflared process. Diagnostic only — stop reads its own tmpfile keyed by name, not this output.'
+    value: ${{ steps.tunnel.outputs.tunnel-pid }}
   tunnel-name:
     description: 'Echo of the name input (slugified), for downstream step convenience.'
+    value: ${{ steps.tunnel.outputs.tunnel-name }}
 
 runs:
-  using: 'docker'
-  image: 'docker://ghcr.io/falconiere/toolu-ghactions/cloudflare-tunnel:v1'
-  args:
-    - 'start'
-  env:
-    INPUT_NAME: ${{ inputs.name }}
-    INPUT_PORT: ${{ inputs.port }}
-    INPUT_TUNNEL_TOKEN: ${{ inputs.tunnel-token }}
-    INPUT_TUNNEL_CONFIG: ${{ inputs.tunnel-config }}
-    INPUT_CLOUDFLARED_VERSION: ${{ inputs.cloudflared-version }}
-    INPUT_VERIFY_CHECKSUM: ${{ inputs.verify-checksum }}
-    INPUT_START_TIMEOUT: ${{ inputs.start-timeout }}
+  using: composite
+  steps:
+    - id: tunnel
+      shell: bash
+      env:
+        INPUT_NAME: ${{ inputs.name }}
+        INPUT_HOST: ${{ inputs.host }}
+        INPUT_PORT: ${{ inputs.port }}
+        INPUT_TUNNEL_TOKEN: ${{ inputs.tunnel-token }}
+        INPUT_TUNNEL_CONFIG: ${{ inputs.tunnel-config }}
+        INPUT_CLOUDFLARED_VERSION: ${{ inputs.cloudflared-version }}
+        INPUT_VERIFY_CHECKSUM: ${{ inputs.verify-checksum }}
+        INPUT_START_TIMEOUT: ${{ inputs.start-timeout }}
+      run: bash "$GITHUB_ACTION_PATH/../src/start.sh"

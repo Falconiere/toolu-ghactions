@@ -36,12 +36,22 @@ jobs:
         run: docker build -t code-review-action:test code-review/
 
   tunnel-test:
-    name: tunnel bats
-    runs-on: ubuntu-latest
+    name: tunnel bats (${{ matrix.os }})
+    # cloudflare-tunnel is a composite action that runs on the runner host, so
+    # the scripts must work on both Linux and macOS runners.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install bats + jq
+      - name: Install bats + jq (Linux)
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y bats jq
+      - name: Install bats + jq (macOS)
+        if: runner.os == 'macOS'
+        run: brew install bats-core jq
       - name: Run tunnel test suite
         run: bats cloudflare-tunnel/__tests__/*.bats
 
@@ -58,13 +68,3 @@ jobs:
         run: npx --yes @action-validator/cli cloudflare-tunnel/stop/action.yml
       - name: action-validator (wait)
         run: npx --yes @action-validator/cli cloudflare-tunnel/wait/action.yml
-
-  tunnel-build:
-    name: tunnel docker build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build the tunnel action image
-        # Same context + Dockerfile as the publish job in release.yml uses —
-        # if this builds, the publish will too.
-        run: docker build -t cloudflare-tunnel-action:test cloudflare-tunnel/

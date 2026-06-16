@@ -88,11 +88,12 @@ jobs:
       contents: read
       packages: write
     strategy:
-      # Actions publish independently — no dependency between code-review and
-      # cloudflare-tunnel. Both must succeed for the release to be green.
+      # Only code-review ships a Docker image. cloudflare-tunnel is a composite
+      # action (runs cloudflared on the runner host) — there is no image to
+      # publish for it.
       fail-fast: false
       matrix:
-        action: [code-review, cloudflare-tunnel]
+        action: [code-review]
     env:
       REGISTRY: ghcr.io
       IMAGE: ghcr.io/${{ github.repository_owner }}/toolu-ghactions/${{ matrix.action }}
