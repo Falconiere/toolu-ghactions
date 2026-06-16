@@ -223,3 +223,6 @@ No manual steps. Push to `main` with conventional-commit messages and release-pl
 
 MIT
 # Multi-provider: coming soon
+
+## Multiple providers
+merge_strategy: conservative

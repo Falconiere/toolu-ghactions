@@ -40,3 +40,5 @@ Tests are [bats](https://github.com/bats-core/bats-core) over **real recorded fi
 - Every fallible call gets a real handler.
 - Keep scripts focused (≤ 300 lines); split when they grow past it.
 # Fixture recording: coming soon
+
+## Recording provider fixtures
