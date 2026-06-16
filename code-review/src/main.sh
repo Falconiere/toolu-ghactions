@@ -48,8 +48,12 @@ fail() {
 }
 
 # --- Phase 1: Validate environment ---
+# Support both env: (recommended) and with: (backward compat) for the API key.
+if [ -z "${OPENROUTER_API_KEY:-}" ] && [ -n "${INPUT_OPENROUTER_API_KEY:-}" ]; then
+    export OPENROUTER_API_KEY="$INPUT_OPENROUTER_API_KEY"
+fi
 if [ -z "${OPENROUTER_API_KEY:-}" ]; then
-    fail "OPENROUTER_API_KEY is not set"
+    fail "OPENROUTER_API_KEY is not set (pass via env: block or with: input)"
 fi
 
 if [ -z "${GITHUB_TOKEN:-}" ]; then
