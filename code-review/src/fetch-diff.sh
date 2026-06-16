@@ -14,6 +14,17 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # files are owned by the runner user — newer git rejects this as dubious.
 git config --global --add safe.directory /github/workspace 2>/dev/null || true
 
+# git fetch with a wall-clock cap when the platform provides `timeout` (CI/Alpine
+# does), so a slow or unreachable origin can't hang the job until GitHub's job
+# timeout. Falls back to a plain fetch where `timeout` is absent (e.g. macOS).
+git_fetch() {
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 120 git fetch "$@"
+    else
+        git fetch "$@"
+    fi
+}
+
 BASE_BRANCH="${INPUT_BASE_BRANCH:-main}"
 MAX_FILES="${INPUT_MAX_FILES:-100}"
 MAX_DIFF_LINES="${INPUT_MAX_DIFF_LINES:-8000}"
@@ -27,7 +38,7 @@ REMOTE_BASE="origin/${BASE_BRANCH}"
 if ! git rev-parse --verify "$REMOTE_BASE" >/dev/null 2>&1; then
     if git remote get-url origin >/dev/null 2>&1; then
         echo "  Fetching ${BASE_BRANCH}..." >&2
-        git fetch origin "${BASE_BRANCH}" --depth=1 >/dev/null 2>&1 || true
+        git_fetch origin "${BASE_BRANCH}" --depth=1 >/dev/null 2>&1 || true
     fi
     if ! git rev-parse --verify "$REMOTE_BASE" >/dev/null 2>&1; then
         if ! git rev-parse --verify "$BASE_BRANCH" >/dev/null 2>&1; then
@@ -49,12 +60,12 @@ if [ -z "$MERGE_BASE" ] \
     && git remote get-url origin >/dev/null 2>&1; then
     echo "  Deepening shallow history to find merge-base..." >&2
     for depth in 100 500 2000; do
-        git fetch origin --deepen="$depth" >/dev/null 2>&1 || true
+        git_fetch origin --deepen="$depth" >/dev/null 2>&1 || true
         MERGE_BASE=$(git merge-base HEAD "$REMOTE_BASE" 2>/dev/null || true)
         [ -n "$MERGE_BASE" ] && break
     done
     if [ -z "$MERGE_BASE" ]; then
-        git fetch origin --unshallow >/dev/null 2>&1 || true
+        git_fetch origin --unshallow >/dev/null 2>&1 || true
         MERGE_BASE=$(git merge-base HEAD "$REMOTE_BASE" 2>/dev/null || true)
     fi
 fi

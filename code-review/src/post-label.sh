@@ -66,9 +66,11 @@ jq -nc --arg n "$ADD" --arg c "$COLOR" --arg d "AI code review verdict" \
 curl -s "${TIMEOUTS[@]}" -X POST -H "$HDR_AUTH" -H "$HDR_ACCEPT" -H "$HDR_API" \
     --data @"$BODY_FILE" "$API_BASE/repos/$REPO/labels" >/dev/null 2>&1 || true
 
-# Remove the opposite verdict label (ignore a 404 when it isn't set).
+# Remove the opposite verdict label (ignore a 404 when it isn't set). The label
+# name is URL-encoded so it stays a single safe path segment.
+REMOVE_ENC=$(printf '%s' "$REMOVE" | jq -sRr @uri)
 curl -s "${TIMEOUTS[@]}" -X DELETE -H "$HDR_AUTH" -H "$HDR_ACCEPT" -H "$HDR_API" \
-    "$ISSUE_URL/labels/$REMOVE" >/dev/null 2>&1 || true
+    "$ISSUE_URL/labels/$REMOVE_ENC" >/dev/null 2>&1 || true
 
 # Add the verdict label.
 jq -nc --arg n "$ADD" '{labels:[$n]}' > "$BODY_FILE"
