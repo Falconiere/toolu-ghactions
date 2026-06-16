@@ -1,34 +1,146 @@
-# toolu-ghactions
+# AI Code Review Action
 
-Monorepo of GitHub Actions for the toolu ecosystem.
+[![tests](https://github.com/Falconiere/toolu-ghactions/actions/workflows/tests.yml/badge.svg)](https://github.com/Falconiere/toolu-ghactions/actions/workflows/tests.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## Actions
+Automated PR code review via OpenRouter. Plans a targeted review against a 7-dimension checklist — correctness, security, performance, test coverage, doc accuracy, tight assertions, migration warnings — then posts a structured verdict with actionable findings.
 
-| Action | Path | Description |
-|--------|------|-------------|
-| **AI Code Review** | [`actions/code-review`](actions/code-review/) | AI-powered PR code review via OpenRouter. Plans a targeted review then executes against a 7-dimension checklist. Posts structured verdict comments compatible with `parse-verdict.sh`. |
+## Quick start
 
-## Usage
+Add an OpenRouter API key to your repo secrets, then drop this into `.github/workflows/code-review.yml`:
 
 ```yaml
-# In your workflow:
+name: Code Review
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: code-review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: falconiere/toolu-ghactions/actions/code-review@v1
+        with:
+          openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+```
+
+On every PR push, the action fetches the diff, sends it to Claude (via OpenRouter), and posts a verdict comment directly on the PR.
+
+## How it works
+
+The action runs in two phases:
+
+**Phase 1 — Review plan.** The model analyzes which files changed, what kind of changes they are (feature, bugfix, refactor, config), and which review dimensions actually apply. A docs-only change doesn't get a security review. A CSS tweak doesn't get a performance audit. The plan is shown in the comment so you can see what was checked and what was skipped.
+
+**Phase 2 — Targeted review.** The model reviews only against the dimensions it committed to in Phase 1. Every finding includes the exact file path, line number, severity, and a specific description — no "consider improving error handling" hand-waving.
+
+The verdict comment is compatible with [`parse-verdict.sh`](https://github.com/Falconiere/toolu/blob/main/plugins/pr-babysit/scripts/parse-verdict.sh) and the [`pr-babysit`](https://github.com/Falconiere/toolu/tree/main/plugins/pr-babysit) automation loop, so toolu users can drop this into CI and their existing babysit workflow consumes the verdict without changes.
+
+## Example verdict
+
+```markdown
+**AI Code Review finished in 2m 15s** —— [View job](https://github.com/...)
+
+### Code Review — `feat/add-login`
+
+**Verdict:** ✅ Approved   🔵 2 low
+
+### Review Plan
+Reviewing 4 files: 1 correctness-critical (format.ts), 1 test-quality
+(format.test.ts), 1 config (settings.json), 1 security-sensitive (login.ts).
+Skipping PERFORMANCE — no hot-path changes.
+
+### Findings (2)
+`src/utils/format.ts:17`: low: Comment says 'Temporary workaround' with no
+removal date or tracking issue.
+`src/utils/__tests__/format.test.ts:6`: low: Test assertion uses loose suffix
+match. Tighten to assert full identity.
+
+### Top-N must-fix
+**`src/utils/format.ts:17`** — Add a removal date or tracking issue.
+**`src/utils/__tests__/format.test.ts:6`** — Tighten test assertion.
+
+`agent-merge-approved`
+```
+
+The `` `agent-merge-approved` `` label at the bottom is machine-readable. `pr-babysit` parses it to decide whether the PR is ready to merge.
+
+## Inputs
+
+| Input | Required | Default | Description |
+|---|---|---|---|
+| `openrouter-api-key` | yes | — | OpenRouter API key |
+| `model` | no | `anthropic/claude-sonnet-4` | OpenRouter model identifier |
+| `base-branch` | no | `main` | Base branch for diff comparison. Falls back to `GITHUB_BASE_REF` if unset. |
+| `review-prompt` | no | *(7-dimension checklist)* | Custom system prompt. Replaces the default review dimensions. |
+| `codebase-overview` | no | — | High-level context about the codebase (framework, patterns, architecture) injected into the review prompt. |
+| `max-files` | no | `100` | Maximum changed files before the action skips. Prevents massive PRs from running up API costs. |
+| `max-diff-lines` | no | `8000` | Maximum diff lines before truncation. Oldest hunks (by file path) are dropped; a truncation notice is appended. |
+| `token` | no | `${{ github.token }}` | GitHub token for posting and editing comments. |
+
+## Outputs
+
+| Output | Description |
+|---|---|
+| `verdict` | `approved`, `changes`, `error`, or `skip` |
+| `findings-count` | Number of findings reported |
+| `comment-url` | URL of the posted verdict comment |
+
+Use outputs in downstream workflow steps:
+
+```yaml
 - uses: falconiere/toolu-ghactions/actions/code-review@v1
+  id: review
   with:
     openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+- if: steps.review.outputs.verdict == 'changes'
+  run: echo "PR needs work — ${{ steps.review.outputs.findings-count }} findings"
 ```
+
+## Repository structure
+
+```
+.
+├── actions/
+│   └── code-review/       # This action
+│       ├── action.yml
+│       ├── Dockerfile
+│       ├── src/            # fetch-diff → build-prompt → call-openrouter → ...
+│       └── prompts/        # Default review checklist
+├── scripts/
+│   └── parse-verdict.sh    # Shared: verdict format validator
+└── docs/                   # Design specs and plans
+```
+
+The monorepo is structured for future actions (`claude-mention`, etc.) to share conventions and utilities.
 
 ## Development
 
 ```bash
-# Run tests for all actions
+# Run all tests (requires bats, jq, git)
 bats actions/*/__tests__/*.bats
 
-# Build a specific action's Docker image
+# Build the Docker image
 docker build -f actions/code-review/Dockerfile -t code-review-action:test .
 
-# Run shellcheck
+# Lint all shell scripts
 shellcheck actions/*/src/*.sh
+
+# Validate action.yml against GitHub's schema
+npx action-validator actions/code-review/action.yml
 ```
+
+Tests are hermetic — they use recorded fixtures for OpenRouter responses and mock `curl` for GitHub API calls. No API key needed for the unit test suite.
 
 ## License
 
