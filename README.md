@@ -119,22 +119,33 @@ Use outputs in downstream workflow steps:
   run: echo "PR needs work — ${{ steps.review.outputs.findings-count }} findings"
 ```
 
+## Versioning
+
+This repo uses **movable major-version tags**. `@v1` always points to the latest v1.x release with bug fixes and backwards-compatible improvements.
+
+| Tag | Meaning |
+|---|---|
+| `@v1` | Latest v1.x — **recommended**. Bug fixes, safe improvements. |
+| `@v1.0.0` | Immutable initial release. Pin for reproducible builds. |
+
+Breaking changes (input renames, removed features, incompatible output format) will ship as `@v2`.
+
 ## Repository structure
 
 ```
 .
-├── actions/
-│   └── code-review/       # This action
-│       ├── action.yml
-│       ├── Dockerfile
-│       ├── src/            # fetch-diff → build-prompt → call-openrouter → ...
-│       └── prompts/        # Default review checklist
+├── code-review/            # This action
+│   ├── action.yml
+│   ├── Dockerfile
+│   ├── src/                # fetch-diff → build-prompt → call-openrouter → ...
+│   ├── prompts/            # Default review checklist
+│   └── __tests__/          # Hermetic bats test suite
 ├── scripts/
 │   └── parse-verdict.sh    # Shared: verdict format validator
 └── docs/                   # Design specs and plans
 ```
 
-The monorepo is structured for future actions (`claude-mention`, etc.) to share conventions and utilities.
+The monorepo is structured for future actions to share conventions and utilities.
 
 ## Development
 
