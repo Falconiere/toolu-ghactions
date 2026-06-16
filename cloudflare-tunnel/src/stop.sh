@@ -13,7 +13,6 @@
 #
 # Exit codes:
 #   0  tunnel stopped (or was never running — idempotent)
-#   1  unexpected failure (logged)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
