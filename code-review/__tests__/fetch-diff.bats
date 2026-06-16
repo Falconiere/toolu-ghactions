@@ -53,6 +53,7 @@ teardown_git_repo() {
 
     echo "text content" > text.txt
     dd if=/dev/urandom of=binary.bin bs=32 count=1 2>/dev/null
+    printf '\x00' >> binary.bin  # Ensure git detects it as binary
     git add text.txt binary.bin
     git commit -m "add text and binary" --quiet
 

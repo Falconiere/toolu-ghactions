@@ -29,7 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: falconiere/toolu-ghactions/actions/code-review@v1
+      - uses: falconiere/toolu-ghactions/code-review@v1
         with:
           openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
 ```
@@ -99,7 +99,7 @@ The `` `agent-merge-approved` `` label at the bottom is machine-readable. `pr-ba
 Use outputs in downstream workflow steps:
 
 ```yaml
-- uses: falconiere/toolu-ghactions/actions/code-review@v1
+- uses: falconiere/toolu-ghactions/code-review@v1
   id: review
   with:
     openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
@@ -131,13 +131,13 @@ The monorepo is structured for future actions (`claude-mention`, etc.) to share 
 bats actions/*/__tests__/*.bats
 
 # Build the Docker image
-docker build -f actions/code-review/Dockerfile -t code-review-action:test .
+docker build -f code-review/Dockerfile -t code-review-action:test .
 
 # Lint all shell scripts
 shellcheck actions/*/src/*.sh
 
 # Validate action.yml against GitHub's schema
-npx action-validator actions/code-review/action.yml
+npx action-validator code-review/action.yml
 ```
 
 Tests are hermetic — they use recorded fixtures for OpenRouter responses and mock `curl` for GitHub API calls. No API key needed for the unit test suite.

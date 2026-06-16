@@ -45,14 +45,21 @@ if [ "$TOTAL_FILES" -eq 0 ]; then
     exit 0
 fi
 
-# Separate text files from binary files. git diff --numstat shows "-" for
-# binary files in both columns.
+# Separate text files from binary files.
+# git diff --stat shows "Bin" for binary files (both new and modified).
+STAT=$(git diff --stat "$MERGE_BASE" HEAD 2>/dev/null || true)
 NUMSTAT=$(git diff --numstat "$MERGE_BASE" HEAD 2>/dev/null || true)
+
 BINARY_FILES=()
 TEXT_CHANGED_FILES=()
 
 while IFS=$'\t' read -r added removed path; do
-    if [ "$added" = "-" ] && [ "$removed" = "-" ]; then
+    [ -z "$path" ] && continue
+    # Check if the --stat output marks this file as binary.
+    if echo "$STAT" | grep -qE "^[[:space:]]*$(echo "$path" | sed 's/[.[\*^$()+?{|]/\\&/g')[[:space:]]+\|[[:space:]]+Bin"; then
+        BINARY_FILES+=("$path")
+    elif [ "$added" = "-" ] && [ "$removed" = "-" ]; then
+        # Fallback: numstat -/- markers (modified binary, rare edge case).
         BINARY_FILES+=("$path")
     else
         TEXT_CHANGED_FILES+=("$path")
@@ -86,8 +93,16 @@ fi
 DIFF_ESCAPED=$(echo "$DIFF" | jq -Rs .)
 
 # Build JSON arrays for changed_files and binary_files.
-CHANGED_JSON=$(printf '%s\n' "${TEXT_CHANGED_FILES[@]}" | jq -R . | jq -s .)
-BINARY_JSON=$(printf '%s\n' "${BINARY_FILES[@]}" | jq -R . | jq -s .)
+if [ ${#TEXT_CHANGED_FILES[@]} -gt 0 ]; then
+    CHANGED_JSON=$(printf '%s\n' "${TEXT_CHANGED_FILES[@]}" | jq -R . | jq -s .)
+else
+    CHANGED_JSON="[]"
+fi
+if [ ${#BINARY_FILES[@]} -gt 0 ]; then
+    BINARY_JSON=$(printf '%s\n' "${BINARY_FILES[@]}" | jq -R . | jq -s .)
+else
+    BINARY_JSON="[]"
+fi
 
 jq -nc \
     --argjson diff "$DIFF_ESCAPED" \
