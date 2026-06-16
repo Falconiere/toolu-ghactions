@@ -17,6 +17,8 @@ if [ -f "/action/prompts/review-checklist.txt" ]; then
     CHECKLIST_FILE="/action/prompts/review-checklist.txt"
 elif [ -f "$SCRIPT_DIR/../prompts/review-checklist.txt" ]; then
     CHECKLIST_FILE="$SCRIPT_DIR/../prompts/review-checklist.txt"
+elif [ -f "actions/code-review/prompts/review-checklist.txt" ]; then
+    CHECKLIST_FILE="actions/code-review/prompts/review-checklist.txt"
 else
     CHECKLIST_FILE=""
 fi

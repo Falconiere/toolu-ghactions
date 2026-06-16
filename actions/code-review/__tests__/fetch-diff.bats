@@ -48,15 +48,15 @@ teardown_git_repo() {
 @test "fetch-diff: binary file detection" {
     setup_git_repo
 
+    # Create a feature branch off main.
+    git checkout -b feature --quiet
+
     echo "text content" > text.txt
     dd if=/dev/urandom of=binary.bin bs=32 count=1 2>/dev/null
     git add text.txt binary.bin
-    git commit -m "add files" --quiet
+    git commit -m "add text and binary" --quiet
 
-    # Make changes to detect.
-    echo "new text" > text.txt
-    dd if=/dev/urandom of=binary.bin bs=64 count=1 2>/dev/null
-
+    # Now HEAD (feature) has changes relative to main.
     export INPUT_MAX_FILES=100
     export INPUT_MAX_DIFF_LINES=8000
     export INPUT_BASE_BRANCH=main
@@ -64,7 +64,7 @@ teardown_git_repo() {
 
     run bash "$SRC_DIR/fetch-diff.sh"
 
-    # binary_files should contain binary.bin
+    # binary_files should contain binary.bin (it's a new file in this diff)
     echo "$output" | jq -e '.binary_files | index("binary.bin") != null'
 
     # changed_files should contain text.txt

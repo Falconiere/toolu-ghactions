@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # helpers.bash — shared setup and utilities for bats tests.
 
-REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-FIXTURES_DIR="$REPO_ROOT/__tests__/fixtures"
-SRC_DIR="$REPO_ROOT/src"
+REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../.." && pwd)"
+FIXTURES_DIR="$REPO_ROOT/actions/code-review/__tests__/fixtures"
+SRC_DIR="$REPO_ROOT/actions/code-review/src"
 
 # Setup: set common env vars.
 setup() {
