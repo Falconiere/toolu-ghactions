@@ -1,0 +1,32 @@
+name: 'Toolu Cloudflare Tunnel — Wait'
+description: |
+  Blocks until a tunnel URL responds with the expected HTTP status (default
+  any 2xx). Useful between `start` and downstream steps that hit the tunnel,
+  to ensure the tunnel is reachable before they rely on it.
+author: 'Falconiere'
+branding:
+  icon: 'clock'
+  color: 'blue'
+
+inputs:
+  url:
+    description: 'URL to poll. Typically `${{ steps.start.outputs.tunnel-url }}`.'
+    required: true
+  wait-timeout:
+    description: 'Seconds to wait before failing.'
+    required: false
+    default: '60'
+  expected-status:
+    description: 'HTTP status (or status-class prefix) that counts as success. Single digit (`2`, `3`) matches any 2xx/3xx. Three digits (`200`, `404`) matches exactly.'
+    required: false
+    default: '2'
+
+runs:
+  using: 'docker'
+  image: 'docker://ghcr.io/falconiere/toolu-ghactions/cloudflare-tunnel:v1'
+  args:
+    - 'wait'
+  env:
+    INPUT_URL: ${{ inputs.url }}
+    INPUT_WAIT_TIMEOUT: ${{ inputs.wait-timeout }}
+    INPUT_EXPECTED_STATUS: ${{ inputs.expected-status }}

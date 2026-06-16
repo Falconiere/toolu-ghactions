@@ -34,3 +34,37 @@ jobs:
         # Build context is code-review/ — the Dockerfile COPYs src/ and prompts/
         # relative to it (this is also how GitHub builds the action).
         run: docker build -t code-review-action:test code-review/
+
+  tunnel-test:
+    name: tunnel bats
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats + jq
+        run: sudo apt-get update && sudo apt-get install -y bats jq
+      - name: Run tunnel test suite
+        run: bats cloudflare-tunnel/__tests__/*.bats
+
+  tunnel-lint:
+    name: tunnel shellcheck + action-validator
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck --severity=warning cloudflare-tunnel/src/*.sh
+      - name: action-validator (start)
+        run: npx --yes @action-validator/cli cloudflare-tunnel/start/action.yml
+      - name: action-validator (stop)
+        run: npx --yes @action-validator/cli cloudflare-tunnel/stop/action.yml
+      - name: action-validator (wait)
+        run: npx --yes @action-validator/cli cloudflare-tunnel/wait/action.yml
+
+  tunnel-build:
+    name: tunnel docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the tunnel action image
+        # Same context + Dockerfile as the publish job in release.yml uses —
+        # if this builds, the publish will too.
+        run: docker build -t cloudflare-tunnel-action:test cloudflare-tunnel/

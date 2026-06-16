@@ -33,16 +33,22 @@ jobs:
           manifest-file: .github/release-please-manifest.json
 
   publish-image:
-    name: Build & push Docker image to GHCR
+    name: Build & push ${{ matrix.action }} image to GHCR
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    strategy:
+      # Actions publish independently — no dependency between code-review and
+      # cloudflare-tunnel. Both must succeed for the release to be green.
+      fail-fast: false
+      matrix:
+        action: [code-review, cloudflare-tunnel]
     env:
       REGISTRY: ghcr.io
-      IMAGE: ghcr.io/${{ github.repository_owner }}/toolu-ghactions/code-review
+      IMAGE: ghcr.io/${{ github.repository_owner }}/toolu-ghactions/${{ matrix.action }}
     steps:
       - uses: actions/checkout@v4
 
@@ -69,8 +75,8 @@ jobs:
       - name: Build & push
         uses: docker/build-push-action@v6
         with:
-          context: ./code-review
-          file: ./code-review/Dockerfile
+          context: ./${{ matrix.action }}
+          file: ./${{ matrix.action }}/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
