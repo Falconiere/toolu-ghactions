@@ -10,11 +10,20 @@ set -euo pipefail
 INPUT=$(cat)
 
 REVIEW_PLAN=$(echo "$INPUT" | jq -r '.review_plan // ""')
-VERDICT=$(echo "$INPUT" | jq -r '.verdict // "changes"')
+VERDICT=$(echo "$INPUT" | jq -r '.verdict // ""')
 FINDINGS=$(echo "$INPUT" | jq -c '.findings // []')
 OTHER_CHECKS=$(echo "$INPUT" | jq -r '.other_checks // ""')
 TOP_MUST_FIX=$(echo "$INPUT" | jq -c '.top_must_fix // []')
 FINDINGS_COUNT=$(echo "$FINDINGS" | jq 'length')
+
+# Default verdict to approved if there are no findings and verdict is not explicitly set.
+if [ -z "$VERDICT" ] || [ "$VERDICT" = "null" ]; then
+    if [ "$FINDINGS_COUNT" -eq 0 ]; then
+        VERDICT="approved"
+    else
+        VERDICT="changes"
+    fi
+fi
 
 # Build the job URL.
 JOB_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-unknown}/actions/runs/${GITHUB_RUN_ID:-?}"
