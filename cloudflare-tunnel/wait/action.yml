@@ -11,7 +11,7 @@ branding:
 
 inputs:
   url:
-    description: 'URL to poll. Typically `${{ steps.start.outputs.tunnel-url }}`.'
+    description: "URL to poll. Typically the start action's tunnel-url output."
     required: true
   wait-timeout:
     description: 'Seconds to wait before failing.'
