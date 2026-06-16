@@ -29,10 +29,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so the merge-base resolves without deepening
       - uses: falconiere/toolu-ghactions/code-review@v1
         with:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 ```
+
+> `fetch-depth: 0` is recommended but optional — on a shallow checkout the action
+> deepens the history itself to find the merge-base.
 
 Use MODEL to switch models and REVIEW_PROMPT_FILE for a custom checklist:
 
@@ -97,7 +102,7 @@ match. Tighten to assert full identity.
 `agent-merge-approved`
 ```
 
-The verdict label at the bottom is machine-readable: `` `agent-merge-approved` `` or `` `agent-request-changes` ``. `pr-babysit` parses it to decide whether the PR is ready to merge.
+The verdict label at the bottom is machine-readable: `` `agent-merge-approved` `` or `` `agent-request-changes` ``. `pr-babysit` parses it to decide whether the PR is ready to merge. Unless `MANAGE_LABELS` is `false`, the same verdict is also applied as a real PR **label chip** (the opposite one is removed), so PRs are filterable in the GitHub UI — this needs `issues: write` in the workflow's `permissions` block.
 
 ## Inputs
 
@@ -111,6 +116,7 @@ The verdict label at the bottom is machine-readable: `` `agent-merge-approved` `
 | `MIN_CONFIDENCE` | no | `high` | Drop findings below this confidence unless severity is blocker/high (`high` or `medium`) |
 | `ENFORCE_JSON_SCHEMA` | no | `true` | Use `response_format` json_schema + provider routing; set `false` for free-text + regex fallback |
 | `INLINE_COMMENTS` | no | `true` | Post per-line review comments with committable code suggestions (Reviews API), in addition to the summary comment |
+| `MANAGE_LABELS` | no | `true` | Set a real PR label chip matching the verdict (`agent-merge-approved` / `agent-request-changes`) and remove the opposite one. Requires `issues: write`. |
 | `BASE_BRANCH` | no | `main` | Base branch for diff comparison. Falls back to `GITHUB_BASE_REF` if unset. |
 | `REVIEW_PROMPT_FILE` | no | *(7-dimension checklist)* | Path to a markdown file (relative to repo root) with a custom review prompt. Overrides the default checklist. |
 | `CODEBASE_OVERVIEW` | no | — | High-level context about the codebase (framework, patterns, architecture) injected into the review prompt. |

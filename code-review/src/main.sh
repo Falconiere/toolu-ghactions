@@ -41,6 +41,7 @@ fail() {
 "
         COMMENT_URL=$(echo "$ERROR_BODY" | bash "$SCRIPT_DIR/post-comment.sh" || echo "")
         [ -n "$COMMENT_URL" ] && echo "comment-url=$COMMENT_URL" >> "$GITHUB_OUTPUT"
+        bash "$SCRIPT_DIR/post-label.sh" error || true
     fi
 
     echo "verdict=error" >> "$GITHUB_OUTPUT"
@@ -93,6 +94,7 @@ if [ "$TOTAL_FILES" -eq 0 ]; then
 "
     NOOP_URL=$(echo "$NOOP_BODY" | bash "$SCRIPT_DIR/post-comment.sh" || echo "")
     [ -n "$NOOP_URL" ] && echo "comment-url=$NOOP_URL" >> "$GITHUB_OUTPUT"
+    bash "$SCRIPT_DIR/post-label.sh" approved || true
     exit 0
 fi
 
@@ -163,6 +165,9 @@ FMT_ERR=$(mktemp)
 COMMENT_BODY=$(echo "$PARSED" | bash "$SCRIPT_DIR/format-verdict.sh" 2>"$FMT_ERR") || fail "Failed to format verdict comment" "$(cat "$FMT_ERR")"
 POST_ERR=$(mktemp)
 COMMENT_URL=$(echo "$COMMENT_BODY" | bash "$SCRIPT_DIR/post-comment.sh" 2>"$POST_ERR") || fail "Failed to post verdict comment" "$(cat "$POST_ERR")"
+
+# Set the real verdict label on the PR (non-fatal).
+bash "$SCRIPT_DIR/post-label.sh" "$VERDICT" || echo "  Warning: could not set verdict label" >&2
 
 # --- Phase 5: Inline review comments + suggestions (non-fatal) ---
 echo "[5/5] Posting inline review comments..." >&2
