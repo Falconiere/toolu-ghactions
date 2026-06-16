@@ -16,7 +16,31 @@ inputs:
   MODEL:
     description: 'OpenRouter model identifier'
     required: false
-    default: 'qwen/qwen3.7-max'
+    default: 'minimax/minimax-m3'
+  FALLBACK_MODEL:
+    description: 'Second model tried via the OpenRouter models[] fallback array when the primary model errors or is unavailable'
+    required: false
+    default: 'anthropic/claude-sonnet-4-5'
+  MAX_TOKENS:
+    description: 'Max completion tokens per request. Always sent — omitting it makes OpenRouter reserve the model''s full output capacity against your credit budget'
+    required: false
+    default: '4096'
+  REVIEW_MODE:
+    description: 'parallel = one scoped sub-reviewer per dimension group + a coordinator pass (higher quality, ~5x API cost); single = one combined call (cheapest)'
+    required: false
+    default: 'parallel'
+  MIN_CONFIDENCE:
+    description: 'Drop findings below this confidence unless severity is blocker/high. One of: high, medium'
+    required: false
+    default: 'high'
+  ENFORCE_JSON_SCHEMA:
+    description: 'When true, requests use response_format json_schema + provider.require_parameters (routes only to providers that support it). Set false to allow free-text + regex fallback'
+    required: false
+    default: 'true'
+  INLINE_COMMENTS:
+    description: 'When true, post per-line review comments (with committable code suggestions) via the GitHub Reviews API, in addition to the summary comment. Set false for summary-only'
+    required: false
+    default: 'true'
   BASE_BRANCH:
     description: 'Base branch for diff comparison'
     required: false
@@ -42,7 +66,7 @@ inputs:
 
 outputs:
   verdict:
-    description: 'Review verdict: approved, changes, or error'
+    description: 'Review verdict: approved, changes, skip, or error'
   findings-count:
     description: 'Number of findings reported'
   comment-url:

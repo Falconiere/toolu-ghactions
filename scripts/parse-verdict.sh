@@ -16,7 +16,7 @@
 # Identification is by MARKER, robust to both header states the bot uses
 # ("PR Review in Progress" → "Code Review —"): a CI job link, a "Code Review"
 # header, or an "agent-merge" verdict label. No marker → is_review_comment:false.
-set -o pipefail
+set -euo pipefail
 
 command -v jq >/dev/null 2>&1 || { echo "parse-verdict.sh: jq required" >&2; exit 2; }
 

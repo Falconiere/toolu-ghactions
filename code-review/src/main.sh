@@ -1,26 +1,29 @@
 #!/usr/bin/env bash
 # main.sh — entrypoint for the AI Code Review GitHub Action.
 #
-# Orchestrates: fetch-diff → build-prompt → call-openrouter → parse-response
-# → format-verdict → post-comment. Catches errors at each phase and posts
-# a failure comment if possible.
+# parallel mode (default): fetch-diff → fan out one run-dimension.sh per dimension
+#   group → validate-findings → coordinate-findings → format-verdict →
+#   post-comment (summary) → post-review (inline, non-fatal).
+# single mode: fetch-diff → build-prompt → call-openrouter → parse-response → …
 #
 # Sets GitHub Actions outputs: verdict, findings-count, comment-url.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GITHUB_OUTPUT="${GITHUB_OUTPUT:-/dev/stdout}"
+REVIEW_MODE="${INPUT_REVIEW_MODE:-parallel}"
+DIMENSIONS="correctness security performance tests"
 
-# Record start time for duration reporting.
 REVIEW_START_TIME=$(date +%s)
 export REVIEW_START_TIME
 
-# --- Helper: post an error comment and exit ---
+# --- Helper: post an error comment and exit, surfacing child diagnostics ---
 fail() {
     local message="$1"
+    local detail="${2:-}"
     echo "[ERROR] $message" >&2
+    [ -n "$detail" ] && echo "--- detail ---" >&2 && echo "$detail" >&2
 
-    # Try to post an error comment, but don't fail if we can't.
     if [ -f "$SCRIPT_DIR/post-comment.sh" ] && [ -n "${GITHUB_TOKEN:-}" ]; then
         ERROR_BODY="**AI Code Review failed** —— [View job](${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-unknown}/actions/runs/${GITHUB_RUN_ID:-?})
 
@@ -36,10 +39,8 @@ fail() {
 
 \`agent-request-changes\`
 "
-        COMMENT_URL=$(echo "$ERROR_BODY" | bash "$SCRIPT_DIR/post-comment.sh" 2>/dev/null || echo "")
-        if [ -n "$COMMENT_URL" ]; then
-            echo "comment-url=$COMMENT_URL" >> "$GITHUB_OUTPUT"
-        fi
+        COMMENT_URL=$(echo "$ERROR_BODY" | bash "$SCRIPT_DIR/post-comment.sh" || echo "")
+        [ -n "$COMMENT_URL" ] && echo "comment-url=$COMMENT_URL" >> "$GITHUB_OUTPUT"
     fi
 
     echo "verdict=error" >> "$GITHUB_OUTPUT"
@@ -48,82 +49,56 @@ fail() {
 }
 
 # --- Phase 1: Validate environment ---
-# Support both env: (recommended) and with: (backward compat) for the API key.
 if [ -z "${OPENROUTER_API_KEY:-}" ] && [ -n "${INPUT_OPENROUTER_API_KEY:-}" ]; then
     export OPENROUTER_API_KEY="$INPUT_OPENROUTER_API_KEY"
 fi
-if [ -z "${OPENROUTER_API_KEY:-}" ]; then
-    fail "OPENROUTER_API_KEY is not set (pass via env: block or with: input)"
-fi
-
-if [ -z "${GITHUB_TOKEN:-}" ]; then
-    fail "GITHUB_TOKEN is not set"
-fi
+[ -z "${OPENROUTER_API_KEY:-}" ] && fail "OPENROUTER_API_KEY is not set (pass via env: block or with: input)"
+[ -z "${GITHUB_TOKEN:-}" ] && fail "GITHUB_TOKEN is not set"
 
 # --- Phase 2: Fetch diff ---
 echo "[1/5] Fetching PR diff..." >&2
-DIFF_DATA=$(bash "$SCRIPT_DIR/fetch-diff.sh" 2>/dev/null) || {
-    fail "Failed to fetch PR diff (merge-base resolution failed)"
-}
+DIFF_ERR=$(mktemp)
+DIFF_DATA=$(bash "$SCRIPT_DIR/fetch-diff.sh" 2>"$DIFF_ERR") || fail "Failed to fetch PR diff" "$(cat "$DIFF_ERR")"
 
-# Check for file limit skip.
-SKIP_ERROR=$(echo "$DIFF_DATA" | jq -r '.error // ""' 2>/dev/null || true)
+SKIP_ERROR=$(echo "$DIFF_DATA" | jq -r '.error // ""' || true)
 if [ -n "$SKIP_ERROR" ]; then
     echo "[SKIP] $SKIP_ERROR" >&2
     echo "verdict=skip" >> "$GITHUB_OUTPUT"
     echo "findings-count=0" >> "$GITHUB_OUTPUT"
-    # Post a skip comment if we can.
-    if [ -f "$SCRIPT_DIR/post-comment.sh" ]; then
-        SKIP_BODY="**AI Code Review skipped** —— [View job](${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-unknown}/actions/runs/${GITHUB_RUN_ID:-?})
+    SKIP_BODY="**AI Code Review skipped** —— [View job](${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-unknown}/actions/runs/${GITHUB_RUN_ID:-?})
 
 ---
 ### Code Review — skipped
 
-- [x] Read repository context and PR diff
-- [ ] Review changed files
-- [ ] Analyze correctness, security, performance
-- [ ] Post findings
-
 **Skipped:** $SKIP_ERROR
 "
-        SKIP_URL=$(echo "$SKIP_BODY" | bash "$SCRIPT_DIR/post-comment.sh" 2>/dev/null || echo "")
-        [ -n "$SKIP_URL" ] && echo "comment-url=$SKIP_URL" >> "$GITHUB_OUTPUT"
-    fi
+    SKIP_URL=$(echo "$SKIP_BODY" | bash "$SCRIPT_DIR/post-comment.sh" || echo "")
+    [ -n "$SKIP_URL" ] && echo "comment-url=$SKIP_URL" >> "$GITHUB_OUTPUT"
     exit 0
 fi
 
 TOTAL_FILES=$(echo "$DIFF_DATA" | jq -r '.total_files // 0')
-
 if [ "$TOTAL_FILES" -eq 0 ]; then
-    # No changes to review.
     echo "[SKIP] No file changes to review" >&2
     echo "verdict=skip" >> "$GITHUB_OUTPUT"
     echo "findings-count=0" >> "$GITHUB_OUTPUT"
-
     NOOP_BODY="**AI Code Review finished** —— [View job](${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-unknown}/actions/runs/${GITHUB_RUN_ID:-?})
 
 ---
 ### Code Review — \`${GITHUB_HEAD_REF:-unknown}\`
 
-- [x] Read repository context and PR diff
-- [x] Review changed files
-- [x] Analyze correctness, security, performance
-- [x] Post findings
-- [x] Set verdict label (\`agent-merge-approved\`)
-
 **No file changes to review.** 🎉
 
 \`agent-merge-approved\`
 "
-    NOOP_URL=$(echo "$NOOP_BODY" | bash "$SCRIPT_DIR/post-comment.sh" 2>/dev/null || echo "")
+    NOOP_URL=$(echo "$NOOP_BODY" | bash "$SCRIPT_DIR/post-comment.sh" || echo "")
     [ -n "$NOOP_URL" ] && echo "comment-url=$NOOP_URL" >> "$GITHUB_OUTPUT"
     exit 0
 fi
 
 echo "  Files: $TOTAL_FILES, Lines: $(echo "$DIFF_DATA" | jq -r '.total_lines')" >&2
 
-# --- Post in-progress comment ---
-echo "  Posting in-progress comment..." >&2
+# --- In-progress comment (best-effort) ---
 IN_PROGRESS_BODY="**AI Code Review running** —— [View job](${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-unknown}/actions/runs/${GITHUB_RUN_ID:-?})
 
 ---
@@ -135,62 +110,68 @@ IN_PROGRESS_BODY="**AI Code Review running** —— [View job](${GITHUB_SERVER_U
 - [ ] Post findings
 - [ ] Set verdict label
 "
-# Post the in-progress comment (post-comment.sh will create a new one).
-# We don't capture the URL here — the final verdict edit finds it by marker.
-echo "$IN_PROGRESS_BODY" | bash "$SCRIPT_DIR/post-comment.sh" > /dev/null 2>&1 || {
-    echo "  Warning: Could not post in-progress comment" >&2
-}
+echo "$IN_PROGRESS_BODY" | bash "$SCRIPT_DIR/post-comment.sh" >/dev/null || echo "  Warning: could not post in-progress comment" >&2
 
-# --- Phase 3: Build prompt ---
-echo "[2/5] Building review prompt..." >&2
-REQUEST_BODY=$(echo "$DIFF_DATA" | bash "$SCRIPT_DIR/build-prompt.sh" 2>/dev/null) || {
-    fail "Failed to build review prompt"
-}
+# --- Phase 3: Produce the final review object (PARSED) ---
+if [ "$REVIEW_MODE" = "single" ]; then
+    echo "[2/5] Single-pass review..." >&2
+    REQ_ERR=$(mktemp)
+    REQUEST_BODY=$(echo "$DIFF_DATA" | bash "$SCRIPT_DIR/build-prompt.sh" 2>"$REQ_ERR") || fail "Failed to build review prompt" "$(cat "$REQ_ERR")"
+    API_ERR=$(mktemp)
+    API_RESPONSE=$(echo "$REQUEST_BODY" | bash "$SCRIPT_DIR/call-openrouter.sh" 2>"$API_ERR") || fail "OpenRouter API call failed" "$(cat "$API_ERR")"
+    PARSE_ERR=$(mktemp)
+    PARSED=$(echo "$API_RESPONSE" | bash "$SCRIPT_DIR/parse-response.sh" 2>"$PARSE_ERR") || fail "Failed to parse review response" "$(cat "$PARSE_ERR")"
+else
+    echo "[2/5] Parallel sub-reviewers: $DIMENSIONS" >&2
+    TMPD=$(mktemp -d)
+    declare -A PID
+    for dim in $DIMENSIONS; do
+        ( echo "$DIFF_DATA" | INPUT_DIMENSION="$dim" bash "$SCRIPT_DIR/run-dimension.sh" > "$TMPD/$dim.json" 2> "$TMPD/$dim.err" ) &
+        PID[$dim]=$!
+    done
 
-# --- Phase 4: Call OpenRouter ---
-echo "[3/5] Calling OpenRouter API..." >&2
-API_RESPONSE=$(echo "$REQUEST_BODY" | bash "$SCRIPT_DIR/call-openrouter.sh" 2>/dev/null) || {
-    fail "OpenRouter API call failed — check API key and model availability"
-}
+    OK=0
+    UNION="[]"
+    for dim in $DIMENSIONS; do
+        if wait "${PID[$dim]}"; then
+            OK=$((OK + 1))
+            DF=$(jq -c '.findings // []' "$TMPD/$dim.json" || echo "[]")
+            UNION=$(jq -cn --argjson a "$UNION" --argjson b "$DF" '$a + $b')
+        else
+            echo "  [warn] dimension '$dim' failed: $(cat "$TMPD/$dim.err")" >&2
+        fi
+    done
+    [ "$OK" -eq 0 ] && fail "All dimension reviewers failed" "$(cat "$TMPD"/*.err)"
+    echo "  $OK dimension(s) succeeded; $(echo "$UNION" | jq 'length') findings before validation" >&2
 
-# Check for API-level errors in the response.
-API_ERROR=$(echo "$API_RESPONSE" | jq -r '.error // ""' 2>/dev/null || true)
-if [ -n "$API_ERROR" ] && [ "$API_ERROR" != "null" ]; then
-    fail "OpenRouter returned an error: $API_ERROR"
+    FILES=$(echo "$DIFF_DATA" | jq -c '.files // []')
+    AGG=$(jq -cn --argjson files "$FILES" --argjson findings "$UNION" '{files:$files, findings:$findings}')
+
+    VAL_ERR=$(mktemp)
+    VALIDATED=$(echo "$AGG" | bash "$SCRIPT_DIR/validate-findings.sh" 2>"$VAL_ERR") || fail "Failed to validate findings" "$(cat "$VAL_ERR")"
+    COORD_ERR=$(mktemp)
+    PARSED=$(echo "$VALIDATED" | bash "$SCRIPT_DIR/coordinate-findings.sh" 2>"$COORD_ERR") || fail "Coordinator pass failed" "$(cat "$COORD_ERR")"
 fi
-
-echo "  Done." >&2
-
-# --- Phase 5: Parse response ---
-echo "[4/5] Parsing review response..." >&2
-PARSED=$(echo "$API_RESPONSE" | bash "$SCRIPT_DIR/parse-response.sh" 2>/dev/null) || {
-    fail "Failed to parse review response — LLM output was not valid JSON and regex fallback failed"
-}
 
 VERDICT=$(echo "$PARSED" | jq -r '.verdict // "changes"')
 FINDINGS_COUNT=$(echo "$PARSED" | jq '.findings | length')
-echo "  Verdict: $VERDICT, Findings: $FINDINGS_COUNT" >&2
+echo "[3/5] Verdict: $VERDICT, Findings: $FINDINGS_COUNT" >&2
 
-# --- Phase 6: Format and post verdict ---
-echo "[5/5] Posting verdict comment..." >&2
-COMMENT_BODY=$(echo "$PARSED" | bash "$SCRIPT_DIR/format-verdict.sh" 2>/dev/null) || {
-    fail "Failed to format verdict comment"
-}
+# --- Phase 4: Format + post summary comment ---
+echo "[4/5] Posting verdict comment..." >&2
+FMT_ERR=$(mktemp)
+COMMENT_BODY=$(echo "$PARSED" | bash "$SCRIPT_DIR/format-verdict.sh" 2>"$FMT_ERR") || fail "Failed to format verdict comment" "$(cat "$FMT_ERR")"
+POST_ERR=$(mktemp)
+COMMENT_URL=$(echo "$COMMENT_BODY" | bash "$SCRIPT_DIR/post-comment.sh" 2>"$POST_ERR") || fail "Failed to post verdict comment" "$(cat "$POST_ERR")"
 
-COMMENT_URL=$(echo "$COMMENT_BODY" | bash "$SCRIPT_DIR/post-comment.sh" 2>/dev/null) || {
-    fail "Failed to post verdict comment"
-}
+# --- Phase 5: Inline review comments + suggestions (non-fatal) ---
+echo "[5/5] Posting inline review comments..." >&2
+echo "$PARSED" | bash "$SCRIPT_DIR/post-review.sh" || echo "  Warning: inline review step failed (summary comment still posted)" >&2
 
-# --- Write outputs ---
+# --- Outputs ---
 echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
 echo "findings-count=$FINDINGS_COUNT" >> "$GITHUB_OUTPUT"
 echo "comment-url=$COMMENT_URL" >> "$GITHUB_OUTPUT"
 
-echo "" >&2
-echo "============================================" >&2
-echo "  Review complete: $VERDICT" >&2
-echo "  Findings: $FINDINGS_COUNT" >&2
-echo "  Comment: $COMMENT_URL" >&2
-echo "============================================" >&2
-
+echo "Review complete: $VERDICT ($FINDINGS_COUNT findings) — $COMMENT_URL" >&2
 exit 0

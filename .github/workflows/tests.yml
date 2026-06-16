@@ -1,0 +1,36 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: bats
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats + jq
+        run: sudo apt-get update && sudo apt-get install -y bats jq
+      - name: Run test suite
+        run: bats code-review/__tests__/*.bats
+
+  lint:
+    name: shellcheck + action-validator
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck --severity=warning code-review/src/*.sh scripts/*.sh
+      - name: action-validator
+        run: npx --yes @action-validator/cli code-review/action.yml
+
+  build:
+    name: docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the action image
+        # Build context is code-review/ — the Dockerfile COPYs src/ and prompts/
+        # relative to it (this is also how GitHub builds the action).
+        run: docker build -t code-review-action:test code-review/

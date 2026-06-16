@@ -1,84 +1,76 @@
 #!/usr/bin/env bash
-# parse-response.sh — validate the OpenRouter JSON response, extract the
-# verdict and findings from choices[0].message.content.
-#
-# Reads the OpenRouter API response from stdin.
-# Outputs to stdout: a clean JSON object {verdict, findings[], other_checks, top_must_fix[]}
-# Exits non-zero if the response is unparseable even after fallback.
+# parse-response.sh — extract and normalize the review JSON from an OpenRouter
+# response. Handles three content shapes: clean JSON (schema mode), ```json-fenced
+# or prose-wrapped JSON (a model that ignored the schema), and free text (regex
+# fallback). Output carries both dimension-mode (`reasoning`) and coordinator-mode
+# (`review_plan`/`other_checks`/`top_must_fix`) fields; each consumer reads what it needs.
 set -euo pipefail
 
 INPUT=$(cat)
 
-# Try extracting content from an OpenRouter API response format.
 CONTENT=""
 if echo "$INPUT" | jq -e . >/dev/null 2>&1; then
     CONTENT=$(echo "$INPUT" | jq -r '.choices[0].message.content // ""')
 fi
-
 if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
-    echo '{"error":"No content in OpenRouter response — model may have returned empty"}' >&2
+    jq -nc '{error:"No content in OpenRouter response — model may have returned empty"}' >&2
     exit 1
 fi
 
-# Try parsing as JSON (the expected path with json_schema response_format).
-if echo "$CONTENT" | jq -e . >/dev/null 2>&1; then
-    PARSED=$(echo "$CONTENT" | jq -c '{
-        review_plan: (.review_plan // ""),
-        verdict: (.verdict // "changes"),
-        findings: (.findings // []),
-        other_checks: (.other_checks // ""),
-        top_must_fix: (.top_must_fix // [])
-    }')
+# Obtain a JSON object from the content: as-is, then fence-stripped, then the
+# first {...last } block (tolerates a leading reasoning/<thinking> preamble).
+get_json() {
+    local c="$1" stripped braced
+    if printf '%s' "$c" | jq -e . >/dev/null 2>&1; then printf '%s' "$c"; return 0; fi
+    stripped=$(printf '%s\n' "$c" | sed -e 's/^[[:space:]]*```[a-zA-Z]*[[:space:]]*$//' -e 's/^[[:space:]]*```[[:space:]]*$//')
+    if printf '%s' "$stripped" | jq -e . >/dev/null 2>&1; then printf '%s' "$stripped"; return 0; fi
+    braced=$(printf '%s\n' "$c" | awk '/\{/{f=1} f{print}' | awk '{a[NR]=$0} /\}/{last=NR} END{for(i=1;i<=last;i++) print a[i]}')
+    if printf '%s' "$braced" | jq -e . >/dev/null 2>&1; then printf '%s' "$braced"; return 0; fi
+    return 1
+}
 
-    # Validate required fields.
-    VERDICT=$(echo "$PARSED" | jq -r '.verdict')
-    if [ "$VERDICT" != "approved" ] && [ "$VERDICT" != "changes" ]; then
-        echo "{\"error\":\"Invalid verdict in response: $VERDICT\",\"raw\":$(echo "$CONTENT" | jq -Rc .)}" >&2
-        exit 1
-    fi
+NORMALIZE='{
+    review_plan: (.review_plan // ""),
+    reasoning: (.reasoning // ""),
+    verdict: (if (.verdict == "approved" or .verdict == "changes") then .verdict else "changes" end),
+    findings: [ (.findings // [])[] | {
+        path: (.path // ""),
+        line: (.line // null),
+        end_line: (.end_line // .line // null),
+        severity: (.severity // "low"),
+        category: (.category // null),
+        confidence: (.confidence // null),
+        quoted_line: (.quoted_line // null),
+        suggestion: (.suggestion // null),
+        text: (.text // "")
+    } ],
+    other_checks: (.other_checks // ""),
+    top_must_fix: (.top_must_fix // [])
+}'
 
-    echo "$PARSED"
+if JSON=$(get_json "$CONTENT"); then
+    echo "$JSON" | jq -c "$NORMALIZE"
     exit 0
 fi
 
-# Fallback: the model didn't return valid JSON. Try regex extraction.
-echo "{\"warning\":\"LLM did not return valid JSON — attempting regex fallback\"}" >&2
-
+# Fallback: free text. Extract `path:line`: severity: text lines; sniff verdict.
+jq -nc '{warning:"LLM did not return valid JSON — using regex fallback"}' >&2
 FINDINGS_JSON="[]"
-VERDICT="changes"
-
-# Extract findings lines matching `path:line`: severity: text
 while IFS= read -r line; do
     if [[ "$line" =~ ^\`([^\`]+)\`:\ (blocker|high|medium|low|nit):\ (.*)$ ]]; then
-        raw_path="${BASH_REMATCH[1]}"
-        sev="${BASH_REMATCH[2]}"
-        text="${BASH_REMATCH[3]}"
-        path="$raw_path"
-        ln=""
-        if [[ "$raw_path" =~ ^(.+):([0-9]+)$ ]]; then
-            path="${BASH_REMATCH[1]}"
-            ln="${BASH_REMATCH[2]}"
-        fi
+        raw_path="${BASH_REMATCH[1]}"; sev="${BASH_REMATCH[2]}"; text="${BASH_REMATCH[3]}"
+        path="$raw_path"; ln=""
+        if [[ "$raw_path" =~ ^(.+):([0-9]+)$ ]]; then path="${BASH_REMATCH[1]}"; ln="${BASH_REMATCH[2]}"; fi
         obj=$(jq -nc --arg path "$path" --arg line "$ln" --arg severity "$sev" --arg text "$text" \
-            '{path:$path, line:(if $line=="" then null else ($line|tonumber) end), severity:$severity, text:$text}')
+            '{path:$path, line:(if $line=="" then null else ($line|tonumber) end), end_line:(if $line=="" then null else ($line|tonumber) end), severity:$severity, category:null, confidence:null, quoted_line:null, suggestion:null, text:$text}')
         FINDINGS_JSON=$(echo "$FINDINGS_JSON" | jq -c --argjson o "$obj" '. + [$o]')
     fi
 done <<< "$CONTENT"
 
-# Check for approval signals in raw text.
-if echo "$CONTENT" | grep -qiE 'agent-merge-approved|\*\*Approved\*\*|verdict.*approved'; then
+VERDICT="changes"
+if echo "$CONTENT" | grep -qiE 'agent-merge-approved|\*\*Approved\*\*|"verdict"[[:space:]]*:[[:space:]]*"approved"'; then
     VERDICT="approved"
-elif echo "$CONTENT" | grep -qiE 'agent-request-changes|\*\*Changes requested\*\*|verdict.*changes'; then
-    VERDICT="changes"
 fi
 
-OTHER_CHECKS=""
-TOP_MUST_FIX="[]"
-
-jq -nc \
-    --arg plan "" \
-    --arg verdict "$VERDICT" \
-    --argjson findings "$FINDINGS_JSON" \
-    --arg other "$OTHER_CHECKS" \
-    --argjson top "$TOP_MUST_FIX" \
-    '{review_plan:$plan, verdict:$verdict, findings:$findings, other_checks:$other, top_must_fix:$top}'
+jq -nc --argjson findings "$FINDINGS_JSON" --arg verdict "$VERDICT" \
+    '{review_plan:"", reasoning:"", verdict:$verdict, findings:$findings, other_checks:"", top_must_fix:[]}'
