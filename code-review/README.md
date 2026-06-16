@@ -1,11 +1,22 @@
-# Toolu AI Code Review
+<div align="center">
 
-[![tests](https://github.com/Falconiere/toolu-ghactions/actions/workflows/tests.yml/badge.svg)](https://github.com/Falconiere/toolu-ghactions/actions/workflows/tests.yml)
-[![license](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
+# 🔍 code-review
 
-Automated PR code review against a 7-dimension checklist — correctness, security, performance, test coverage, doc accuracy, tight assertions, migration warnings — with support for **6 AI vendors** (OpenRouter, OpenAI, Anthropic, DeepSeek, Moonshot, MiniMax). Run one provider or an ensemble of N providers in parallel; the action merges N verdicts and posts a structured verdict with actionable findings.
+### A multi-vendor AI reviewer for every pull request.
 
-> Part of the [Toolu GitHub Actions](../README.md) monorepo.
+Audits the diff against a 7-dimension checklist — correctness, security, performance, test coverage, doc accuracy, tight assertions, migration warnings — using **one model or an ensemble of up to 6 vendors** (OpenRouter, OpenAI, Anthropic, DeepSeek, Moonshot, MiniMax) voting in parallel. Merges the verdicts and posts a structured, machine-readable comment with inline, committable suggestions.
+
+[![Release](https://img.shields.io/github/v/release/Falconiere/toolu-ghactions?sort=semver&color=d97757)](https://github.com/Falconiere/toolu-ghactions/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](../LICENSE)
+[![Tests](https://img.shields.io/badge/tests-108%20passing-brightgreen)](https://github.com/Falconiere/toolu-ghactions/actions/workflows/tests.yml)
+
+[Quick start](#quick-start) · [Multiple providers](#multiple-providers) · [How it works](#how-it-works) · [Example verdict](#example-verdict) · [Inputs](#inputs) · [Outputs](#outputs)
+
+</div>
+
+> Part of the [**toolu-ghactions**](../README.md) monorepo.
+
+---
 
 ## Quick start
 
