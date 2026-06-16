@@ -1,6 +1,21 @@
-# Toolu Cloudflare Tunnel
+<div align="center">
 
-Expose a local `HOST:PORT` from your GitHub Actions runner to the public internet via a Cloudflare Tunnel. Quick tunnels (no account, ephemeral `*.trycloudflare.com` URL) work out of the box. Named tunnels (account-bound, persistent URL) activate when `tunnel-token` is set.
+# 🌐 cloudflare-tunnel
+
+### Expose a runner port to the public internet — for live preview review.
+
+Expose a local `HOST:PORT` from your GitHub Actions runner to the public internet via a Cloudflare Tunnel. Quick tunnels (no account, ephemeral `*.trycloudflare.com` URL) work out of the box; named tunnels (account-bound, persistent URL) activate when `tunnel-token` is set.
+
+[![Release](https://img.shields.io/github/v/release/Falconiere/toolu-ghactions?sort=semver&color=d97757)](https://github.com/Falconiere/toolu-ghactions/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](../LICENSE)
+
+[Quick start](#quick-start) · [Outputs](#outputs) · [Inputs](#start-inputs) · [Named tunnel](#named-tunnel-setup) · [Troubleshooting](#troubleshooting)
+
+</div>
+
+> Part of the [**toolu-ghactions**](../README.md) monorepo.
+
+---
 
 These are **composite actions**: `cloudflared` runs directly on the runner host (Linux and macOS), not inside a container. That means `HOST:PORT` resolves to a service on the runner — e.g. an app you started with `docker run -p 8000:8000` or `npm run dev` — and the tunnel process survives across steps so later steps (and external clients, via the public URL) can reach it. Pair `start` with `stop` (`if: always()`) to tear the tunnel down on success, failure, or cancellation.
 
