@@ -3,7 +3,7 @@
 [![tests](https://github.com/Falconiere/toolu-ghactions/actions/workflows/tests.yml/badge.svg)](https://github.com/Falconiere/toolu-ghactions/actions/workflows/tests.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Automated PR code review via OpenRouter. Plans a targeted review against a 7-dimension checklist — correctness, security, performance, test coverage, doc accuracy, tight assertions, migration warnings — then posts a structured verdict with actionable findings.
+Automated PR code review against a 7-dimension checklist — correctness, security, performance, test coverage, doc accuracy, tight assertions, migration warnings — with support for **6 AI vendors** (OpenRouter, OpenAI, Anthropic, DeepSeek, Moonshot, MiniMax). Run one provider or an ensemble of N providers in parallel; the action merges N verdicts and posts a structured verdict with actionable findings.
 
 ## Quick start
 
@@ -49,25 +49,84 @@ Use MODEL to switch models and REVIEW_PROMPT_FILE for a custom checklist:
           REVIEW_PROMPT_FILE: '.github/review-prompt.md'
 ```
 
-On every PR push, the action fetches the diff, sends it to the configured model via OpenRouter, and posts a verdict comment directly on the PR.
+On every PR push, the action fetches the diff, sends it to the configured model(s), and posts a verdict comment directly on the PR.
 
-While the review runs, an in-progress comment appears on the PR with unchecked checkboxes tracking each phase. When the review completes, that same comment is edited in place with the full verdict — findings, severity breakdown, a review plan showing which dimensions were checked, and the machine-readable merge label.
+## Multiple providers
+
+Use the `PROVIDERS` input to run multiple AI vendors in parallel — an ensemble
+review that merges N independent verdicts into one. Each provider gets its own
+model + API key:
+
+```yaml
+- uses: falconiere/toolu-ghactions/code-review@v1
+  with:
+    providers: |
+      [
+        {"provider": "openrouter", "model": "minimax/minimax-m3", "api_key": "${{ secrets.OPENROUTER_API_KEY }}"},
+        {"provider": "anthropic",  "model": "claude-sonnet-4-5", "api_key": "${{ secrets.ANTHROPIC_API_KEY }}"},
+        {"provider": "openai",     "model": "gpt-4o",             "api_key": "${{ secrets.OPENAI_API_KEY }}"}
+      ]
+    merge_strategy: conservative
+```
+
+`providers` is a JSON array. Each entry:
+- `provider` (required): `openrouter | openai | anthropic | deepseek | moonshot | minimax`
+- `model` (required): vendor model id
+- `api_key` (required): API key (use `${{ secrets.X }}` — masked in CI logs)
+- `enforce_json_schema` (optional, default `true`): request strict JSON output
+- `max_tokens` (optional, default `4096`): per-provider response budget
+
+### Merge strategies
+
+`merge_strategy` controls how N verdicts become one:
+
+| Strategy | Rule |
+|---|---|
+| `conservative` (default) | Any provider says `changes` → overall `changes`. Safest for CI. |
+| `majority` | `ceil(N/2)+1` must say `changes` for overall `changes`. Errors abstain. |
+| `all_approve` | All providers must say `approved`. Errors count as `changes`. |
+
+Provider findings are deduplicated across providers by
+`(path, line, end_line, text-fingerprint)` and the highest severity wins.
+
+### Legacy single-provider (back-compat)
+
+The legacy `OPENROUTER_API_KEY` + `MODEL` inputs still work — they're
+auto-translated to a single-provider `PROVIDERS` list:
+
+```yaml
+- uses: falconiere/toolu-ghactions/code-review@v1
+  with:
+    OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    MODEL: 'minimax/minimax-m3'
+```
+
+This is identical to the v1.2 behavior and requires no migration.
+`FALLBACK_MODEL` is dropped (multi-provider IS the fallback). `REVIEW_MODE` is
+a no-op (the per-dimension sub-reviewer is replaced by multi-provider dispatch).
 
 ## How it works
 
-In the default `parallel` mode the action runs a fan-out → validate → coordinate pipeline:
+The action runs a fan-out → merge → post pipeline:
 
-**1 — Fetch & shape the diff.** Resolves the merge-base, strips noise (lockfiles, minified, generated, source maps), drops binaries, and line-primes every diff line with its real source line number so findings anchor to actual lines.
+**1 — Fetch & shape the diff.** Resolves the merge-base, strips noise (lockfiles,
+minified, generated, source maps), drops binaries, and line-primes every diff
+line with its real source line number so findings anchor to actual lines.
 
-**2 — Parallel sub-reviewers.** One narrowly-scoped reviewer runs per dimension group — `correctness`, `security`, `performance+migration`, `tests+assertions+docs` — each with negative constraints ("no style, no general advice, only HIGH-confidence findings, cite the exact line"). Scoped reviewers produce far less noise than one catch-all prompt.
+**2 — Parallel provider reviews.** One review runs per provider in the `providers`
+list. Each provider gets the full 7-dimension checklist. Findings are validated
+against the diff per-provider (hallucinated line numbers and low-confidence
+findings are dropped before the cross-provider merge).
 
-**3 — Deterministic validation.** Every finding is checked against the diff: a finding whose line isn't actually in the changes is dropped (no hallucinated locations), low-confidence findings are gated out, and a code suggestion is kept only when it's high-confidence and fully anchored.
+**3 — Multi-provider merge.** A deterministic merger combines N verdicts using
+`merge_strategy`. No LLM call — the merger deduplicates findings by
+`(path, line, end_line, text-fingerprint)` and sets the final verdict per the
+configured strategy.
 
-**4 — Coordinator pass.** A final model call deduplicates across reviewers, filters for reasonableness, sets the verdict, and writes the review plan + top must-fix list.
-
-**5 — Post.** A summary verdict comment (machine-readable label for `pr-babysit`), plus — when `INLINE_COMMENTS` is on — per-line review comments with committable ` ```suggestion ` blocks via the GitHub Reviews API (advisory `COMMENT` event; it never hard-blocks merge).
-
-Set `REVIEW_MODE: single` for one combined call instead of the fan-out — cheaper, lower quality. The `parallel` default makes roughly `(number of dimension groups + 1)` API calls per review; budget accordingly.
+**4 — Post.** A summary verdict comment (machine-readable label for `pr-babysit`),
+plus — when `INLINE_COMMENTS` is on — per-line review comments derived from the
+merged findings, with committable ` ```suggestion ` blocks via the GitHub Reviews
+API (advisory `COMMENT` event; it never hard-blocks merge).
 
 ### Inline comments & suggestions
 
@@ -108,11 +167,13 @@ The verdict label at the bottom is machine-readable: `` `agent-merge-approved` `
 
 | Input | Required | Default | Description |
 |---|---|---|---|
-| `OPENROUTER_API_KEY` | no* | — | OpenRouter API key. *Required — pass via `with:` or a step-level `env:` block. |
-| `MODEL` | no | `minimax/minimax-m3` | OpenRouter model identifier |
-| `FALLBACK_MODEL` | no | `anthropic/claude-sonnet-4-5` | Second model tried via the OpenRouter `models[]` fallback array when the primary errors or is unavailable |
-| `MAX_TOKENS` | no | `4096` | Max completion tokens per request (always sent — omitting it makes OpenRouter reserve the model's full output capacity against your budget) |
-| `REVIEW_MODE` | no | `parallel` | `parallel` = one scoped sub-reviewer per dimension group + a coordinator pass (higher quality, ~5× API cost); `single` = one combined call (cheapest) |
+| `PROVIDERS` | no | — | JSON array of `{provider, model, api_key}` entries. When set, runs one review per provider in parallel. Preferred for v1.3+. |
+| `MERGE_STRATEGY` | no | `conservative` | How to merge N verdicts: `conservative` (any changes wins), `majority`, `all_approve` |
+| `OPENROUTER_API_KEY` | no | — | **Legacy.** OpenRouter API key. Used only when `PROVIDERS` is unset. Auto-translated to a single-provider `PROVIDERS` list. |
+| `MODEL` | no | `minimax/minimax-m3` | **Legacy.** OpenRouter model identifier. Used only when `PROVIDERS` is unset and `OPENROUTER_API_KEY` is set. |
+| `FALLBACK_MODEL` | no | *(dropped)* | **Legacy — dropped.** Extra model in the OpenRouter `models[]` fallback array. Multi-provider replaces this. Logs a deprecation hint if set. |
+| `MAX_TOKENS` | no | `4096` | Max completion tokens per request. Default for per-entry `max_tokens` when the entry omits it. |
+| `REVIEW_MODE` | no | *(no-op)* | **Legacy — no-op.** Per-dimension sub-reviewer is removed; multi-provider replaces it. |
 | `MIN_CONFIDENCE` | no | `high` | Drop findings below this confidence unless severity is blocker/high (`high` or `medium`) |
 | `ENFORCE_JSON_SCHEMA` | no | `true` | Use `response_format` json_schema + provider routing; set `false` for free-text + regex fallback |
 | `INLINE_COMMENTS` | no | `true` | Post per-line review comments with committable code suggestions (Reviews API), in addition to the summary comment |
@@ -150,8 +211,9 @@ Use outputs in downstream workflow steps:
 ├── code-review/            # AI code review action (Toolu AI Code Review)
 │   ├── action.yml
 │   ├── Dockerfile
-│   ├── src/                # fetch-diff → build-prompt → call-openrouter → ...
-│   ├── prompts/            # Default review checklist
+│   ├── src/                # fetch-diff → build-prompt → providers/<name>/ → ...
+│   ├── src/providers/       # Per-provider scripts (openrouter, openai, anthropic, etc.)
+│   ├── prompts/            # Review checklist
 │   └── __tests__/          # Hermetic bats test suite
 ├── cloudflare-tunnel/      # Cloudflare Tunnel action (Toolu Cloudflare Tunnel)
 │   ├── start/action.yml    # Boots a tunnel, emits URL/ID outputs
@@ -222,7 +284,3 @@ No manual steps. Push to `main` with conventional-commit messages and release-pl
 ## License
 
 MIT
-# Multi-provider: coming soon
-
-## Multiple providers
-merge_strategy: conservative
