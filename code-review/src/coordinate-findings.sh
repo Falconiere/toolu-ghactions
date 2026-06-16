@@ -32,12 +32,19 @@ fi
 
 SYS=$(cat "$COORD")
 USERMSG=$(printf '%s' "$UNION" | jq -c '{findings: (.findings // [])}')
-SYS_ESC=$(printf '%s' "$SYS" | jq -Rs .)
-USER_ESC=$(printf '%s' "$USERMSG" | jq -Rs .)
+
+# The findings payload scales with the review and overflows ARG_MAX ("jq:
+# Argument list too long") if passed via --argjson. Route both messages
+# through temp files: --rawfile reads each verbatim as a JSON string.
+SYS_FILE=$(mktemp)
+USER_FILE=$(mktemp)
+trap 'rm -f "$SYS_FILE" "$USER_FILE"' EXIT
+printf '%s' "$SYS" > "$SYS_FILE"
+printf '%s' "$USERMSG" > "$USER_FILE"
 
 BODY=$(jq -nc \
     --arg model "$MODEL" --arg fb "$FALLBACK_MODEL" --argjson maxtok "$MAX_TOKENS" \
-    --argjson sys "$SYS_ESC" --argjson user "$USER_ESC" \
+    --rawfile sys "$SYS_FILE" --rawfile user "$USER_FILE" \
     '{model:$model, models:[$model,$fb], messages:[{role:"system",content:$sys},{role:"user",content:$user}], temperature:0.1, max_tokens:$maxtok}')
 
 RESPONSE=$(printf '%s' "$BODY" | bash "$SCRIPT_DIR/call-openrouter.sh")
