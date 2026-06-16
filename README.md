@@ -34,6 +34,16 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 ```
 
+Use MODEL to switch models and REVIEW_PROMPT_FILE for a custom checklist:
+
+```yaml
+      - uses: falconiere/toolu-ghactions/code-review@v1
+        with:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          MODEL: 'anthropic/claude-sonnet-4'
+          REVIEW_PROMPT_FILE: '.github/review-prompt.md'
+```
+
 On every PR push, the action fetches the diff, sends it to the configured model via OpenRouter, and posts a verdict comment directly on the PR.
 
 While the review runs, an in-progress comment appears on the PR with unchecked checkboxes tracking each phase. When the review completes, that same comment is edited in place with the full verdict — findings, severity breakdown, a review plan showing which dimensions were checked, and the machine-readable merge label.
@@ -81,14 +91,14 @@ The `` `agent-merge-approved` `` label at the bottom is machine-readable. `pr-ba
 
 | Input | Required | Default | Description |
 |---|---|---|---|
-| `openrouter-api-key` | yes | — | OpenRouter API key |
-| `model` | no | `anthropic/claude-sonnet-4` | OpenRouter model identifier |
-| `base-branch` | no | `main` | Base branch for diff comparison. Falls back to `GITHUB_BASE_REF` if unset. |
-| `review-prompt` | no | *(7-dimension checklist)* | Custom system prompt. Replaces the default review dimensions. |
-| `codebase-overview` | no | — | High-level context about the codebase (framework, patterns, architecture) injected into the review prompt. |
-| `max-files` | no | `100` | Maximum changed files before the action skips. Prevents massive PRs from running up API costs. |
-| `max-diff-lines` | no | `8000` | Maximum diff lines before truncation. Oldest hunks (by file path) are dropped; a truncation notice is appended. |
-| `token` | no | `${{ github.token }}` | GitHub token for posting and editing comments. |
+| `OPENROUTER_API_KEY` | yes | — | OpenRouter API key |
+| `MODEL` | no | `qwen/qwen3.7-max` | OpenRouter model identifier |
+| `BASE_BRANCH` | no | `main` | Base branch for diff comparison. Falls back to `GITHUB_BASE_REF` if unset. |
+| `REVIEW_PROMPT_FILE` | no | *(7-dimension checklist)* | Path to a markdown file (relative to repo root) with a custom review prompt. Overrides the default checklist. |
+| `CODEBASE_OVERVIEW` | no | — | High-level context about the codebase (framework, patterns, architecture) injected into the review prompt. |
+| `MAX_FILES` | no | `100` | Maximum changed files before the action skips. Prevents massive PRs from running up API costs. |
+| `MAX_DIFF_LINES` | no | `8000` | Maximum diff lines before truncation. First N lines kept (lexicographic by file path); a truncation notice is appended. |
+| `TOKEN` | no | `${{ github.token }}` | GitHub token for posting and editing comments. |
 
 ## Outputs
 

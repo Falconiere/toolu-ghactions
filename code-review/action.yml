@@ -13,29 +13,29 @@ inputs:
   OPENROUTER_API_KEY:
     description: 'OpenRouter API key'
     required: true
-  model:
+  MODEL:
     description: 'OpenRouter model identifier'
     required: false
     default: 'qwen/qwen3.7-max'
-  base-branch:
+  BASE_BRANCH:
     description: 'Base branch for diff comparison'
     required: false
     default: 'main'
-  review-prompt-file:
+  REVIEW_PROMPT_FILE:
     description: 'Path to a markdown file (relative to repo root) containing a custom review prompt. Overrides the default 7-dimension checklist.'
     required: false
-  codebase-overview:
+  CODEBASE_OVERVIEW:
     description: 'High-level description of the codebase (framework, patterns, business context) to give the reviewer context'
     required: false
-  max-files:
+  MAX_FILES:
     description: 'Maximum number of changed files before the action skips (avoids massive PR cost/timeout)'
     required: false
     default: '100'
-  max-diff-lines:
+  MAX_DIFF_LINES:
     description: 'Maximum diff lines before truncation (first N lines kept, lexicographic by file path)'
     required: false
     default: '8000'
-  token:
+  TOKEN:
     description: 'GitHub token for posting/editing comments. Use ${{ secrets.GITHUB_TOKEN }}'
     required: false
     default: '${{ github.token }}'
@@ -53,4 +53,4 @@ runs:
   image: 'Dockerfile'
   env:
     OPENROUTER_API_KEY: ${{ inputs.OPENROUTER_API_KEY }}
-    GITHUB_TOKEN: ${{ inputs.token }}
+    GITHUB_TOKEN: ${{ inputs.TOKEN }}
