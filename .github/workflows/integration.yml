@@ -21,10 +21,15 @@ on:
 jobs:
   quick:
     name: quick tunnel E2E (${{ matrix.os }})
+    # Real-tunnel E2E runs on ubuntu only. macOS-hosted runners can't reliably
+    # reach the trycloudflare edge (the public quick-tunnel URL times out on
+    # connect), so the real-tunnel smoke is Linux-only. macOS support for the
+    # action's scripts is covered by the `tunnel bats (macos-latest)` job in
+    # tests.yml (real darwin install, start parse, detached spawn, stop).
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
