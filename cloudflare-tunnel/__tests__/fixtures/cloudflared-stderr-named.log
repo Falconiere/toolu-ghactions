@@ -1,0 +1,12 @@
+2024-12-02T12:34:56Z INF Starting tunnel tunnelID=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+2024-12-02T12:34:56Z INF Version 2024.12.2
+2024-12-02T12:34:56Z INF GOOS: linux, GOARCH: amd64, GoVersion: go1.22.7
+2024-12-02T12:34:56Z INF Settings: map[config:/etc/cloudflared/config.yml no-autoupdate:true token:****]
+2024-12-02T12:34:56Z INF Generated Connector ID: 11111111-2222-3333-4444-555555555555
+2024-12-02T12:34:56Z INF Initial protocol quic
+2024-12-02T12:34:56Z INF ICMP proxy will use 10.0.0.1 as source for IPv4
+2024-12-02T12:34:56Z INF Starting metrics server on 127.0.0.1:37655/metrics
+2024-12-02T12:34:57Z INF Registered tunnel connection connIndex=0 connection=aaaa-bbbb-cccc event=0 ip=198.41.192.7 location=sfo03 protocol=quic
+2024-12-02T12:34:57Z INF Registered tunnel connection connIndex=1 connection=dddd-eeee-ffff event=0 ip=198.41.200.13 location=lhr03 protocol=quic
+2024-12-02T12:34:57Z INF Registered tunnel connection connIndex=2 connection=1111-2222-3333 event=0 ip=198.41.192.27 location=sfo03 protocol=quic
+2024-12-02T12:34:57Z INF Registered tunnel connection connIndex=3 connection=4444-5555-6666 event=0 ip=198.41.200.63 location=lhr03 protocol=quic

@@ -1,0 +1,64 @@
+name: 'Toolu Cloudflare Tunnel — Start'
+description: |
+  Boots a Cloudflare Tunnel in the workflow job, exposing a local port
+  (default 3000) to the public internet. Quick tunnels (no account, ephemeral
+  *.trycloudflare.com URL) by default; set `tunnel-token` to use a named
+  tunnel. Pair with the matching `stop` step (use `if: always()`) to clean up.
+author: 'Falconiere'
+branding:
+  icon: 'cloud'
+  color: 'orange'
+
+inputs:
+  name:
+    description: 'Tunnel instance name. Namespaces PID/URL tmpfiles so multiple tunnels can run in the same job.'
+    required: false
+    default: 'default'
+  port:
+    description: 'Local port to expose (quick mode only — ignored when `tunnel-token` is set).'
+    required: false
+    default: '3000'
+  tunnel-token:
+    description: 'Cloudflare Tunnel token (from the dashboard or `cloudflared tunnel token`). When set, switches to named-tunnel mode.'
+    required: false
+    default: ''
+  tunnel-config:
+    description: 'Path to a cloudflared config.yml with custom ingress rules (named mode only). Copied to /etc/cloudflared/config.yml.'
+    required: false
+    default: ''
+  cloudflared-version:
+    description: 'cloudflared release tag to download (see cloudflare/cloudflared releases).'
+    required: false
+    default: '2024.12.2'
+  verify-checksum:
+    description: 'Verify cloudflared binary SHA256 against the release checksums.txt before installing. Defaults to false because the checksums.txt format is brittle (variable whitespace, optional BSD `*` prefix); opt in when you control the parser or have a pinned version known to parse cleanly.'
+    required: false
+    default: 'false'
+  start-timeout:
+    description: 'Seconds to wait for the tunnel URL/ID to appear in cloudflared output before failing.'
+    required: false
+    default: '30'
+
+outputs:
+  tunnel-url:
+    description: 'Public URL of the tunnel (quick mode only; empty in named mode unless ingress exposes a hostname).'
+  tunnel-id:
+    description: 'Tunnel ID (named mode only). Extracted by parsing the UUID from cloudflared stderr line matching `Registered tunnel connection.*<uuid>`, falling back to `cloudflared tunnel info <id-from-stdout>` after a 2s grace.'
+  tunnel-pid:
+    description: 'PID of the cloudflared process. Diagnostic only — stop reads its own tmpfile keyed by name, not this output.'
+  tunnel-name:
+    description: 'Echo of the name input (slugified), for downstream step convenience.'
+
+runs:
+  using: 'docker'
+  image: 'docker://ghcr.io/falconiere/toolu-ghactions/cloudflare-tunnel:v1'
+  args:
+    - 'start'
+  env:
+    INPUT_NAME: ${{ inputs.name }}
+    INPUT_PORT: ${{ inputs.port }}
+    INPUT_TUNNEL_TOKEN: ${{ inputs.tunnel-token }}
+    INPUT_TUNNEL_CONFIG: ${{ inputs.tunnel-config }}
+    INPUT_CLOUDFLARED_VERSION: ${{ inputs.cloudflared-version }}
+    INPUT_VERIFY_CHECKSUM: ${{ inputs.verify-checksum }}
+    INPUT_START_TIMEOUT: ${{ inputs.start-timeout }}

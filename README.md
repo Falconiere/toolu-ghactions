@@ -147,11 +147,18 @@ Use outputs in downstream workflow steps:
 
 ```
 .
-├── code-review/            # This action
+├── code-review/            # AI code review action (Toolu AI Code Review)
 │   ├── action.yml
 │   ├── Dockerfile
 │   ├── src/                # fetch-diff → build-prompt → call-openrouter → ...
 │   ├── prompts/            # Default review checklist
+│   └── __tests__/          # Hermetic bats test suite
+├── cloudflare-tunnel/      # Cloudflare Tunnel action (Toolu Cloudflare Tunnel)
+│   ├── start/action.yml    # Boots a tunnel, emits URL/ID outputs
+│   ├── stop/action.yml     # Tears down the tunnel
+│   ├── wait/action.yml     # Polls tunnel URL until reachable
+│   ├── Dockerfile
+│   ├── src/                # start.sh / stop.sh / wait.sh / install-cloudflared.sh
 │   └── __tests__/          # Hermetic bats test suite
 ├── scripts/
 │   └── parse-verdict.sh    # Shared: verdict format validator
@@ -160,17 +167,25 @@ Use outputs in downstream workflow steps:
 
 The monorepo is structured for future actions to share conventions and utilities.
 
+## Actions
+
+| Action | Description | Sub-actions |
+|---|---|---|
+| [`code-review`](./code-review/README.md) | AI PR review via OpenRouter (Toolu AI Code Review) | single root action |
+| [`cloudflare-tunnel`](./cloudflare-tunnel/README.md) | Expose runner ports to the internet via Cloudflare Tunnel | `start`, `stop`, `wait` |
+
 ## Development
 
 ```bash
-# Run all tests (requires bats, jq, git)
-bats code-review/__tests__/*.bats
+# Run all test suites (requires bats, jq, git)
+bats code-review/__tests__/*.bats cloudflare-tunnel/__tests__/*.bats
 
-# Build the Docker image
+# Build the Docker images
 docker build -t code-review-action:test code-review/
+docker build -t cloudflare-tunnel-action:test cloudflare-tunnel/
 
 # Lint all shell scripts (style/info advisory; warnings+ block CI)
-shellcheck --severity=warning code-review/src/*.sh scripts/*.sh
+shellcheck --severity=warning code-review/src/*.sh cloudflare-tunnel/src/*.sh scripts/*.sh
 
 # Validate action.yml against GitHub's schema
 npx @action-validator/cli code-review/action.yml
