@@ -4,10 +4,19 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  # A published release — created by release-please OR manually — rebuilds the
+  # images directly. This decouples image publishing from release-please's
+  # release-creation step, so a hiccup there (e.g. a token without repo write)
+  # no longer strands the images on an old version.
+  release:
+    types: [published]
 
 permissions:
   contents: write
   pull-requests: write
+  # release-please applies `autorelease:` labels to its PR (labels go through
+  # the issues API).
+  issues: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -16,6 +25,9 @@ concurrency:
 jobs:
   release-please:
     name: release-please
+    # The release event path skips straight to publishing; release-please only
+    # runs for pushes to main / manual dispatch.
+    if: github.event_name != 'release'
     runs-on: ubuntu-latest
     outputs:
       release_created: ${{ steps.rp.outputs.release_created }}
@@ -26,16 +38,46 @@ jobs:
         id: rp
         with:
           # A PAT or GitHub App token lets the release PR trigger other
-          # workflows (tests). Falls back to GITHUB_TOKEN, under which the
-          # release PR will NOT run CI — set RELEASE_PLEASE_TOKEN to fix that.
+          # workflows (tests) AND must belong to an account with write access
+          # to this repo. Falls back to GITHUB_TOKEN, under which the release PR
+          # will NOT run CI — set RELEASE_PLEASE_TOKEN to fix that.
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
           config-file: .github/release-please-config.json
           manifest-file: .github/release-please-manifest.json
 
+  version:
+    name: Resolve release version
+    needs: [release-please]
+    # Run when release-please just cut a release, or when a release was
+    # published directly. always() lets this run even though release-please is
+    # skipped on the release event.
+    if: |
+      always() &&
+      (needs.release-please.outputs.release_created == 'true' || github.event_name == 'release')
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      major: ${{ steps.v.outputs.major }}
+    steps:
+      - id: v
+        shell: bash
+        env:
+          RP_TAG: ${{ needs.release-please.outputs.tag_name }}
+          REL_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          # Prefer the published-release tag; fall back to release-please's.
+          tag="${REL_TAG:-$RP_TAG}"
+          if [ -z "$tag" ]; then echo "::error::could not resolve a release tag"; exit 1; fi
+          major="${tag#v}"; major="${major%%.*}"
+          if [ -z "$major" ]; then echo "::error::could not parse a major version from '$tag'"; exit 1; fi
+          echo "tag=$tag"     >> "$GITHUB_OUTPUT"
+          echo "major=$major" >> "$GITHUB_OUTPUT"
+
   publish-image:
     name: Build & push ${{ matrix.action }} image to GHCR
-    needs: release-please
-    if: needs.release-please.outputs.release_created == 'true'
+    needs: [version]
+    if: ${{ needs.version.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -68,8 +110,8 @@ jobs:
         with:
           images: ${{ env.IMAGE }}
           tags: |
-            type=raw,value=${{ needs.release-please.outputs.tag_name }}
-            type=raw,value=v${{ needs.release-please.outputs.major }}
+            type=raw,value=${{ needs.version.outputs.tag }}
+            type=raw,value=v${{ needs.version.outputs.major }}
             type=raw,value=latest
 
       - name: Build & push
@@ -85,8 +127,8 @@ jobs:
 
   move-major-alias:
     name: Move v<major> alias
-    needs: release-please
-    if: needs.release-please.outputs.release_created == 'true'
+    needs: [version]
+    if: ${{ needs.version.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -97,8 +139,8 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Move alias
         env:
-          TAG: ${{ needs.release-please.outputs.tag_name }}
-          MAJOR: ${{ needs.release-please.outputs.major }}
+          TAG: ${{ needs.version.outputs.tag }}
+          MAJOR: ${{ needs.version.outputs.major }}
         shell: bash
         run: |
           set -euo pipefail
