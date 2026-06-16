@@ -36,7 +36,7 @@ inputs:
     required: false
     default: '8000'
   TOKEN:
-    description: 'GitHub token for posting/editing comments. Use ${{ secrets.GITHUB_TOKEN }}'
+    description: 'GitHub token for posting/editing comments'
     required: false
     default: '${{ github.token }}'
 
