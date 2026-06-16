@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.2](https://github.com/Falconiere/toolu-ghactions/compare/v1.2.1...v1.2.2) (2026-06-16)
+
+
+### Bug Fixes
+
+* add root action.yml and rename to Toolu AI Code Review ([dc444bb](https://github.com/Falconiere/toolu-ghactions/commit/dc444bb0326d1e2e0701b6dadec7d9092b403caa))
+* **code-review:** avoid jq ARG_MAX overflow on large diffs ([35d954b](https://github.com/Falconiere/toolu-ghactions/commit/35d954b559fdfaf87f3ef335fa96451e0f507d34))
+
 ## [1.2.1](https://github.com/Falconiere/toolu-ghactions/compare/v1.2.0...v1.2.1) (2026-06-16)
 
 
