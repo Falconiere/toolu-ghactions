@@ -45,7 +45,7 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
         401|403) jq -nc --argjson hc "$HTTP_CODE" '{error:"Anthropic authentication failed", http_code:$hc}' >&2; exit 1 ;;
         400|402|404|408|422)
             jq -nc --argjson hc "$HTTP_CODE" --argjson b "$(safe_body)" '{error:"Anthropic request error", http_code:$hc, body:$b}' >&2; exit 1 ;;
-        429|5*|000|529) : ;;  # retry (529 = overloaded)
+        429|5*|000) : ;;  # retry (5* covers 5xx + 529 overloaded)
         *) jq -nc --argjson hc "$HTTP_CODE" --argjson b "$(safe_body)" '{error:"Anthropic API error", http_code:$hc, body:$b}' >&2; exit 1 ;;
     esac
 
