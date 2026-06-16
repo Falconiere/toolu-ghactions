@@ -3,22 +3,31 @@ description: |
   Automated AI code review for pull requests. Reviews every changed file
   against a 7-dimension checklist (correctness, security, performance, test
   coverage, doc accuracy, tight assertions, migration warnings) and posts a
-  structured verdict with actionable findings.
+  structured verdict with actionable findings. Supports 6 AI vendors
+  (OpenRouter, OpenAI, Anthropic, DeepSeek, Moonshot, MiniMax) with parallel
+  ensemble review and configurable merge strategies.
 author: 'Falconiere'
 branding:
   icon: 'check-circle'
   color: 'green'
 
 inputs:
+  PROVIDERS:
+    description: 'JSON array of {provider, model, api_key, enforce_json_schema?, max_tokens?} entries. Providers: openrouter, openai, anthropic, deepseek, moonshot, minimax. Overrides legacy single-provider inputs.'
+    required: false
+  MERGE_STRATEGY:
+    description: 'Strategy to merge N provider verdicts: conservative (any changes wins), majority (ceil(N/2)+1 changes required), all_approve (all must approve). Default: conservative'
+    required: false
+    default: 'conservative'
   OPENROUTER_API_KEY:
-    description: 'OpenRouter API key. Prefer passing via step-level env: block for better secret hygiene.'
+    description: 'OpenRouter API key. Prefer passing via step-level env: block for better secret hygiene. Legacy single-provider input; use PROVIDERS for multi-provider configurations.'
     required: false
   MODEL:
     description: 'OpenRouter model identifier'
     required: false
     default: 'minimax/minimax-m3'
   FALLBACK_MODEL:
-    description: 'Second model tried via the OpenRouter models[] fallback array when the primary model errors or is unavailable'
+    description: 'DEPRECATED: Dropped in multi-provider mode. Use PROVIDERS array to configure multiple models.'
     required: false
     default: 'anthropic/claude-sonnet-4-5'
   MAX_TOKENS:
@@ -26,7 +35,7 @@ inputs:
     required: false
     default: '4096'
   REVIEW_MODE:
-    description: 'parallel = one scoped sub-reviewer per dimension group + a coordinator pass (higher quality, ~5x API cost); single = one combined call (cheapest)'
+    description: 'DEPRECATED: No-op. Previously parallel=single vs parallel=multi-dimension; multi-provider ensemble review replaces this. Kept for backward compatibility.'
     required: false
     default: 'parallel'
   MIN_CONFIDENCE:
