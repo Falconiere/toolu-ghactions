@@ -40,8 +40,8 @@ jobs:
           # A PAT or GitHub App token lets the release PR trigger other
           # workflows (tests) AND must belong to an account with write access
           # to this repo. Falls back to GITHUB_TOKEN, under which the release PR
-          # will NOT run CI — set RELEASE_PLEASE_TOKEN to fix that.
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          # will NOT run CI — set RELEASE_TOOLU_ACTIONS_TOKEN to fix that.
+          token: ${{ secrets.RELEASE_TOOLU_ACTIONS_TOKEN || github.token }}
           config-file: .github/release-please-config.json
           manifest-file: .github/release-please-manifest.json
 
@@ -173,12 +173,12 @@ jobs:
     if: ${{ !cancelled() && needs.version.result == 'success' && needs.publish-image.result == 'success' }}
     runs-on: ubuntu-latest
     # Job-level env can read `secrets`; a step `if:` cannot. This lets the job
-    # skip cleanly until RELEASE_PLEASE_TOKEN + the mirror repos exist, instead
+    # skip cleanly until RELEASE_TOOLU_ACTIONS_TOKEN + the mirror repos exist, instead
     # of failing every release red during setup. Reuses the repo-owner PAT that
     # release-please already uses — its repo scope covers pushing to the owner's
     # public mirror repos.
     env:
-      HAS_PUSH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN != '' }}
+      HAS_PUSH_TOKEN: ${{ secrets.RELEASE_TOOLU_ACTIONS_TOKEN != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -193,7 +193,7 @@ jobs:
           fetch-depth: 0
       - name: Skip notice (no push token)
         if: env.HAS_PUSH_TOKEN != 'true'
-        run: echo "::notice::RELEASE_PLEASE_TOKEN not set — skipping ${{ matrix.action }} mirror. Create the mirror repos to enable Marketplace publishing."
+        run: echo "::notice::RELEASE_TOOLU_ACTIONS_TOKEN not set — skipping ${{ matrix.action }} mirror. Create the mirror repos to enable Marketplace publishing."
       - name: Sync ${{ matrix.action }} to ${{ matrix.mirror_repo }}
         if: env.HAS_PUSH_TOKEN == 'true'
         run: scripts/mirror-action.sh "$RUNNER_TEMP/mirror"
@@ -202,7 +202,7 @@ jobs:
           TAG: ${{ needs.version.outputs.tag }}
           MAJOR: ${{ needs.version.outputs.major }}
           MIRROR_REPO: ${{ matrix.mirror_repo }}
-          MIRROR_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          MIRROR_TOKEN: ${{ secrets.RELEASE_TOOLU_ACTIONS_TOKEN }}
           SOURCE_REPO: ${{ github.repository }}
           SOURCE_SHA: ${{ github.sha }}
           IMAGE_BASE: ghcr.io/${{ github.repository_owner }}/toolu-ghactions/code-review
