@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.1](https://github.com/Falconiere/toolu-ghactions/compare/v2.1.0...v2.1.1) (2026-06-17)
+
+
+### Bug Fixes
+
+* **release:** lowercase GHCR owner in mirror image ref ([2dd845e](https://github.com/Falconiere/toolu-ghactions/commit/2dd845e19b787200a79850f2acab0624352f0504))
+
 ## [2.1.0](https://github.com/Falconiere/toolu-ghactions/compare/v2.0.0...v2.1.0) (2026-06-17)
 
 
