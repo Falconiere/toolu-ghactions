@@ -58,7 +58,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: falconiere/toolu-ghactions/code-review@v1
+      - uses: falconiere/toolu-ghactions/code-review@v2
         with:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 ```
@@ -68,7 +68,7 @@ Multi-provider ensembles, merge strategies, custom checklists, and the full inpu
 ### cloudflare-tunnel
 
 ```yaml
-- uses: falconiere/toolu-ghactions/cloudflare-tunnel/start@v1
+- uses: falconiere/toolu-ghactions/cloudflare-tunnel/start@v2
   id: tunnel
   with:
     port: 3000
@@ -147,9 +147,9 @@ Fully automated via [release-please](https://github.com/googleapis/release-pleas
 
 - **Commit convention** — [Conventional Commits](https://www.conventionalcommits.org/): `fix:` → patch, `feat:` → minor, `feat!:`/`fix!:` → major. `docs:`/`chore:`/`test:`/`ci:` → changelog only.
 - **release-please PR** — opened/updated on each push to `main` with the version bump and changelog.
-- **Merge it** — triggers `release.yml`: tags the release, publishes a GitHub Release, and force-moves the floating major alias (`v1` → latest `v1.x.y`).
+- **Merge it** — triggers `release.yml`: tags the release, publishes a GitHub Release, and force-moves the floating major alias (`v2` → latest `v2.x.y`).
 
-Pin `@v1` for the floating major (**recommended**), or `@v1.2.3` for exact semver. Force a bump with `Release-As: X.Y.Z` in a commit footer.
+Pin `@v2` for the floating major (**recommended**), or `@v2.0.0` for exact semver. Force a bump with `Release-As: X.Y.Z` in a commit footer.
 
 ## License
 
