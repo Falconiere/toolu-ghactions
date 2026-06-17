@@ -76,6 +76,32 @@ inputs:
     description: 'GitHub token for posting/editing comments'
     required: false
     default: '${{ github.token }}'
+  APP_ID:
+    description: 'GitHub App id. Set together with APP_PRIVATE_KEY to post review comments as a custom-branded App ("Toolu - Code Review") instead of github-actions[bot]. Both must be set or the action falls back to the default identity.'
+    required: false
+  APP_PRIVATE_KEY:
+    description: 'GitHub App private key (PEM). Pair with APP_ID. Pass via a secret; never inline. Used only to mint a short-lived installation token — never logged.'
+    required: false
+  TRIGGER_PHRASE:
+    description: 'Mention prefix that re-triggers a review from a PR comment, e.g. "@toolu review focus on auth". Requires the workflow to also listen on issue_comment.'
+    required: false
+    default: '@toolu'
+  MIN_TRIGGER_PERMISSION:
+    description: 'Minimum repo permission a commenter needs to trigger a review via @mention: write or admin. The check fails closed (denied on any error).'
+    required: false
+    default: 'write'
+  BOT_NAME:
+    description: 'Display name shown in the comment body header.'
+    required: false
+    default: 'Toolu — Code Review'
+  BOT_LOGO_URL:
+    description: 'Logo image shown in the comment body header.'
+    required: false
+    default: 'https://raw.githubusercontent.com/falconiere/toolu-ghactions/main/code-review/assets/logo.png'
+  REVIEW_MEMORY:
+    description: 'When true, recap what changed since the last review (resolved / still-open / new) and keep a collapsed history, using a hidden state marker in the sticky comment. Set false to disable memory.'
+    required: false
+    default: 'true'
 
 outputs:
   verdict:

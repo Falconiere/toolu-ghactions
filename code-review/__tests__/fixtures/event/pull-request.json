@@ -1,0 +1,19 @@
+{
+  "action": "synchronize",
+  "number": 42,
+  "pull_request": {
+    "number": 42,
+    "head": {
+      "ref": "feat/add-login",
+      "sha": "abc123def456"
+    },
+    "base": {
+      "ref": "main",
+      "sha": "789012abc345"
+    }
+  },
+  "repository": {
+    "full_name": "test-org/test-repo",
+    "clone_url": "https://github.com/test-org/test-repo.git"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "action": "created",
+  "issue": {
+    "number": 42,
+    "pull_request": {
+      "url": "https://api.github.com/repos/test-org/test-repo/pulls/42",
+      "html_url": "https://github.com/test-org/test-repo/pull/42"
+    }
+  },
+  "comment": {
+    "id": 5559999,
+    "body": "@toolu review please take a look",
+    "user": {
+      "login": "bob",
+      "type": "User"
+    }
+  },
+  "repository": {
+    "full_name": "test-org/test-repo"
+  }
+}

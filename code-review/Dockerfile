@@ -4,7 +4,10 @@ RUN apk add --no-cache \
     bash \
     git \
     jq \
-    curl
+    curl \
+    openssl
+# gzip + base64 ship with busybox in the alpine base (used by review-state.sh
+# to encode the hidden state marker); openssl signs the GitHub App JWT.
 
 COPY src/ /action/src/
 COPY prompts/ /action/prompts/

@@ -3,6 +3,10 @@
 # (binary / noise / text), line-prime the text diff, and optionally truncate.
 #
 # Reads INPUT_BASE_BRANCH, INPUT_MAX_FILES, INPUT_MAX_DIFF_LINES from env.
+# REVIEW_HEAD selects the ref to diff against the base (default HEAD). An
+# `@toolu review` triggered via issue_comment checks out the default branch
+# rather than the PR head, so a sibling script fetches `pull/N/head` and points
+# REVIEW_HEAD at it to diff that ref instead of the working-tree HEAD.
 # Outputs to stdout a JSON object:
 #   { diff, files:[{path,changed_lines}], changed_files[], binary_files[],
 #     dropped_files:[{path,reason}], total_lines, total_files, truncated }
@@ -31,6 +35,9 @@ BASE_BRANCH="${INPUT_BASE_BRANCH:-main}"
 # positive value opts back into a hard file-count skip / diff-line truncation.
 MAX_FILES="${INPUT_MAX_FILES:-0}"
 MAX_DIFF_LINES="${INPUT_MAX_DIFF_LINES:-0}"
+# Ref to diff against the base. Defaults to HEAD (the checked-out tip); callers
+# reviewing a PR head fetched into a non-checked-out ref set this to that ref.
+REVIEW_HEAD="${REVIEW_HEAD:-HEAD}"
 
 # Prefer the PR base ref when the caller left the default.
 if [ -n "${GITHUB_BASE_REF:-}" ] && [ "$BASE_BRANCH" = "main" ]; then
@@ -52,7 +59,7 @@ if ! git rev-parse --verify "$REMOTE_BASE" >/dev/null 2>&1; then
     fi
 fi
 
-MERGE_BASE=$(git merge-base HEAD "$REMOTE_BASE" 2>/dev/null || true)
+MERGE_BASE=$(git merge-base "$REVIEW_HEAD" "$REMOTE_BASE" 2>/dev/null || true)
 
 # actions/checkout defaults to fetch-depth: 1, so both HEAD and the base tip are
 # grafted shallow and share no visible ancestor — merge-base comes back empty.
@@ -64,12 +71,12 @@ if [ -z "$MERGE_BASE" ] \
     echo "  Deepening shallow history to find merge-base..." >&2
     for depth in 100 500 2000; do
         git_fetch origin --deepen="$depth" >/dev/null 2>&1 || true
-        MERGE_BASE=$(git merge-base HEAD "$REMOTE_BASE" 2>/dev/null || true)
+        MERGE_BASE=$(git merge-base "$REVIEW_HEAD" "$REMOTE_BASE" 2>/dev/null || true)
         [ -n "$MERGE_BASE" ] && break
     done
     if [ -z "$MERGE_BASE" ]; then
         git_fetch origin --unshallow >/dev/null 2>&1 || true
-        MERGE_BASE=$(git merge-base HEAD "$REMOTE_BASE" 2>/dev/null || true)
+        MERGE_BASE=$(git merge-base "$REVIEW_HEAD" "$REMOTE_BASE" 2>/dev/null || true)
     fi
 fi
 
@@ -79,7 +86,7 @@ if [ -z "$MERGE_BASE" ]; then
 fi
 
 # Count changed files.
-CHANGED_FILES=$(git diff --name-only "$MERGE_BASE" HEAD 2>/dev/null || true)
+CHANGED_FILES=$(git diff --name-only "$MERGE_BASE" "$REVIEW_HEAD" 2>/dev/null || true)
 if [ -z "${CHANGED_FILES//[[:space:]]/}" ]; then
     TOTAL_FILES=0
 else
@@ -112,7 +119,7 @@ noise_reason() {
         *.map) echo "sourcemap"; return 0 ;;
     esac
     # Generated-file marker in the first lines of the new content.
-    if git show "HEAD:$path" 2>/dev/null | head -20 | grep -qE '@generated|DO NOT EDIT'; then
+    if git show "$REVIEW_HEAD:$path" 2>/dev/null | head -20 | grep -qE '@generated|DO NOT EDIT'; then
         echo "generated"
         return 0
     fi
@@ -123,7 +130,7 @@ noise_reason() {
 BINARY_FILES=()
 TEXT_CHANGED_FILES=()
 DROPPED_JSON="[]"
-NUMSTAT=$(git diff --numstat "$MERGE_BASE" HEAD 2>/dev/null || true)
+NUMSTAT=$(git diff --numstat "$MERGE_BASE" "$REVIEW_HEAD" 2>/dev/null || true)
 
 while IFS=$'\t' read -r added removed path; do
     [ -z "$path" ] && continue
@@ -142,7 +149,7 @@ done <<< "$NUMSTAT"
 DIFF=""
 FILES_JSON="[]"
 if [ ${#TEXT_CHANGED_FILES[@]} -gt 0 ]; then
-    RAW_DIFF=$(git diff "$MERGE_BASE" HEAD -- "${TEXT_CHANGED_FILES[@]}" 2>/dev/null || true)
+    RAW_DIFF=$(git diff "$MERGE_BASE" "$REVIEW_HEAD" -- "${TEXT_CHANGED_FILES[@]}" 2>/dev/null || true)
     SHAPED=$(printf '%s\n' "$RAW_DIFF" | bash "$SCRIPT_DIR/shape-diff.sh")
     DIFF=$(jq -r '.diff' <<< "$SHAPED")
     FILES_JSON=$(jq -c '.files' <<< "$SHAPED")

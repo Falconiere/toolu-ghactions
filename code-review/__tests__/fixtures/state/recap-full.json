@@ -1,0 +1,46 @@
+{
+  "new": [
+    {
+      "path": "src/new/file.ts",
+      "line": 9,
+      "severity": "blocker",
+      "category": "security",
+      "text": "Hardcoded secret token in source.",
+      "fp": "255ad3a18e46e0f1b61d6689c552bc75282f1f4a"
+    }
+  ],
+  "open": [
+    {
+      "path": "src/auth/login.ts",
+      "line": 42,
+      "severity": "high",
+      "category": "security",
+      "text": "SQL injection via string concatenation.",
+      "fp": "ad62596708dfcdacd6fe289d83678342da5aa531"
+    }
+  ],
+  "resolved": [
+    {
+      "fp": "96e106467cd9df230b75fbbd2d1cd8bfcba5d467",
+      "path": "src/utils/format.ts",
+      "line": 17,
+      "severity": "low",
+      "category": "correctness",
+      "text": "The comment claims the function was replaced with Intl.NumberFormat but the body still uses amount.toFixed(2)."
+    },
+    {
+      "fp": "b2c659f551bf8e6d8a683b5648bce40a427c7de5",
+      "path": "src/legacy/old.ts",
+      "line": 5,
+      "severity": "low",
+      "category": "docs",
+      "text": "Outdated module docstring references a removed flag."
+    }
+  ],
+  "counts": {
+    "new": 1,
+    "open": 1,
+    "resolved": 2,
+    "total": 2
+  }
+}

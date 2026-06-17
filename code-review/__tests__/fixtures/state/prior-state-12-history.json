@@ -1,0 +1,139 @@
+{
+  "schema": "toolu-review-state",
+  "version": 1,
+  "findings": [],
+  "history": [
+    {
+      "sha": "sha1",
+      "ts": 1781700100,
+      "verdict": "changes",
+      "counts": {
+        "new": 0,
+        "open": 0,
+        "resolved": 0,
+        "total": 0
+      }
+    },
+    {
+      "sha": "sha2",
+      "ts": 1781700200,
+      "verdict": "approved",
+      "counts": {
+        "new": 0,
+        "open": 0,
+        "resolved": 0,
+        "total": 0
+      }
+    },
+    {
+      "sha": "sha3",
+      "ts": 1781700300,
+      "verdict": "changes",
+      "counts": {
+        "new": 0,
+        "open": 0,
+        "resolved": 0,
+        "total": 0
+      }
+    },
+    {
+      "sha": "sha4",
+      "ts": 1781700400,
+      "verdict": "approved",
+      "counts": {
+        "new": 0,
+        "open": 0,
+        "resolved": 0,
+        "total": 0
+      }
+    },
+    {
+      "sha": "sha5",
+      "ts": 1781700500,
+      "verdict": "changes",
+      "counts": {
+        "new": 0,
+        "open": 0,
+        "resolved": 0,
+        "total": 0
+      }
+    },
+    {
+      "sha": "sha6",
+      "ts": 1781700600,
+      "verdict": "approved",
+      "counts": {
+        "new": 0,
+        "open": 0,
+        "resolved": 0,
+        "total": 0
+      }
+    },
+    {
+      "sha": "sha7",
+      "ts": 1781700700,
+      "verdict": "changes",
+      "counts": {
+        "new": 0,
+        "open": 0,
+        "resolved": 0,
+        "total": 0
+      }
+    },
+    {
+      "sha": "sha8",
+      "ts": 1781700800,
+      "verdict": "approved",
+      "counts": {
+        "new": 0,
+        "open": 0,
+        "resolved": 0,
+        "total": 0
+      }
+    },
+    {
+      "sha": "sha9",
+      "ts": 1781700900,
+      "verdict": "changes",
+      "counts": {
+        "new": 0,
+        "open": 0,
+        "resolved": 0,
+        "total": 0
+      }
+    },
+    {
+      "sha": "sha10",
+      "ts": 1781701000,
+      "verdict": "approved",
+      "counts": {
+        "new": 0,
+        "open": 0,
+        "resolved": 0,
+        "total": 0
+      }
+    },
+    {
+      "sha": "sha11",
+      "ts": 1781701100,
+      "verdict": "changes",
+      "counts": {
+        "new": 0,
+        "open": 0,
+        "resolved": 0,
+        "total": 0
+      }
+    },
+    {
+      "sha": "sha12",
+      "ts": 1781701200,
+      "verdict": "approved",
+      "counts": {
+        "new": 0,
+        "open": 0,
+        "resolved": 0,
+        "total": 0
+      }
+    }
+  ]
+}
