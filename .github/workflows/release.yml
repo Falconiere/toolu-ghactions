@@ -205,4 +205,7 @@ jobs:
           MIRROR_TOKEN: ${{ secrets.RELEASE_TOOLU_ACTIONS_TOKEN }}
           SOURCE_REPO: ${{ github.repository }}
           SOURCE_SHA: ${{ github.sha }}
-          IMAGE_BASE: ghcr.io/${{ github.repository_owner }}/toolu-ghactions/code-review
+          # Lowercase owner: GHCR image refs must be lowercase, but
+          # github.repository_owner preserves case (Falconiere) and a
+          # `docker://` ref with uppercase fails `docker pull`.
+          IMAGE_BASE: ghcr.io/falconiere/toolu-ghactions/code-review
