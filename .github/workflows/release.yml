@@ -162,3 +162,47 @@ jobs:
             echo "::error::Failed to move v${MAJOR} alias to ${TAG} — the floating major tag is now stale"
             exit 1
           }
+
+  mirror:
+    name: Mirror ${{ matrix.action }} to publish repo
+    needs: [version, publish-image]
+    # Wait on publish-image so a mirror tag never references a :v<major> image
+    # that has not been pushed yet. !cancelled() forces the if to evaluate even
+    # though `version`'s ancestor release-please is skipped on the release event;
+    # the result checks then gate on both jobs actually succeeding.
+    if: ${{ !cancelled() && needs.version.result == 'success' && needs.publish-image.result == 'success' }}
+    runs-on: ubuntu-latest
+    # Job-level env can read `secrets`; a step `if:` cannot. This lets the job
+    # skip cleanly until RELEASE_PLEASE_TOKEN + the mirror repos exist, instead
+    # of failing every release red during setup. Reuses the repo-owner PAT that
+    # release-please already uses — its repo scope covers pushing to the owner's
+    # public mirror repos.
+    env:
+      HAS_PUSH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - action: code-review
+            mirror_repo: Falconiere/toolu-code-review
+          - action: cloudflare-tunnel
+            mirror_repo: Falconiere/toolu-cloudflare-tunnel
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Skip notice (no push token)
+        if: env.HAS_PUSH_TOKEN != 'true'
+        run: echo "::notice::RELEASE_PLEASE_TOKEN not set — skipping ${{ matrix.action }} mirror. Create the mirror repos to enable Marketplace publishing."
+      - name: Sync ${{ matrix.action }} to ${{ matrix.mirror_repo }}
+        if: env.HAS_PUSH_TOKEN == 'true'
+        run: scripts/mirror-action.sh "$RUNNER_TEMP/mirror"
+        env:
+          ACTION: ${{ matrix.action }}
+          TAG: ${{ needs.version.outputs.tag }}
+          MAJOR: ${{ needs.version.outputs.major }}
+          MIRROR_REPO: ${{ matrix.mirror_repo }}
+          MIRROR_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          SOURCE_REPO: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+          IMAGE_BASE: ghcr.io/${{ github.repository_owner }}/toolu-ghactions/code-review
