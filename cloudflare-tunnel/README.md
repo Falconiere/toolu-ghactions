@@ -2,11 +2,12 @@
 
 # 🌐 cloudflare-tunnel
 
-### Expose a runner port to the public internet — for live preview review.
+### Expose a runner port to the public internet for live preview review
 
 Expose a local `HOST:PORT` from your GitHub Actions runner to the public internet via a Cloudflare Tunnel. Quick tunnels (no account, ephemeral `*.trycloudflare.com` URL) work out of the box; named tunnels (account-bound, persistent URL) activate when `tunnel-token` is set.
 
 [![Release](https://img.shields.io/github/v/release/Falconiere/toolu-ghactions?sort=semver&color=d97757)](https://github.com/Falconiere/toolu-ghactions/releases)
+[![Tests](https://img.shields.io/badge/tests-108%20passing-3fb950)](https://github.com/Falconiere/toolu-ghactions/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](../LICENSE)
 
 [Quick start](#quick-start) · [Outputs](#outputs) · [Inputs](#start-inputs) · [Named tunnel](#named-tunnel-setup) · [Troubleshooting](#troubleshooting)

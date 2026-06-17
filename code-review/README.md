@@ -2,13 +2,13 @@
 
 # 🔍 code-review
 
-### A multi-vendor AI reviewer for every pull request.
+### Multi-vendor AI code review for every pull request
 
 Audits the diff against a 7-dimension checklist — correctness, security, performance, test coverage, doc accuracy, tight assertions, migration warnings — using **one model or an ensemble of up to 6 vendors** (OpenRouter, OpenAI, Anthropic, DeepSeek, Moonshot, MiniMax) voting in parallel. Merges the verdicts and posts a structured, machine-readable comment with inline, committable suggestions.
 
 [![Release](https://img.shields.io/github/v/release/Falconiere/toolu-ghactions?sort=semver&color=d97757)](https://github.com/Falconiere/toolu-ghactions/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](../LICENSE)
-[![Tests](https://img.shields.io/badge/tests-108%20passing-brightgreen)](https://github.com/Falconiere/toolu-ghactions/actions/workflows/tests.yml)
+[![Tests](https://img.shields.io/badge/tests-108%20passing-3fb950)](https://github.com/Falconiere/toolu-ghactions/actions/workflows/tests.yml)
 
 [Quick start](#quick-start) · [Multiple providers](#multiple-providers) · [How it works](#how-it-works) · [Example verdict](#example-verdict) · [Inputs](#inputs) · [Outputs](#outputs)
 
@@ -180,7 +180,7 @@ The verdict label at the bottom is machine-readable: `` `agent-merge-approved` `
 
 | Input | Required | Default | Description |
 |---|---|---|---|
-| `PROVIDERS` | no | — | JSON array of `{provider, model, api_key}` entries. When set, runs one review per provider in parallel. Preferred for v1.3+. |
+| `PROVIDERS` | no | — | JSON array of `{provider, model, api_key}` entries. When set, runs one review per provider in parallel. Preferred over the legacy single-provider inputs. |
 | `MERGE_STRATEGY` | no | `conservative` | How to merge N verdicts: `conservative` (any changes wins), `majority`, `all_approve` |
 | `OPENROUTER_API_KEY` | no | — | **Legacy.** OpenRouter API key. Used only when `PROVIDERS` is unset. Auto-translated to a single-provider `PROVIDERS` list. |
 | `MODEL` | no | `minimax/minimax-m3` | **Legacy.** OpenRouter model identifier. Used only when `PROVIDERS` is unset and `OPENROUTER_API_KEY` is set. |
