@@ -114,6 +114,74 @@ EOF
     [[ "$output" == *"exited before emitting"* ]]
 }
 
+@test "URL emitted but no edge registration: fails with 'not registered' message" {
+    # cloudflared allocates + prints the quick-tunnel URL but never registers a
+    # connection (e.g. edge unreachable). start.sh must not treat the captured
+    # URL as ready — it should wait for "Registered tunnel connection", time
+    # out, and fail rather than emit a dead URL that poisons DNS downstream.
+    local fb="$STUB_BIN/fake-cloudflared-noreg"
+    cat > "$fb" <<'FAKE'
+#!/usr/bin/env bash
+echo "2024-12-02T12:34:56Z INF Starting tunnel" >&2
+echo "2024-12-02T12:34:58Z INF https://example-slug-here.trycloudflare.com" >&2
+sleep 10
+FAKE
+    chmod +x "$fb"
+    cat > "$STUB_BIN/curl" <<EOF
+#!/usr/bin/env bash
+url=""; outfile=""
+while [ \$# -gt 0 ]; do
+    case "\$1" in -o) outfile="\$2"; shift 2 ;; -*) shift ;; *) url="\$1"; shift ;; esac
+done
+case "\$url" in
+    *cloudflared-linux-amd64) cp "$fb" "\$outfile"; chmod +x "\$outfile" ;;
+    *checksums.txt) echo "0000000000000000000000000000000000000000000000000000000000000000  cloudflared-linux-amd64" > "\$outfile" ;;
+    *) printf 200 ;;
+esac
+EOF
+    chmod +x "$STUB_BIN/curl"
+    export INPUT_START_TIMEOUT=2
+    run bash "$SRC_DIR/start.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not registered"* ]]
+    PID=$(cat /tmp/cf-tunnel-default.pid 2>/dev/null || echo "")
+    [ -n "$PID" ] && kill -KILL "$PID" 2>/dev/null || true
+}
+
+@test "protocol input: forwarded to cloudflared as --protocol" {
+    # Fake cloudflared records its argv, then replays the quick fixture so
+    # registration is seen and start.sh exits 0. Assert --protocol http2 made it
+    # through to the spawned process.
+    local argv_log="$BATS_TEST_TMPDIR/cloudflared-argv"
+    local fb="$STUB_BIN/fake-cloudflared-argv"
+    cat > "$fb" <<FAKE
+#!/usr/bin/env bash
+printf '%s\n' "\$*" > "$argv_log"
+cat "$FIXTURES_DIR/cloudflared-stderr-quick.log"
+sleep 5
+FAKE
+    chmod +x "$fb"
+    cat > "$STUB_BIN/curl" <<EOF
+#!/usr/bin/env bash
+url=""; outfile=""
+while [ \$# -gt 0 ]; do
+    case "\$1" in -o) outfile="\$2"; shift 2 ;; -*) shift ;; *) url="\$1"; shift ;; esac
+done
+case "\$url" in
+    *cloudflared-linux-amd64) cp "$fb" "\$outfile"; chmod +x "\$outfile" ;;
+    *checksums.txt) echo "0000000000000000000000000000000000000000000000000000000000000000  cloudflared-linux-amd64" > "\$outfile" ;;
+    *) printf 200 ;;
+esac
+EOF
+    chmod +x "$STUB_BIN/curl"
+    export INPUT_PROTOCOL="http2"
+    run bash "$SRC_DIR/start.sh"
+    [ "$status" -eq 0 ]
+    [[ "$(cat "$argv_log")" == *"--protocol http2"* ]]
+    PID=$(cat /tmp/cf-tunnel-default.pid 2>/dev/null || echo "")
+    [ -n "$PID" ] && kill -KILL "$PID" 2>/dev/null || true
+}
+
 @test "name input produces distinct pid files and slugified tunnel-name output" {
     stub_curl_deliver_quick_probe_ok
     export INPUT_NAME="preview-app"

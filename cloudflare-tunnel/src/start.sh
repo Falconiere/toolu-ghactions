@@ -38,6 +38,7 @@ PORT="${INPUT_PORT:-3000}"
 TUNNEL_TOKEN="${INPUT_TUNNEL_TOKEN:-}"
 TUNNEL_CONFIG="${INPUT_TUNNEL_CONFIG:-}"
 START_TIMEOUT="${INPUT_START_TIMEOUT:-30}"
+PROTOCOL="${INPUT_PROTOCOL:-}"
 
 PID_FILE=$(pid_path "$SLUG")
 URL_FILE=$(url_path "$SLUG")
@@ -68,6 +69,15 @@ else
     # the runner host (composite action), so it reaches the app under test.
     CLOUDFLARED_ARGS+=(tunnel --url "http://${HOST}:${PORT}")
     OUTPUT_FIELD="tunnel-url"
+fi
+
+# Optional transport override. Quick tunnels default to QUIC (UDP 7844); on
+# networks that block/throttle outbound UDP, cloudflared retries QUIC for ~5min
+# before falling back to http2 — long past any sane start-timeout, so the tunnel
+# never registers. Setting protocol=http2 (TCP 443) avoids that stall. Empty
+# leaves cloudflared's default (quick tunnels force QUIC).
+if [ -n "$PROTOCOL" ]; then
+    CLOUDFLARED_ARGS+=(--protocol "$PROTOCOL")
 fi
 
 # --- Phase 3: spawn cloudflared, detached so it outlives this step ---
@@ -115,6 +125,30 @@ if [ "$OUTPUT_FIELD" = "tunnel-id" ] && [ -z "$TUNNEL_ID" ]; then
     kill -KILL "$PID" 2>/dev/null || true
     fail "tunnel ID not seen within ${START_TIMEOUT}s" "$(tail -50 "$LOG_FILE")"
 fi
+
+# --- Phase 4b: wait for edge-connection registration ---
+# The URL/ID above appears before the tunnel actually connects to the Cloudflare
+# edge. Returning now would publish a not-yet-live URL and let the Phase 5 probe
+# resolve an unpublished hostname — poisoning the resolver with a cached NXDOMAIN
+# that lingers through a downstream `wait` step's whole window. Block until the
+# first "Registered tunnel connection" so readiness means "live at the edge".
+REGISTERED=""
+REG_DEADLINE=$(( $(date +%s) + START_TIMEOUT ))
+while [ "$(date +%s)" -lt "$REG_DEADLINE" ]; do
+    if ! kill -0 "$PID" 2>/dev/null; then
+        fail "cloudflared exited before registering a tunnel connection" "$(tail -50 "$LOG_FILE")"
+    fi
+    if grep -qE "$TUNNEL_REGISTERED_REGEX" "$LOG_FILE"; then
+        REGISTERED=1
+        break
+    fi
+    sleep 0.5
+done
+if [ -z "$REGISTERED" ]; then
+    kill -KILL "$PID" 2>/dev/null || true
+    fail "tunnel connection not registered within ${START_TIMEOUT}s" "$(tail -50 "$LOG_FILE")"
+fi
+log "Edge connection registered"
 
 # --- Phase 5: persist + best-effort probe ---
 [ -n "$TUNNEL_URL" ] && printf '%s\n' "$TUNNEL_URL" > "$URL_FILE"

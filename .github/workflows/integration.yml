@@ -46,18 +46,26 @@ jobs:
         with:
           host: 127.0.0.1
           port: 8000
+          # Hosted runners can block/throttle outbound UDP 7844 (QUIC); force
+          # http2 (TCP 443) so the tunnel registers promptly instead of cloudflared
+          # burning ~5min retrying QUIC before it falls back on its own.
+          protocol: http2
 
       - name: Wait for tunnel
         uses: ./cloudflare-tunnel/wait
         with:
           url: ${{ steps.start.outputs.tunnel-url }}
-          wait-timeout: 60
+          wait-timeout: 120
 
       - name: Probe tunnel URL (proves tunnel -> 127.0.0.1:8000)
         run: |
           body=$(curl -fsS --max-time 10 "${{ steps.start.outputs.tunnel-url }}")
           echo "$body"
           echo "$body" | grep -q "hello from ${RUNNER_OS}"
+
+      - name: Dump cloudflared log
+        if: failure()
+        run: cat /tmp/cf-tunnel-*.log || true
 
       - name: Stop tunnel
         if: always()
