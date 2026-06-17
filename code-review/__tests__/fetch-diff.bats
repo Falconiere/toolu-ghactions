@@ -188,6 +188,42 @@ teardown_git_repo() {
     rm -rf "$ORIGIN" "$TMPDIR"
 }
 
+@test "fetch-diff: REVIEW_HEAD diffs a non-checked-out ref, not the working HEAD" {
+    # Mirrors an `@toolu review` via issue_comment: the runner checked out the
+    # default branch (main) but a sibling script fetched the PR head into a
+    # separate ref. The working-tree HEAD has NO changes vs main; REVIEW_HEAD
+    # points at the fetched ref, which is where the real change lives.
+    setup_git_repo  # HEAD = main, only README.md
+
+    # Feature commit on a ref that is NOT checked out.
+    git checkout -b feature --quiet
+    echo "export const reviewed = true" > review-only.ts
+    git add review-only.ts
+    git commit -m "feature change" --quiet
+    FEATURE_SHA=$(git rev-parse HEAD)
+
+    # Return the working tree to main so HEAD has nothing to diff against main.
+    git checkout main --quiet
+
+    [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ]
+    # Sanity: HEAD vs main is empty, so a default (HEAD) run would see no files.
+    [ -z "$(git diff --name-only main HEAD)" ]
+
+    export INPUT_MAX_FILES=100 INPUT_MAX_DIFF_LINES=8000 INPUT_BASE_BRANCH=main GITHUB_BASE_REF=main
+    export REVIEW_HEAD="$FEATURE_SHA"
+
+    run bash "$SRC_DIR/fetch-diff.sh"
+    [ "$status" -eq 0 ]
+
+    # The diff reflects REVIEW_HEAD's change, not the working HEAD's (none).
+    [ "$(echo "$output" | jq -r '.total_files')" -eq 1 ]
+    echo "$output" | jq -e '.changed_files | index("review-only.ts") != null'
+    echo "$output" | jq -r '.diff' | grep -qE '^L[0-9]+: \+export const reviewed = true'
+
+    unset REVIEW_HEAD
+    teardown_git_repo
+}
+
 @test "fetch-diff: empty repo has total_files=0" {
     setup_git_repo
 

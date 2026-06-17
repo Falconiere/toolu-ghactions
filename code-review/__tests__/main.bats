@@ -127,3 +127,19 @@ ENDSCRIPT
     grep -q 'verdict=' "$GITHUB_OUTPUT"
     teardown_repo
 }
+
+@test "main: non-triggering issue_comment exits skip and writes outputs (no provider run)" {
+    setup_repo; setup_pipeline_curl
+    export OPENROUTER_API_KEY="sk-or-test" GITHUB_TOKEN="ghp_test" BACKOFF_BASE=0
+    export INPUT_BASE_BRANCH=main GITHUB_BASE_REF=main
+    unset INPUT_PROVIDERS
+    # An issue_comment with no trigger phrase must NOT run a review, must exit 0,
+    # and must still emit verdict=skip so consumers gating on the output get a value.
+    export GITHUB_EVENT_NAME="issue_comment"
+    export GITHUB_EVENT_PATH="$FIXTURES_DIR/event/issue-comment-nophrase.json"
+
+    run bash "$SRC_DIR/main.sh"
+    [ "$status" -eq 0 ]
+    grep -q 'verdict=skip' "$GITHUB_OUTPUT"
+    teardown_repo
+}

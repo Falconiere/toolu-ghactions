@@ -1,0 +1,17 @@
+{
+  "action": "created",
+  "issue": {
+    "number": 17
+  },
+  "comment": {
+    "id": 5550017,
+    "body": "@toolu review focus on auth",
+    "user": {
+      "login": "alice",
+      "type": "User"
+    }
+  },
+  "repository": {
+    "full_name": "test-org/test-repo"
+  }
+}

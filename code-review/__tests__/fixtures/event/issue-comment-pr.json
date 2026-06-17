@@ -1,0 +1,21 @@
+{
+  "action": "created",
+  "issue": {
+    "number": 42,
+    "pull_request": {
+      "url": "https://api.github.com/repos/test-org/test-repo/pulls/42",
+      "html_url": "https://github.com/test-org/test-repo/pull/42"
+    }
+  },
+  "comment": {
+    "id": 5551234,
+    "body": "@toolu review focus on auth",
+    "user": {
+      "login": "alice",
+      "type": "User"
+    }
+  },
+  "repository": {
+    "full_name": "test-org/test-repo"
+  }
+}

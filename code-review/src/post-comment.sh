@@ -7,6 +7,8 @@
 # Outputs comment_url to stdout; also sets COMMENT_URL for output capture.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 TOKEN="${GITHUB_TOKEN:-}"
 REPO="${GITHUB_REPOSITORY:-}"
 EVENT_PATH="${GITHUB_EVENT_PATH:-/dev/null}"
@@ -50,33 +52,17 @@ HEADER_AUTH="Authorization: Bearer $TOKEN"
 HEADER_ACCEPT="Accept: application/vnd.github+json"
 HEADER_API="X-GitHub-Api-Version: 2022-11-28"
 
-# --- Find existing bot comment ---
-# Accumulate matching bot comments across ALL pages, then pick the globally
-# latest by created_at. A per-page "last" would wrongly prefer a stale comment
-# on a later page over a newer one on an earlier page.
-ALL_MATCHES="[]"
-COMMENTS_PAGE=1
-
-while true; do
-    RESPONSE=$(curl -s "${CURL_TIMEOUTS[@]}" -H "$HEADER_AUTH" -H "$HEADER_ACCEPT" -H "$HEADER_API" \
-        "$COMMENTS_URL?per_page=100&page=$COMMENTS_PAGE" 2>/dev/null || echo "[]")
-
-    PAGE_MATCHES=$(echo "$RESPONSE" | jq -c '
-        [.[] | select(
-            .user.login == "github-actions[bot]" and
-            (.body | test("### Code Review|### PR Review in Progress"))
-        )]' 2>/dev/null || echo "[]")
-    ALL_MATCHES=$(jq -cn --argjson a "$ALL_MATCHES" --argjson b "$PAGE_MATCHES" '$a + $b' 2>/dev/null || echo "$ALL_MATCHES")
-
-    # Stop at a short page (last page) or a hard cap (guards a misbehaving API).
-    COUNT=$(echo "$RESPONSE" | jq 'length' 2>/dev/null || echo 0)
-    if [ "$COUNT" -lt 100 ] || [ "$COMMENTS_PAGE" -ge 20 ]; then
-        break
-    fi
-    COMMENTS_PAGE=$((COMMENTS_PAGE + 1))
-done
-
-EXISTING_COMMENT_ID=$(echo "$ALL_MATCHES" | jq -r 'if length > 0 then (sort_by(.created_at) | last | .id) else "" end' 2>/dev/null || echo "")
+# --- Find existing sticky comment ---
+# Dedup is LOGIN-AGNOSTIC: a custom GitHub App may author the comment, so we
+# match on a hidden marker (with a legacy-header fallback), not the bot login.
+# When the caller already fetched the sticky id, it passes STICKY_COMMENT_ID to
+# skip the search and the duplicate comments-list round-trip.
+if [ -n "${STICKY_COMMENT_ID:-}" ]; then
+    EXISTING_COMMENT_ID="$STICKY_COMMENT_ID"
+else
+    STICKY_JSON=$(bash "$SCRIPT_DIR/find-sticky-comment.sh")
+    EXISTING_COMMENT_ID=$(echo "$STICKY_JSON" | jq -r '.id // ""' 2>/dev/null || echo "")
+fi
 
 # --- Post or edit the comment ---
 if [ -n "$EXISTING_COMMENT_ID" ] && [ "$EXISTING_COMMENT_ID" != "null" ]; then

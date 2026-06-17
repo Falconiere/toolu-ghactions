@@ -10,7 +10,7 @@ Audits the diff against a 7-dimension checklist — correctness, security, perfo
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](../LICENSE)
 [![Tests](https://img.shields.io/badge/tests-119%20passing-3fb950)](https://github.com/Falconiere/toolu-ghactions/actions/workflows/tests.yml)
 
-[Quick start](#quick-start) · [Multiple providers](#multiple-providers) · [How it works](#how-it-works) · [Example verdict](#example-verdict) · [Inputs](#inputs) · [Outputs](#outputs)
+[Quick start](#quick-start) · [Multiple providers](#multiple-providers) · [How it works](#how-it-works) · [Example verdict](#example-verdict) · [Custom identity](#custom-identity-github-app) · [@mention re-trigger](#mention-re-trigger) · [Review memory](#review-memory) · [Inputs](#inputs) · [Outputs](#outputs)
 
 </div>
 
@@ -176,6 +176,141 @@ match. Tighten to assert full identity.
 
 The verdict label at the bottom is machine-readable: `` `agent-merge-approved` `` or `` `agent-request-changes` ``. `pr-babysit` parses it to decide whether the PR is ready to merge. Unless `MANAGE_LABELS` is `false`, the same verdict is also applied as a real PR **label chip** (the opposite one is removed), so PRs are filterable in the GitHub UI — this needs `issues: write` in the workflow's `permissions` block.
 
+## Custom identity (GitHub App)
+
+By default the bot posts as the generic `github-actions[bot]` — anonymous, with
+no project face. To brand it as **Toolu — Code Review** with its own avatar and
+header logo, create a GitHub App and pass its `APP_ID` + `APP_PRIVATE_KEY`. The
+private key is used *only* to mint a short-lived installation token at the start
+of the run; it is never logged, and the comment then posts under the App's
+identity. Without these inputs nothing changes — you stay on `github-actions[bot]`.
+
+> The body header (logo + name) renders on **both** paths — even the
+> `github-actions[bot]` fallback reads as "Toolu — Code Review". The App only
+> changes the *posting account* (avatar + login on the comment).
+
+**Set up the App** (on github.com → Settings → Developer settings → GitHub Apps):
+
+1. **Create a new GitHub App.** Name it (e.g. `Toolu - Code Review`); a webhook
+   is not required (you can disable it).
+2. **Upload a logo/avatar** so the App has a face on the PR.
+3. **Grant least-privilege repository permissions** — only these four:
+   - **Pull requests: Read & write**
+   - **Issues: Read & write**
+   - **Contents: Read**
+   - **Metadata: Read**
+4. **Install the App** on the repo (or across the org).
+5. **Store the credentials as repo/org secrets** — the App **id** and the
+   generated **private key** (PEM).
+6. **Pass them to the action** as `APP_ID` + `APP_PRIVATE_KEY`:
+
+```yaml
+- uses: falconiere/toolu-ghactions/code-review@v2
+  with:
+    OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    APP_ID: ${{ secrets.CODE_REVIEW_APP_ID }}
+    APP_PRIVATE_KEY: ${{ secrets.CODE_REVIEW_APP_PRIVATE_KEY }}
+```
+
+The private key is only ever used to sign a JWT and exchange it for a
+short-lived installation token; it is **never written to logs**. If exactly one
+of `APP_ID`/`APP_PRIVATE_KEY` is set (or the mint fails), the action logs a
+`[WARN]` and continues on the `github-actions[bot]` fallback.
+
+> The header logo lives at [`code-review/assets/logo.png`](./assets/logo.png) and
+> is currently a **placeholder** — replace it with the final art. Override the
+> header with `BOT_NAME` / `BOT_LOGO_URL`.
+
+## @mention re-trigger
+
+On a PR that iterates, a maintainer can ask for a fresh pass from a comment:
+
+```
+@toolu review
+@toolu review focus on the auth changes
+```
+
+To enable it, the workflow must listen on **both** `pull_request` and
+`issue_comment` (the latter is where comments arrive), carry the right
+`permissions:`, and set a per-PR `concurrency:` group so two quick re-triggers
+don't race on the single sticky comment:
+
+```yaml
+name: Code Review
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: code-review-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: falconiere/toolu-ghactions/code-review@v2
+        with:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+```
+
+The `concurrency:` group is keyed per PR — note the
+`github.event.issue.number || github.event.pull_request.number` fallback, since
+`issue_comment` and `pull_request` events expose the PR number on different
+fields. On a comment trigger the action self-fetches the PR head, so no extra
+checkout step is needed.
+
+**Security gate.** A comment trigger runs with the repo's secrets, so the gate
+**fails closed**:
+
+- Only commenters with **write / maintain / admin** (per `MIN_TRIGGER_PERMISSION`,
+  default `write`) can trigger. The permission check is denied on *any* error
+  (non-2xx, missing field, network failure) — never failing open.
+- Comments from bots, non-PR issues, or comments without the `TRIGGER_PHRASE` +
+  `review` are ignored **before** any permission API call (no noise).
+- The trailing text (`focus on …`) is treated as an **untrusted focus hint**: it
+  is sanitized and injected into the user prompt inside a delimited UNTRUSTED
+  block as a hint about *where* to look — **never** as instructions, and it
+  cannot change the task, output schema, or verdict rules.
+- An allowed trigger reacts 👀 on the comment; a denied one reacts 👎.
+- A scoped/steered review (`@toolu review focus on …`) does **not** recompute
+  "resolved" — see [Review memory](#review-memory).
+
+## Review memory
+
+With `REVIEW_MEMORY: true` (default), each review recaps what changed since the
+last pass instead of starting from scratch:
+
+- ✅ **resolved** — findings from the previous pass that are now gone
+- 🔁 **still open** — findings carried over from the previous pass
+- ⚠️ **new** — findings introduced since the previous pass
+
+…plus a collapsed `<details>` **history** of recent passes (verdict + counts).
+Findings are matched across runs by a line-independent fingerprint
+(`path` + `category` + normalized text), so a finding that merely drifted to a
+new line stays **still open** rather than flipping to resolved + new.
+
+The state is stored in a **hidden HTML marker** inside the sticky review comment
+itself (gzip + base64) — no external store, no extra permissions, nothing to
+clean up. The marker is login-agnostic, so it survives switching to a custom App
+identity; if the comment is deleted, memory simply starts fresh.
+
+`resolved` is only computed on a **full review**. On a steered/focused run
+(`@toolu review focus on …`) or a truncated/partial diff, resolutions are *not*
+recomputed (the recap is labeled accordingly) — a finding that wasn't
+re-examined is never falsely reported as fixed. Set `REVIEW_MEMORY: false` to
+turn the recap and history off.
+
 ## Inputs
 
 | Input | Required | Default | Description |
@@ -197,6 +332,13 @@ The verdict label at the bottom is machine-readable: `` `agent-merge-approved` `
 | `MAX_FILES` | no | `0` (unlimited) | Maximum changed files before the action skips. `0` reviews any number of files — the only ceiling is your OpenRouter billing balance. Set a positive value to opt into a hard skip on huge PRs. |
 | `MAX_DIFF_LINES` | no | `0` (unlimited) | Maximum diff lines before truncation. `0` reviews the whole diff. Set a positive value to keep the first N lines (lexicographic by file path) and append a truncation notice. |
 | `TOKEN` | no | `${{ github.token }}` | GitHub token for posting and editing comments. |
+| `APP_ID` | no | — | GitHub App id. Set together with `APP_PRIVATE_KEY` to post as a custom-branded App (`Toolu — Code Review`) instead of `github-actions[bot]`. Both must be set or the action falls back to the default identity. See [Custom identity](#custom-identity-github-app). |
+| `APP_PRIVATE_KEY` | no | — | GitHub App private key (PEM). Pair with `APP_ID`. Pass via a secret; never inline. Used only to mint a short-lived installation token — never logged. |
+| `TRIGGER_PHRASE` | no | `@toolu` | Mention prefix that re-triggers a review from a PR comment, e.g. `@toolu review focus on auth`. Requires the workflow to also listen on `issue_comment`. See [@mention re-trigger](#mention-re-trigger). |
+| `MIN_TRIGGER_PERMISSION` | no | `write` | Minimum repo permission a commenter needs to trigger a review via `@mention`: `write` or `admin`. The check fails closed (denied on any error). |
+| `BOT_NAME` | no | `Toolu — Code Review` | Display name shown in the comment body header. |
+| `BOT_LOGO_URL` | no | `…/code-review/assets/logo.png` | Logo image shown in the comment body header. |
+| `REVIEW_MEMORY` | no | `true` | Recap what changed since the last review (resolved / still-open / new) and keep a collapsed history, using a hidden state marker in the sticky comment. Set `false` to disable. See [Review memory](#review-memory). |
 
 ## Outputs
 

@@ -129,3 +129,68 @@ ENDSCRIPT
 
     teardown_mock_curl
 }
+
+# Mock whose GET comments-list returns a marker comment authored by an
+# ARBITRARY (non-github-actions) login. PATCH echoes the id back in html_url.
+# Also logs every requested URL so a test can assert which endpoints were hit.
+setup_marker_curl() {
+    MOCK_DIR=$(mktemp -d)
+    export URL_LOG="$MOCK_DIR/urls.log"
+    : > "$URL_LOG"
+    cat > "$MOCK_DIR/curl" << 'ENDSCRIPT'
+#!/usr/bin/env bash
+args=("$@"); method="GET"; outfile=""
+for i in "${!args[@]}"; do
+    case "${args[$i]}" in -o) outfile="${args[$((i+1))]}" ;; -X) method="${args[$((i+1))]}" ;; esac
+done
+url="${args[-1]}"
+printf '%s %s\n' "$method" "$url" >> "$URL_LOG"
+emit() { [ -n "$outfile" ] && printf '%s' "$1" > "$outfile"; printf '%s' "$1"; }
+if [ "$method" = "PATCH" ]; then
+    id="${url##*/}"
+    emit "{\"id\": $id, \"html_url\": \"https://github.com/test-org/test-repo/issues/42#issuecomment-$id\"}"
+    exit 0
+fi
+# GET comments list: a marker-bearing comment authored by a CUSTOM app login.
+emit '[{"id":555,"user":{"login":"toolu-code-review[bot]"},"body":"<!-- toolu-review-state:v1 verdict=approve -->\n### Code Review\nlgtm","created_at":"2026-06-10T00:00:00Z","html_url":"https://github.com/test-org/test-repo/issues/42#issuecomment-555"}]'
+ENDSCRIPT
+    chmod +x "$MOCK_DIR/curl"
+    export PATH="$MOCK_DIR:$PATH"
+}
+
+@test "post-comment: updates marker comment authored by arbitrary login (login-agnostic dedup)" {
+    setup_marker_curl
+    export GITHUB_TOKEN="ghp_test"
+    export GITHUB_REPOSITORY="test-org/test-repo"
+    export GITHUB_EVENT_PATH="$FIXTURES_DIR/test-pr-event.json"
+
+    run bash "$SRC_DIR/post-comment.sh" <<< "<!-- toolu-review-state:v1 verdict=approve -->
+### Code Review
+updated"
+    [ "$status" -eq 0 ]
+    # The marker comment (id 555) is found despite a non-github-actions login,
+    # so post-comment PATCHes it rather than creating a new one.
+    [[ "$output" == *"issuecomment-555"* ]]
+    grep -q "PATCH .*/issues/comments/555" "$URL_LOG"
+
+    rm -rf "${MOCK_DIR:-/tmp/nonexistent}"
+}
+
+@test "post-comment: STICKY_COMMENT_ID skips search and PATCHes that id" {
+    setup_marker_curl
+    export GITHUB_TOKEN="ghp_test"
+    export GITHUB_REPOSITORY="test-org/test-repo"
+    export GITHUB_EVENT_PATH="$FIXTURES_DIR/test-pr-event.json"
+    export STICKY_COMMENT_ID="777"
+
+    run bash "$SRC_DIR/post-comment.sh" <<< "### Code Review — direct id"
+    [ "$status" -eq 0 ]
+    # Patched the supplied id directly...
+    [[ "$output" == *"issuecomment-777"* ]]
+    grep -q "PATCH .*/issues/comments/777" "$URL_LOG"
+    # ...and never hit the comments-LIST endpoint (no search round-trip).
+    ! grep -q "GET .*/issues/42/comments" "$URL_LOG"
+
+    unset STICKY_COMMENT_ID
+    rm -rf "${MOCK_DIR:-/tmp/nonexistent}"
+}
