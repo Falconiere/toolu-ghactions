@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.0.0](https://github.com/Falconiere/toolu-ghactions/compare/v1.2.3...v2.0.0) (2026-06-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cloudflare-tunnel:** cloudflare-tunnel is no longer published as a Docker image (ghcr.io/falconiere/toolu-ghactions/cloudflare-tunnel). start/stop/wait are composite actions that run on the runner host (Linux/macOS only; container/Windows runners unsupported). Start the app on the runner before `start`, and expose it via the new HOST:PORT inputs.
+
+### Bug Fixes
+
+* **cloudflare-tunnel:** drop live expression from wait input description ([b953699](https://github.com/Falconiere/toolu-ghactions/commit/b953699e432b0074d98bfd8d6dfcd2ceb0ae1a96))
+* **cloudflare-tunnel:** gate quick-tunnel readiness on edge registration ([4c33bef](https://github.com/Falconiere/toolu-ghactions/commit/4c33bef2fca70a752901b17768c0819531395caf))
+* default to 'approved' verdict when no findings are present ([f333e63](https://github.com/Falconiere/toolu-ghactions/commit/f333e6314c7f02ce6bf1039c541bde66e6142e3f))
+
+
+### Reverts
+
+* remove example workflows ([433143f](https://github.com/Falconiere/toolu-ghactions/commit/433143fa59b4d61a672358824f9af0e7ce0afa15))
+
+
+### Code Refactoring
+
+* **cloudflare-tunnel:** run cloudflared on the runner host via composite actions ([fcdeab0](https://github.com/Falconiere/toolu-ghactions/commit/fcdeab0f78a6b4fab623cff3d0ea54d4788d1724))
+
 ## [1.2.3](https://github.com/Falconiere/toolu-ghactions/compare/v1.2.2...v1.2.3) (2026-06-16)
 
 
