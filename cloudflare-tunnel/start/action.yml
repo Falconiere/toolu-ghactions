@@ -40,8 +40,12 @@ inputs:
     description: 'Verify cloudflared binary SHA256 against the release checksums.txt before installing. Defaults to false because the checksums.txt format is brittle (variable whitespace, optional BSD `*` prefix); opt in when you control the parser or have a pinned version known to parse cleanly.'
     required: false
     default: 'false'
+  protocol:
+    description: 'cloudflared transport protocol (`quic`, `http2`, or `auto`). Leave empty for cloudflared''s default (QUIC). Set to `http2` on networks that block outbound UDP 7844 — otherwise cloudflared retries QUIC for ~5min before falling back, stalling registration past start-timeout.'
+    required: false
+    default: ''
   start-timeout:
-    description: 'Seconds to wait for the tunnel URL/ID to appear in cloudflared output before failing.'
+    description: 'Seconds to wait for the tunnel URL/ID to appear, then (separately) for the edge connection to register, before failing. Worst case is roughly twice this value.'
     required: false
     default: '30'
 
@@ -73,4 +77,5 @@ runs:
         INPUT_CLOUDFLARED_VERSION: ${{ inputs.cloudflared-version }}
         INPUT_VERIFY_CHECKSUM: ${{ inputs.verify-checksum }}
         INPUT_START_TIMEOUT: ${{ inputs.start-timeout }}
+        INPUT_PROTOCOL: ${{ inputs.protocol }}
       run: bash "$GITHUB_ACTION_PATH/../src/start.sh"

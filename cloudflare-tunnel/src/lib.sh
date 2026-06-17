@@ -58,3 +58,13 @@ TUNNEL_URL_REGEX='https://[A-Za-z0-9_-]+\.trycloudflare\.com'
 #   ... INF Registered tunnel connection ... <uuid> ...
 # shellcheck disable=SC2034 # consumed by sourced callers (start.sh)
 TUNNEL_ID_REGEX='[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+
+# Regex matching cloudflared's edge-connection registration line. Seeing this
+# at least once means the tunnel is live at the Cloudflare edge and its public
+# hostname is published in DNS — the correct readiness signal. cloudflared
+# prints the quick-tunnel URL the instant it is *allocated*, before any
+# connection registers, so capturing the URL alone is too early: probing then
+# resolves an unpublished hostname and can negatively-cache the NXDOMAIN for the
+# resolver's whole negative-TTL window. Gate readiness on this line instead.
+# shellcheck disable=SC2034 # consumed by sourced callers (start.sh)
+TUNNEL_REGISTERED_REGEX='Registered tunnel connection'
