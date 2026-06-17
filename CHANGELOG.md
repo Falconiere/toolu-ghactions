@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.0](https://github.com/Falconiere/toolu-ghactions/compare/v2.0.0...v2.1.0) (2026-06-17)
+
+
+### Features
+
+* **release:** auto-mirror actions to standalone repos for Marketplace ([58f3d3c](https://github.com/Falconiere/toolu-ghactions/commit/58f3d3c16cbbf344cd62e12a28c8f940dfa2ea93))
+
 ## [2.0.0](https://github.com/Falconiere/toolu-ghactions/compare/v1.2.3...v2.0.0) (2026-06-17)
 
 
