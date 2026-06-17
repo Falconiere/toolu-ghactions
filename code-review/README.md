@@ -44,7 +44,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # full history so the merge-base resolves without deepening
-      - uses: falconiere/toolu-ghactions/code-review@v1
+      - uses: falconiere/toolu-ghactions/code-review@v2
         with:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 ```
@@ -55,7 +55,7 @@ jobs:
 Use `MODEL` to switch models and `REVIEW_PROMPT_FILE` for a custom checklist:
 
 ```yaml
-      - uses: falconiere/toolu-ghactions/code-review@v1
+      - uses: falconiere/toolu-ghactions/code-review@v2
         with:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           MODEL: 'anthropic/claude-sonnet-4'
@@ -71,7 +71,7 @@ review that merges N independent verdicts into one. Each provider gets its own
 model + API key:
 
 ```yaml
-- uses: falconiere/toolu-ghactions/code-review@v1
+- uses: falconiere/toolu-ghactions/code-review@v2
   with:
     PROVIDERS: |
       [
@@ -108,7 +108,7 @@ The legacy `OPENROUTER_API_KEY` + `MODEL` inputs still work — they're
 auto-translated to a single-provider `PROVIDERS` list:
 
 ```yaml
-- uses: falconiere/toolu-ghactions/code-review@v1
+- uses: falconiere/toolu-ghactions/code-review@v2
   with:
     OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
     MODEL: 'minimax/minimax-m3'
@@ -209,7 +209,7 @@ The verdict label at the bottom is machine-readable: `` `agent-merge-approved` `
 Use outputs in downstream workflow steps:
 
 ```yaml
-- uses: falconiere/toolu-ghactions/code-review@v1
+- uses: falconiere/toolu-ghactions/code-review@v2
   id: review
   with:
     OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

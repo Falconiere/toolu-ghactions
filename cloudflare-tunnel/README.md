@@ -34,12 +34,12 @@ jobs:
         run: npm run dev &
       - name: Start tunnel
         id: tunnel
-        uses: falconiere/toolu-ghactions/cloudflare-tunnel/start@v1
+        uses: falconiere/toolu-ghactions/cloudflare-tunnel/start@v2
         with:
           host: 127.0.0.1
           port: 3000
       - name: Wait for tunnel
-        uses: falconiere/toolu-ghactions/cloudflare-tunnel/wait@v1
+        uses: falconiere/toolu-ghactions/cloudflare-tunnel/wait@v2
         with:
           url: ${{ steps.tunnel.outputs.tunnel-url }}
       - name: Use the URL
@@ -48,7 +48,7 @@ jobs:
           # Pass it to visual review tools, browser-automation suites, etc.
       - name: Stop tunnel
         if: always()
-        uses: falconiere/toolu-ghactions/cloudflare-tunnel/stop@v1
+        uses: falconiere/toolu-ghactions/cloudflare-tunnel/stop@v2
 ```
 
 The `start` step writes the tunnel URL to `${{ steps.tunnel.outputs.tunnel-url }}`. The `stop` step is idempotent and safe to run on any outcome when paired with `if: always()`.
@@ -73,6 +73,7 @@ The `start` step writes the tunnel URL to `${{ steps.tunnel.outputs.tunnel-url }
 | `tunnel-config` | no | *(empty)* | Path to a `cloudflared` config.yml with custom ingress rules (named mode only). |
 | `cloudflared-version` | no | `2024.12.2` | cloudflared release tag to download. |
 | `verify-checksum` | no | `false` | Verify cloudflared binary SHA256 against the release `checksums.txt` before installing. |
+| `protocol` | no | *(empty)* | cloudflared transport (`quic`, `http2`, or `auto`). Empty uses cloudflared's default (QUIC). Set `http2` on networks that block outbound UDP 7844 — otherwise cloudflared retries QUIC for ~5min before falling back, stalling registration. |
 | `start-timeout` | no | `30` | Seconds to wait for the URL/ID to appear in cloudflared output before failing. |
 
 ## `stop` inputs
@@ -99,7 +100,7 @@ The `start` step writes the tunnel URL to `${{ steps.tunnel.outputs.tunnel-url }
 5. Reference in your workflow:
 
 ```yaml
-- uses: falconiere/toolu-ghactions/cloudflare-tunnel/start@v1
+- uses: falconiere/toolu-ghactions/cloudflare-tunnel/start@v2
   with:
     tunnel-token: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
     # Optional: bring your own config for custom ingress rules.
