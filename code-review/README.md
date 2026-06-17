@@ -8,7 +8,7 @@ Audits the diff against a 7-dimension checklist — correctness, security, perfo
 
 [![Release](https://img.shields.io/github/v/release/Falconiere/toolu-ghactions?sort=semver&color=d97757)](https://github.com/Falconiere/toolu-ghactions/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](../LICENSE)
-[![Tests](https://img.shields.io/badge/tests-108%20passing-3fb950)](https://github.com/Falconiere/toolu-ghactions/actions/workflows/tests.yml)
+[![Tests](https://img.shields.io/badge/tests-119%20passing-3fb950)](https://github.com/Falconiere/toolu-ghactions/actions/workflows/tests.yml)
 
 [Quick start](#quick-start) · [Multiple providers](#multiple-providers) · [How it works](#how-it-works) · [Example verdict](#example-verdict) · [Inputs](#inputs) · [Outputs](#outputs)
 

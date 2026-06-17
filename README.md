@@ -7,7 +7,7 @@
 Two GitHub Actions that carry [toolu](https://github.com/Falconiere/toolu)'s local quality discipline into CI: a multi-vendor **AI code reviewer** that audits every pull request and posts a machine-readable verdict, and a **Cloudflare Tunnel** action that exposes a runner port for live preview review.
 
 [![Release](https://img.shields.io/github/v/release/Falconiere/toolu-ghactions?sort=semver&color=d97757)](https://github.com/Falconiere/toolu-ghactions/releases)
-[![Tests](https://img.shields.io/badge/tests-108%20passing-3fb950)](https://github.com/Falconiere/toolu-ghactions/actions/workflows/tests.yml)
+[![Tests](https://img.shields.io/badge/tests-119%20passing-3fb950)](https://github.com/Falconiere/toolu-ghactions/actions/workflows/tests.yml)
 [![AI vendors](https://img.shields.io/badge/AI%20vendors-6-d97757)](#code-review)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
@@ -100,6 +100,10 @@ flowchart LR
 3. **Merge** — a deterministic merger dedups findings by `(path, line, end_line, fingerprint)`, keeps the highest severity, and sets the final verdict per `merge_strategy` (`conservative` / `majority` / `all_approve`).
 4. **Post** — a summary verdict comment carrying the machine-readable label, plus per-line review comments with committable suggestions via the GitHub Reviews API.
 
+## Marketplace
+
+Each action is listed on the GitHub Marketplace from its own mirror repo — [`toolu-code-review`](https://github.com/Falconiere/toolu-code-review) and [`toolu-cloudflare-tunnel`](https://github.com/Falconiere/toolu-cloudflare-tunnel) — because the Marketplace lists one root-`action.yml` action per repository and never a subdirectory. The mirrors are **generated from this monorepo on each release** by the `mirror` job in [`release.yml`](.github/workflows/release.yml); edit here, not there. This repo stays canonical: the `falconiere/toolu-ghactions/<action>@v2` paths above are the recommended way to consume the actions.
+
 ## Repository structure
 
 ```
@@ -123,8 +127,8 @@ Actions share conventions and utilities so new ones drop in with the same struct
 ## Development
 
 ```bash
-# Run all test suites (108 tests; requires bats, jq, git)
-bats code-review/__tests__/*.bats cloudflare-tunnel/__tests__/*.bats
+# Run all test suites (119 tests; requires bats, jq, git)
+bats code-review/__tests__/*.bats cloudflare-tunnel/__tests__/*.bats scripts/__tests__/*.bats
 
 # Build the Docker image (code-review)
 docker build -t code-review-action:test code-review/
