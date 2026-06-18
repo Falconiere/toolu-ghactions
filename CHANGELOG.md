@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.1](https://github.com/Falconiere/toolu-ghactions/compare/v2.2.0...v2.2.1) (2026-06-18)
+
+
+### Bug Fixes
+
+* **code-review:** default to deepseek/deepseek-v4-flash ([1150500](https://github.com/Falconiere/toolu-ghactions/commit/1150500c077add2b5900bea205fcd512fe50bb7b))
+
 ## [2.2.0](https://github.com/Falconiere/toolu-ghactions/compare/v2.1.1...v2.2.0) (2026-06-18)
 
 
