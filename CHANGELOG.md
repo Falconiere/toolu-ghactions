@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.2.0](https://github.com/Falconiere/toolu-ghactions/compare/v2.1.1...v2.2.0) (2026-06-18)
+
+
+### Features
+
+* **code-review:** accept base64-encoded APP_PRIVATE_KEY (auto-decode) ([0255f8e](https://github.com/Falconiere/toolu-ghactions/commit/0255f8e6c6851d36251de69a8ad07c5acc9caee7))
+* **code-review:** custom App identity, review memory, and [@mention](https://github.com/mention) re-trigger ([b9dd205](https://github.com/Falconiere/toolu-ghactions/commit/b9dd205b4f54584329ece1ecc4513b59b3f9a6cb))
+
 ## [2.1.1](https://github.com/Falconiere/toolu-ghactions/compare/v2.1.0...v2.1.1) (2026-06-17)
 
 
