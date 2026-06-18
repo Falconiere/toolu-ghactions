@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.0](https://github.com/Falconiere/toolu-ghactions/compare/v2.2.1...v2.3.0) (2026-06-18)
+
+
+### Features
+
+* **code-review:** review the diff against the repo's own convention files ([f0d18a8](https://github.com/Falconiere/toolu-ghactions/commit/f0d18a8a96fd233bde5df4430ffb0dbeb0d0d03b))
+
 ## [2.2.1](https://github.com/Falconiere/toolu-ghactions/compare/v2.2.0...v2.2.1) (2026-06-18)
 
 
