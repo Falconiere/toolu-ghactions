@@ -45,6 +45,20 @@ load helpers
     [[ "$output" == *"SQL injection"* ]]
 }
 
+@test "format-verdict: error verdict renders review-incomplete badge, not changes-requested" {
+    # All providers errored: the comment must say the review could not complete,
+    # NOT "Changes requested" (which used to render with zero findings).
+    review='{"review_plan":"Review could not complete — all 1 provider(s) errored (openrouter).","verdict":"error","findings":[],"other_checks":"Per-provider: openrouter=error.","top_must_fix":[]}'
+
+    run bash "$SRC_DIR/format-verdict.sh" <<< "$review"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Review incomplete"* ]]
+    [[ "$output" != *"Changes requested"* ]]
+    # Carries the request-changes label so a failed review never auto-merges.
+    [[ "$output" == *"agent-request-changes"* ]]
+    [[ "$output" == *"could not complete"* ]]
+}
+
 @test "format-verdict: includes View job link with run ID" {
     parsed=$(bash "$SRC_DIR/parse-response.sh" < "$FIXTURES_DIR/sample-openrouter-response-approved.json")
 

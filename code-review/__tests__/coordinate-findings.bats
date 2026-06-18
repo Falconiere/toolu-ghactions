@@ -16,15 +16,17 @@ load helpers
     echo "$output" | jq -e '.other_checks | contains("openrouter=approved") and contains("anthropic=changes")'
 }
 
-@test "coordinate-findings: conservative — errored provider counts as changes" {
+@test "coordinate-findings: conservative — errored provider abstains (does not force changes)" {
     input='{"strategy":"conservative","providers":[
         {"provider":"openrouter","verdict":"approved","findings":[]},
         {"provider":"deepseek","error":"rate limited","verdict":null,"findings":[]}
     ]}'
     run bash "$SRC_DIR/coordinate-findings.sh" <<< "$input"
     [ "$status" -eq 0 ]
-    echo "$output" | jq -e '.verdict == "changes"'
+    # The errored provider abstains; the one real verdict (approved) stands.
+    echo "$output" | jq -e '.verdict == "approved"'
     echo "$output" | jq -e '.other_checks | contains("deepseek=error")'
+    echo "$output" | jq -e '.review_plan | contains("abstained")'
 }
 
 @test "coordinate-findings: conservative — all approved yields approved" {
@@ -80,14 +82,15 @@ load helpers
     echo "$output" | jq -e '.verdict == "changes"'
 }
 
-@test "coordinate-findings: all_approve — errored provider forces changes" {
+@test "coordinate-findings: all_approve — errored provider abstains" {
     input='{"strategy":"all_approve","providers":[
         {"provider":"a","verdict":"approved","findings":[]},
         {"provider":"b","error":"auth fail","verdict":null,"findings":[]}
     ]}'
     run bash "$SRC_DIR/coordinate-findings.sh" <<< "$input"
     [ "$status" -eq 0 ]
-    echo "$output" | jq -e '.verdict == "changes"'
+    # b abstains; all DECIDED providers (just a) approved -> approved.
+    echo "$output" | jq -e '.verdict == "approved"'
 }
 
 @test "coordinate-findings: all_approve — all approved yields approved" {
@@ -101,15 +104,28 @@ load helpers
     echo "$output" | jq -e '.verdict == "approved"'
 }
 
-@test "coordinate-findings: all-errored edge case still produces a verdict" {
+@test "coordinate-findings: all providers errored yields an honest error verdict" {
     input='{"strategy":"conservative","providers":[
         {"provider":"a","error":"x","verdict":null,"findings":[]},
         {"provider":"b","error":"y","verdict":null,"findings":[]}
     ]}'
     run bash "$SRC_DIR/coordinate-findings.sh" <<< "$input"
     [ "$status" -eq 0 ]
-    echo "$output" | jq -e '.verdict == "changes"'
+    echo "$output" | jq -e '.verdict == "error"'
     echo "$output" | jq -e '.other_checks | contains("a=error") and contains("b=error")'
+    echo "$output" | jq -e '.review_plan | test("could not complete"; "i")'
+}
+
+@test "coordinate-findings: sole provider errors -> error verdict, not bogus changes" {
+    # Regression: a single openrouter provider erroring used to merge to
+    # "changes" with zero findings, producing a misleading "Changes requested".
+    input='{"strategy":"conservative","providers":[
+        {"provider":"openrouter","error":"500 from provider","verdict":null,"findings":[]}
+    ]}'
+    run bash "$SRC_DIR/coordinate-findings.sh" <<< "$input"
+    [ "$status" -eq 0 ]
+    echo "$output" | jq -e '.verdict == "error"'
+    echo "$output" | jq -e '.findings | length == 0'
 }
 
 @test "coordinate-findings: dedupes findings on (path, line, end_line, text-fingerprint)" {
@@ -179,11 +195,11 @@ load helpers
     [ "$N" -ge 1 ]
 }
 
-@test "coordinate-findings: empty providers list short-circuits to changes" {
+@test "coordinate-findings: empty providers list yields error verdict" {
     input='{"strategy":"conservative","providers":[]}'
     run bash "$SRC_DIR/coordinate-findings.sh" <<< "$input"
     [ "$status" -eq 0 ]
-    echo "$output" | jq -e '.verdict == "changes"'
+    echo "$output" | jq -e '.verdict == "error"'
     echo "$output" | jq -e '.findings | length == 0'
 }
 

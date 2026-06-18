@@ -67,6 +67,13 @@ fi
 if [ "$VERDICT" = "approved" ]; then
     VERDICT_LABEL='`agent-merge-approved`'
     VERDICT_BADGE="✅ Approved"
+elif [ "$VERDICT" = "error" ]; then
+    # All providers errored: no review actually happened. Do NOT approve (unsafe)
+    # and do NOT claim changes were requested (misleading — there are no
+    # findings). Carry the request-changes label so a failed review never
+    # auto-merges, but the badge says plainly that it's a provider error.
+    VERDICT_LABEL='`agent-request-changes`'
+    VERDICT_BADGE="🚫 Review incomplete — provider error"
 else
     VERDICT_LABEL='`agent-request-changes`'
     VERDICT_BADGE="⚠️ Changes requested"
