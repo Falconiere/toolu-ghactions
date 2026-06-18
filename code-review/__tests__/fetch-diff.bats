@@ -45,6 +45,32 @@ teardown_git_repo() {
     teardown_git_repo
 }
 
+@test "fetch-diff: emits base_sha (base-branch tip)" {
+    setup_git_repo
+
+    # Commit on a feature branch so HEAD is genuinely ahead of main (a real diff).
+    git checkout -b feature --quiet
+    echo "changed" > newfile.ts
+    git add newfile.ts
+    git commit -m "add newfile" --quiet
+
+    export INPUT_MAX_FILES=100
+    export INPUT_MAX_DIFF_LINES=8000
+    export INPUT_BASE_BRANCH=main
+    export GITHUB_BASE_REF=main
+
+    run bash "$SRC_DIR/fetch-diff.sh"
+    [ "$status" -eq 0 ]
+
+    # base_sha is the base-branch tip (no origin in the fixture -> falls back to
+    # the local `main` branch). Must be a 40-hex equal to that tip.
+    base_sha=$(echo "$output" | jq -r '.base_sha')
+    [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]
+    [ "$base_sha" = "$(git rev-parse main)" ]
+
+    teardown_git_repo
+}
+
 @test "fetch-diff: binary file detection" {
     setup_git_repo
 
