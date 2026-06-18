@@ -1,0 +1,16 @@
+{
+  "name": "Toolu Code Review",
+  "url": "https://github.com/falconiere/toolu-ghactions",
+  "description": "Posts AI code-review comments on pull requests under a custom identity. Used by the toolu-ghactions/code-review action via APP_ID + APP_PRIVATE_KEY.",
+  "public": false,
+  "hook_attributes": {
+    "active": false
+  },
+  "default_events": [],
+  "default_permissions": {
+    "pull_requests": "write",
+    "issues": "write",
+    "contents": "read",
+    "metadata": "read"
+  }
+}
