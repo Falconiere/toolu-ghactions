@@ -44,6 +44,25 @@ base64url() {
     openssl base64 -A | tr '+/' '-_' | tr -d '='
 }
 
+# normalize_key <key> — accept either a raw PEM or a base64-encoded PEM. Storing
+# a multiline PEM as a single base64 line is a common way to fit it into a secret;
+# auto-detect so the workflow needs no decode step. A raw PEM carries the
+# "-----BEGIN" header; otherwise base64-decode and use the result when THAT is a
+# PEM. Falls back to the original input (the mint then fails with a clear error).
+normalize_key() {
+    local key="$1" decoded
+    if printf '%s' "$key" | grep -q -- "-----BEGIN"; then
+        printf '%s' "$key"
+        return 0
+    fi
+    decoded=$(printf '%s' "$key" | tr -d '[:space:]' | openssl base64 -d -A 2>/dev/null || true)
+    if printf '%s' "$decoded" | grep -q -- "-----BEGIN"; then
+        printf '%s' "$decoded"
+    else
+        printf '%s' "$key"
+    fi
+}
+
 # build_jwt <app_id> <key_file> — print a signed RS256 JWT to stdout.
 # header.payload.signature, each segment base64url-encoded.
 # iat is backdated 60s to tolerate clock skew; exp is +540s (well under the
@@ -106,10 +125,11 @@ main() {
 
     [ -n "$repo" ] || warn "GITHUB_REPOSITORY is not set"
 
-    # Write the PEM to a private temp file (cleaned up by the EXIT trap).
+    # Write the PEM to a private temp file (cleaned up by the EXIT trap). The key
+    # may arrive raw or base64-encoded — normalize_key handles both.
     KEY_FILE=$(mktemp)
     chmod 600 "$KEY_FILE"
-    printf '%s' "$private_key" > "$KEY_FILE"
+    normalize_key "$private_key" > "$KEY_FILE"
 
     local jwt
     jwt=$(build_jwt "$app_id" "$KEY_FILE") || warn "could not sign JWT"

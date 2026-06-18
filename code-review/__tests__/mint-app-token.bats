@@ -118,6 +118,22 @@ teardown_mock_curl() {
     teardown_app_keys
 }
 
+@test "mint: base64-encoded private key is decoded and used, exit 0" {
+    setup_app_keys
+    setup_mock_curl
+    # Many users store the multiline PEM base64-encoded on one line in a secret;
+    # the action must auto-decode it. Real key → real JWT signing after decode.
+    INPUT_APP_PRIVATE_KEY="$(openssl base64 -A -in "$PRIVATE_KEY_FILE")"
+    export INPUT_APP_PRIVATE_KEY
+
+    run bash "$SRC_DIR/mint-app-token.sh"
+    [ "$status" -eq 0 ]
+    [ "$output" = "ghs_exampletoken1234567890abcdefghijklmn" ]
+
+    teardown_mock_curl
+    teardown_app_keys
+}
+
 @test "mint: partial creds (only APP_ID) → WARN on stderr, empty stdout, exit 1" {
     export INPUT_APP_ID="$APP_ID"
     unset INPUT_APP_PRIVATE_KEY

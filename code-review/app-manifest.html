@@ -60,7 +60,9 @@
     <li>Click <strong>Generate a private key</strong> — it downloads a <code>.pem</code>.</li>
     <li><strong>Install</strong> the App on the repo (or org) you want reviewed.</li>
     <li>Add two secrets to that repo/org (Settings → Secrets and variables → Actions):
-      <code>APP_ID</code> and <code>APP_PRIVATE_KEY</code> (paste the whole PEM).</li>
+      <code>APP_ID</code> and <code>APP_PRIVATE_KEY</code> — paste the whole PEM, or
+      base64-encode it first (<code>base64 -w0 key.pem</code>) to keep it on one
+      line; the action decodes either form.</li>
     <li>Pass them to the action with
       <code>APP_ID: ${{ secrets.APP_ID }}</code> and
       <code>APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}</code>.</li>
