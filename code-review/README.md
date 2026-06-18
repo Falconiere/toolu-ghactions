@@ -189,37 +189,61 @@ identity. Without these inputs nothing changes — you stay on `github-actions[b
 > `github-actions[bot]` fallback reads as "Toolu — Code Review". The App only
 > changes the *posting account* (avatar + login on the comment).
 
-**Set up the App** (on github.com → Settings → Developer settings → GitHub Apps):
+> **It's your App, not ours.** This action is App-agnostic — it never ships or
+> shares a private key. Whoever holds an App's key can post as that App, so a
+> single shared identity across everyone's repos is impossible without a hosted
+> token broker (which this action is not). To get a custom chip you create
+> **your own** App and keep **your own** key in **your own** secrets. The App can
+> be **private** (only your account can install it) — public is unnecessary.
 
-1. **Create a new GitHub App.** Name it (e.g. `Toolu - Code Review`); a webhook
-   is not required (you can disable it).
+### One-click setup (App Manifest)
+
+Open **[`code-review/app-manifest.html`](./app-manifest.html)** (host it on GitHub
+Pages, or just open the file in a browser). Enter your org (or leave blank for a
+personal account) and click **Create the App** — GitHub pre-fills the name, the
+four least-privilege permissions, and disables the webhook from
+[`app-manifest.json`](./app-manifest.json). Then, on the created App's page:
+
+1. Copy the **App ID**.
+2. Click **Generate a private key** → downloads a `.pem`.
+3. **Install** the App on the repo/org you want reviewed.
+4. Add both as secrets (repo or org): `APP_ID` and `APP_PRIVATE_KEY` (paste the
+   full PEM).
+
+### Manual setup
+
+Prefer clicking through github.com → Settings → Developer settings → GitHub Apps:
+
+1. **New GitHub App.** Name it whatever you like; uncheck/disable the webhook.
 2. **Upload a logo/avatar** so the App has a face on the PR.
-3. **Grant least-privilege repository permissions** — only these four:
-   - **Pull requests: Read & write**
-   - **Issues: Read & write**
-   - **Contents: Read**
-   - **Metadata: Read**
-4. **Install the App** on the repo (or across the org).
-5. **Store the credentials as repo/org secrets** — the App **id** and the
-   generated **private key** (PEM).
-6. **Pass them to the action** as `APP_ID` + `APP_PRIVATE_KEY`:
+3. **Repository permissions** — only these four: **Pull requests: Read & write**,
+   **Issues: Read & write**, **Contents: Read**, **Metadata: Read**.
+4. **Install** it on the repo (or org), then **Generate a private key**.
+5. Store the App **id** and **private key** (PEM) as repo/org secrets.
+
+### Use it
 
 ```yaml
 - uses: falconiere/toolu-ghactions/code-review@v2
   with:
     OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-    APP_ID: ${{ secrets.CODE_REVIEW_APP_ID }}
-    APP_PRIVATE_KEY: ${{ secrets.CODE_REVIEW_APP_PRIVATE_KEY }}
+    APP_ID: ${{ secrets.APP_ID }}
+    APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
 ```
 
-The private key is only ever used to sign a JWT and exchange it for a
-short-lived installation token; it is **never written to logs**. If exactly one
-of `APP_ID`/`APP_PRIVATE_KEY` is set (or the mint fails), the action logs a
-`[WARN]` and continues on the `github-actions[bot]` fallback.
+The private key only signs a JWT exchanged for a short-lived installation token;
+it is **never written to logs**. If exactly one of `APP_ID`/`APP_PRIVATE_KEY` is
+set (or the mint fails), the action logs a `[WARN]` and continues on the
+`github-actions[bot]` fallback.
+
+> **Fork PRs stay unbranded.** GitHub withholds secrets from `pull_request` runs
+> triggered by forks, so `APP_PRIVATE_KEY` is empty there and the bot falls back
+> to `github-actions[bot]` (still fully functional). The branded identity shows on
+> same-repo PRs and on `@toolu` re-triggers by collaborators.
 
 > The header logo lives at [`code-review/assets/logo.png`](./assets/logo.png) and
-> is currently a **placeholder** — replace it with the final art. Override the
-> header with `BOT_NAME` / `BOT_LOGO_URL`.
+> is currently a **placeholder** — replace it with your own art, or point
+> `BOT_LOGO_URL` / `BOT_NAME` at your branding.
 
 ## @mention re-trigger
 
