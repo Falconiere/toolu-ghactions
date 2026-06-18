@@ -16,7 +16,6 @@
     "@octokit/auth-app": "^7.1.5",
     "@openrouter/ai-sdk-provider": "^0.7.0",
     "ai": "^4.3.0",
-    "simple-git": "^3.27.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
