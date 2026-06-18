@@ -1,0 +1,28 @@
+{
+  "name": "toolu-code-review",
+  "version": "2.4.0",
+  "private": true,
+  "type": "module",
+  "description": "Toolu AI Code Review — GitHub JS action (TypeScript, OpenRouter + Vercel AI SDK)",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "@actions/github": "^6.0.0",
+    "@octokit/auth-app": "^7.1.5",
+    "@openrouter/ai-sdk-provider": "^0.7.0",
+    "ai": "^4.3.0",
+    "simple-git": "^3.27.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
