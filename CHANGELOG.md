@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.3.1](https://github.com/Falconiere/toolu-ghactions/compare/v2.3.0...v2.3.1) (2026-06-18)
+
+
+### Bug Fixes
+
+* **code-review:** errored provider abstains instead of forcing "changes" ([2924980](https://github.com/Falconiere/toolu-ghactions/commit/2924980ace83bba6ddad3eaeeb04a90455834009))
+* **code-review:** pull :v2 image so consumers run current code ([bddcc38](https://github.com/Falconiere/toolu-ghactions/commit/bddcc38939ab8dd24a3c12420c2d35ce5d81c93e))
+
 ## [2.3.0](https://github.com/Falconiere/toolu-ghactions/compare/v2.2.1...v2.3.0) (2026-06-18)
 
 
