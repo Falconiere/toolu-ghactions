@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.2](https://github.com/Falconiere/toolu-ghactions/compare/v2.3.1...v2.3.2) (2026-06-18)
+
+
+### Bug Fixes
+
+* **code-review:** drop build artifacts from diff to stop review timeouts ([2bd4b98](https://github.com/Falconiere/toolu-ghactions/commit/2bd4b9835ae863d3ca7341079d11bb5841561af8))
+
 ## [2.3.1](https://github.com/Falconiere/toolu-ghactions/compare/v2.3.0...v2.3.1) (2026-06-18)
 
 
