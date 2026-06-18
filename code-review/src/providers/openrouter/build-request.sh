@@ -51,6 +51,14 @@ SCHEMA=$(jq -nc --argjson item "$FINDING_ITEM" '{
 SYS_ESC=$(echo "$SYSTEM" | jq -Rs .)
 USER_ESC=$(echo "$USER" | jq -Rs .)
 
+# Disable reasoning. Reasoning models (e.g. deepseek-v4-*) think by default, and
+# on OpenRouter reasoning tokens are drawn from max_tokens — so a default
+# max_tokens (4096) can be fully consumed by the think phase, returning
+# finish_reason="length" with an EMPTY message.content. parse-response then sees
+# no verdict and the whole review reports a provider error. The review's output
+# is a structured verdict, not chain-of-thought, so reasoning buys nothing here;
+# `effort:"none"` fully disables it (ignored by non-reasoning models). See
+# https://openrouter.ai/docs/guides/best-practices/reasoning-tokens
 BODY=$(jq -nc \
     --arg model "${INPUT_MODEL:-deepseek/deepseek-v4-flash}" \
     --argjson maxtok "$MAX_TOKENS" \
@@ -63,7 +71,8 @@ BODY=$(jq -nc \
             {role: "user", content: $user}
         ],
         temperature: 0.1,
-        max_tokens: $maxtok
+        max_tokens: $maxtok,
+        reasoning: { effort: "none" }
     }')
 
 if [ "$ENFORCE" = "true" ]; then
