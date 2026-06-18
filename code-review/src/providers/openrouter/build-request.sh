@@ -52,7 +52,7 @@ SYS_ESC=$(echo "$SYSTEM" | jq -Rs .)
 USER_ESC=$(echo "$USER" | jq -Rs .)
 
 BODY=$(jq -nc \
-    --arg model "${INPUT_MODEL:-minimax/minimax-m3}" \
+    --arg model "${INPUT_MODEL:-deepseek/deepseek-v4-flash}" \
     --argjson maxtok "$MAX_TOKENS" \
     --argjson system "$SYS_ESC" \
     --argjson user "$USER_ESC" \

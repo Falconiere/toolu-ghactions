@@ -25,7 +25,7 @@ inputs:
   MODEL:
     description: 'OpenRouter model identifier'
     required: false
-    default: 'minimax/minimax-m3'
+    default: 'deepseek/deepseek-v4-flash'
   FALLBACK_MODEL:
     description: 'DEPRECATED: Dropped in multi-provider mode. Use PROVIDERS array to configure multiple models.'
     required: false

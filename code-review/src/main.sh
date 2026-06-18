@@ -77,7 +77,7 @@ build_providers_list() {
         echo "[WARN] OPENROUTER_API_KEY is the legacy single-provider input; prefer PROVIDERS for multi-provider configurations" >&2
         [ -n "${INPUT_FALLBACK_MODEL:-}" ] && echo "[WARN] FALLBACK_MODEL is dropped (was OpenRouter-specific; multi-provider IS the fallback)" >&2
         [ -n "${INPUT_REVIEW_MODE:-}" ] && [ "${INPUT_REVIEW_MODE}" != "single" ] && echo "[WARN] REVIEW_MODE is a no-op; multi-provider replaces per-dim fan-out" >&2
-        jq -nc --arg model "${INPUT_MODEL:-minimax/minimax-m3}" \
+        jq -nc --arg model "${INPUT_MODEL:-deepseek/deepseek-v4-flash}" \
                   --arg key "${OPENROUTER_API_KEY}" \
                   --argjson enforce "${INPUT_ENFORCE_JSON_SCHEMA:-true}" \
                   --argjson maxtok "${INPUT_MAX_TOKENS:-4096}" \
