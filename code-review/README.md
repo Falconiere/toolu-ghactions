@@ -96,8 +96,15 @@ model + API key:
 | Strategy | Rule |
 |---|---|
 | `conservative` (default) | Any provider says `changes` → overall `changes`. Safest for CI. |
-| `majority` | `ceil(N/2)+1` must say `changes` for overall `changes`. Errors abstain. |
-| `all_approve` | All providers must say `approved`. Errors count as `changes`. |
+| `majority` | More than half of the `D` deciding providers (`floor(D/2)+1`) must say `changes`. |
+| `all_approve` | All deciding providers must say `approved`. |
+
+Errored providers (crash, rate-limit, bad response) **abstain** — the verdict is
+computed only over providers that returned a real opinion, so one flaky provider
+never forces a `changes` verdict on its own. If **every** provider errors (or
+none is configured), the verdict is `error`, rendered as "🚫 Review incomplete —
+provider error" and carrying the `agent-request-changes` label so a failed
+review never auto-merges.
 
 Provider findings are deduplicated across providers by
 `(path, line, end_line, text-fingerprint)` and the highest severity wins.
