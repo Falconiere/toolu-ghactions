@@ -80,7 +80,7 @@ inputs:
     description: 'GitHub App id. Set together with APP_PRIVATE_KEY to post review comments as a custom-branded App ("Toolu - Code Review") instead of github-actions[bot]. Both must be set or the action falls back to the default identity.'
     required: false
   APP_PRIVATE_KEY:
-    description: 'GitHub App private key (PEM). Pair with APP_ID. Pass via a secret; never inline. Used only to mint a short-lived installation token — never logged.'
+    description: 'GitHub App private key. Accepts the raw PEM or a base64-encoded PEM (auto-decoded) — base64 is handy for storing a multiline key in a single-line secret. Pair with APP_ID. Pass via a secret; never inline. Used only to mint a short-lived installation token — never logged.'
     required: false
   TRIGGER_PHRASE:
     description: 'Mention prefix that re-triggers a review from a PR comment, e.g. "@toolu review focus on auth". Requires the workflow to also listen on issue_comment.'

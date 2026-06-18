@@ -207,8 +207,9 @@ four least-privilege permissions, and disables the webhook from
 1. Copy the **App ID**.
 2. Click **Generate a private key** → downloads a `.pem`.
 3. **Install** the App on the repo/org you want reviewed.
-4. Add both as secrets (repo or org): `APP_ID` and `APP_PRIVATE_KEY` (paste the
-   full PEM).
+4. Add both as secrets (repo or org): `APP_ID` and `APP_PRIVATE_KEY`. Paste the
+   full PEM, **or** base64-encode it first (`base64 -w0 key.pem`) to keep it on a
+   single line — the action auto-detects and decodes either form.
 
 ### Manual setup
 
@@ -357,7 +358,7 @@ turn the recap and history off.
 | `MAX_DIFF_LINES` | no | `0` (unlimited) | Maximum diff lines before truncation. `0` reviews the whole diff. Set a positive value to keep the first N lines (lexicographic by file path) and append a truncation notice. |
 | `TOKEN` | no | `${{ github.token }}` | GitHub token for posting and editing comments. |
 | `APP_ID` | no | — | GitHub App id. Set together with `APP_PRIVATE_KEY` to post as a custom-branded App (`Toolu — Code Review`) instead of `github-actions[bot]`. Both must be set or the action falls back to the default identity. See [Custom identity](#custom-identity-github-app). |
-| `APP_PRIVATE_KEY` | no | — | GitHub App private key (PEM). Pair with `APP_ID`. Pass via a secret; never inline. Used only to mint a short-lived installation token — never logged. |
+| `APP_PRIVATE_KEY` | no | — | GitHub App private key — raw PEM **or** base64-encoded PEM (auto-decoded). Pair with `APP_ID`. Pass via a secret; never inline. Used only to mint a short-lived installation token — never logged. |
 | `TRIGGER_PHRASE` | no | `@toolu` | Mention prefix that re-triggers a review from a PR comment, e.g. `@toolu review focus on auth`. Requires the workflow to also listen on `issue_comment`. See [@mention re-trigger](#mention-re-trigger). |
 | `MIN_TRIGGER_PERMISSION` | no | `write` | Minimum repo permission a commenter needs to trigger a review via `@mention`: `write` or `admin`. The check fails closed (denied on any error). |
 | `BOT_NAME` | no | `Toolu — Code Review` | Display name shown in the comment body header. |
