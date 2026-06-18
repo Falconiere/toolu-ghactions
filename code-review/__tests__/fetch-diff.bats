@@ -146,6 +146,96 @@ teardown_git_repo() {
     teardown_git_repo
 }
 
+@test "fetch-diff: build output (dist/, build/) is dropped, not reviewed" {
+    setup_git_repo
+    git checkout -b feature --quiet
+    echo "real code" > app.ts
+    mkdir -p web/dist/assets src/build
+    echo "console.log(1)" > web/dist/assets/index-AbC123.js
+    echo ".x{color:red}"  > web/dist/assets/index-XyZ789.css
+    echo "generated"      > src/build/out.js
+    git add -A
+    git commit -m "add code + build output" --quiet
+
+    export INPUT_MAX_FILES=100 INPUT_MAX_DIFF_LINES=8000 INPUT_BASE_BRANCH=main GITHUB_BASE_REF=main
+
+    run bash "$SRC_DIR/fetch-diff.sh"
+    [ "$status" -eq 0 ]
+
+    # dist/ and build/ paths are dropped as build-output.
+    echo "$output" | jq -e '[.dropped_files[] | select(.reason == "build-output") | .path] | index("web/dist/assets/index-AbC123.js") != null'
+    echo "$output" | jq -e '[.dropped_files[].path] | index("web/dist/assets/index-XyZ789.css") != null'
+    echo "$output" | jq -e '[.dropped_files[].path] | index("src/build/out.js") != null'
+    # Real source is still reviewed.
+    echo "$output" | jq -e '.changed_files | index("app.ts") != null'
+    echo "$output" | jq -e '.changed_files | index("web/dist/assets/index-AbC123.js") == null'
+
+    teardown_git_repo
+}
+
+@test "fetch-diff: minified-by-content (long line) is dropped even without a known path" {
+    setup_git_repo
+    git checkout -b feature --quiet
+    echo "real code" > app.ts
+    # A hash-named bundle outside dist/ with no .min extension, but one giant
+    # line — the signature of generated/minified output.
+    awk 'BEGIN{ s="x"; for(i=0;i<6000;i++) printf "a"; print "" }' > bundle-Qcc39.js
+    git add -A
+    git commit -m "add code + minified bundle" --quiet
+
+    export INPUT_MAX_FILES=100 INPUT_MAX_DIFF_LINES=8000 INPUT_BASE_BRANCH=main GITHUB_BASE_REF=main
+
+    run bash "$SRC_DIR/fetch-diff.sh"
+    [ "$status" -eq 0 ]
+
+    echo "$output" | jq -e '[.dropped_files[] | select(.reason == "minified") | .path] | index("bundle-Qcc39.js") != null'
+    echo "$output" | jq -e '.changed_files | index("app.ts") != null'
+    echo "$output" | jq -e '.changed_files | index("bundle-Qcc39.js") == null'
+    # The 6000-char line must never reach the diff sent to the model.
+    ! echo "$output" | jq -r '.diff' | grep -qE 'a{6000}'
+
+    teardown_git_repo
+}
+
+@test "fetch-diff: an oversized blob (>1MB) is dropped as large-file, even with short lines" {
+    setup_git_repo
+    git checkout -b feature --quiet
+    echo "real code" > app.ts
+    # 1.2MB of short lines: no long line, so only the size rule can catch it.
+    awk 'BEGIN{for(i=0;i<120000;i++) print "const x"i" = "i}' > generated-data.ts
+    git add -A
+    git commit -m "add code + oversized generated file" --quiet
+
+    export INPUT_MAX_FILES=100 INPUT_MAX_DIFF_LINES=200000 INPUT_BASE_BRANCH=main GITHUB_BASE_REF=main
+
+    run bash "$SRC_DIR/fetch-diff.sh"
+    [ "$status" -eq 0 ]
+    echo "$output" | jq -e '[.dropped_files[] | select(.reason == "large-file") | .path] | index("generated-data.ts") != null'
+    echo "$output" | jq -e '.changed_files | index("generated-data.ts") == null'
+    echo "$output" | jq -e '.changed_files | index("app.ts") != null'
+
+    teardown_git_repo
+}
+
+@test "fetch-diff: minified detection is position-independent (long line not at file start)" {
+    setup_git_repo
+    git checkout -b feature --quiet
+    # A few short lines first, THEN the giant line — detection must not assume
+    # the long line is line 1.
+    { printf 'const a = 1\nconst b = 2\nconst c = 3\n'; awk 'BEGIN{for(i=0;i<6000;i++)printf "z"; print ""}'; } > late-Qcc39.js
+    git add -A
+    git commit -m "add bundle with late long line" --quiet
+
+    export INPUT_MAX_FILES=100 INPUT_MAX_DIFF_LINES=8000 INPUT_BASE_BRANCH=main GITHUB_BASE_REF=main
+
+    run bash "$SRC_DIR/fetch-diff.sh"
+    [ "$status" -eq 0 ]
+    echo "$output" | jq -e '[.dropped_files[] | select(.reason == "minified") | .path] | index("late-Qcc39.js") != null'
+    echo "$output" | jq -e '.changed_files | index("late-Qcc39.js") == null'
+
+    teardown_git_repo
+}
+
 @test "fetch-diff: large diff truncates at a hunk boundary" {
     setup_git_repo
     git checkout -b feature --quiet
