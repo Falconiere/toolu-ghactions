@@ -85,6 +85,12 @@ if [ -z "$MERGE_BASE" ]; then
     exit 1
 fi
 
+# Resolve the base-branch TIP commit (not the merge-base): project-rules are
+# read at the tip of the branch we merge into, so rules added to the target
+# after this PR branched still apply. Emitted as base_sha for gather-rules.sh,
+# which reads convention files from this commit (never the PR head — injection-safe).
+BASE_SHA=$(git rev-parse "$REMOTE_BASE" 2>/dev/null || true)
+
 # Count changed files.
 CHANGED_FILES=$(git diff --name-only "$MERGE_BASE" "$REVIEW_HEAD" 2>/dev/null || true)
 if [ -z "${CHANGED_FILES//[[:space:]]/}" ]; then
@@ -206,6 +212,7 @@ jq -nc \
     --argjson lines "$DIFF_LINES" \
     --argjson total "$TOTAL_FILES" \
     --argjson truncated "$TRUNCATED" \
+    --arg base_sha "$BASE_SHA" \
     '{
         diff: $diff,
         files: $files[0],
@@ -214,5 +221,6 @@ jq -nc \
         dropped_files: $dropped,
         total_lines: $lines,
         total_files: $total,
-        truncated: $truncated
+        truncated: $truncated,
+        base_sha: $base_sha
     }'

@@ -1,8 +1,9 @@
 name: 'Toolu AI Code Review'
 description: |
   Automated AI code review for pull requests. Reviews every changed file
-  against a 7-dimension checklist (correctness, security, performance, test
-  coverage, doc accuracy, tight assertions, migration warnings) and posts a
+  against an 8-dimension checklist (correctness, security, performance, test
+  coverage, doc accuracy, tight assertions, migration warnings, and adherence
+  to the project's own convention files read from the base ref) and posts a
   structured verdict with actionable findings. Supports 6 AI vendors
   (OpenRouter, OpenAI, Anthropic, DeepSeek, Moonshot, MiniMax) with parallel
   ensemble review and configurable merge strategies.
@@ -59,11 +60,23 @@ inputs:
     required: false
     default: 'main'
   REVIEW_PROMPT_FILE:
-    description: 'Path to a markdown file (relative to repo root) containing a custom review prompt. Overrides the default 7-dimension checklist.'
+    description: 'Path to a markdown file (relative to repo root) containing a custom review prompt. Overrides the default 8-dimension checklist. Project conventions are still gathered and injected for the custom prompt to use.'
     required: false
   CODEBASE_OVERVIEW:
     description: 'High-level description of the codebase (framework, patterns, business context) to give the reviewer context'
     required: false
+  CHECK_PROJECT_RULES:
+    description: 'When true (default), auto-read the repo''s own convention files from the BASE ref (CLAUDE.md, AGENTS.md, .cursor/rules, .cursorrules, .windsurfrules, .github/copilot-instructions.md, plus CONVENTIONS.md/CONTRIBUTING.md/docs/conventions) and review the diff against them via the CONVENTION ADHERENCE dimension. Reading from the base ref means a PR cannot inject rules. Set false to disable.'
+    required: false
+    default: 'true'
+  RULES_GLOB:
+    description: 'Extra path globs (relative to repo root, newline- or comma-separated) to include as project rules, e.g. "docs/architecture/**". Matched against tracked files at the base ref. Empty (default) = the well-known convention files only.'
+    required: false
+    default: ''
+  RULES_MAX_BYTES:
+    description: 'Total byte cap on the gathered project-rules text. Files are added in priority order until the cap; whole files past it are dropped with a truncation notice. Default: 32768.'
+    required: false
+    default: '32768'
   MAX_FILES:
     description: 'Maximum number of changed files before the action skips. 0 (default) = unlimited; the only ceiling is your OpenRouter billing balance. Set a positive value to opt into a hard skip.'
     required: false

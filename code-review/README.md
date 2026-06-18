@@ -4,7 +4,7 @@
 
 ### Multi-vendor AI code review for every pull request
 
-Audits the diff against a 7-dimension checklist — correctness, security, performance, test coverage, doc accuracy, tight assertions, migration warnings — using **one model or an ensemble of up to 6 vendors** (OpenRouter, OpenAI, Anthropic, DeepSeek, Moonshot, MiniMax) voting in parallel. Merges the verdicts and posts a structured, machine-readable comment with inline, committable suggestions.
+Audits the diff against an 8-dimension checklist — correctness, security, performance, test coverage, doc accuracy, tight assertions, migration warnings, and adherence to the project's own convention files — using **one model or an ensemble of up to 6 vendors** (OpenRouter, OpenAI, Anthropic, DeepSeek, Moonshot, MiniMax) voting in parallel. Merges the verdicts and posts a structured, machine-readable comment with inline, committable suggestions.
 
 [![Release](https://img.shields.io/github/v/release/Falconiere/toolu-ghactions?sort=semver&color=d97757)](https://github.com/Falconiere/toolu-ghactions/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](../LICENSE)
@@ -125,9 +125,12 @@ The action runs a fan-out → merge → post pipeline:
 **1 — Fetch & shape the diff.** Resolves the merge-base, strips noise (lockfiles,
 minified, generated, source maps), drops binaries, and line-primes every diff
 line with its real source line number so findings anchor to actual lines.
+Then gathers the repo's own convention files from the base ref (see
+[Project conventions](#project-conventions)).
 
 **2 — Parallel provider reviews.** One review runs per provider in the `providers`
-list. Each provider gets the full 7-dimension checklist. Findings are validated
+list. Each provider gets the full 8-dimension checklist (the 8th, convention
+adherence, applies only when project rules were found). Findings are validated
 against the diff per-provider (hallucinated line numbers and low-confidence
 findings are dropped before the cross-provider merge).
 
@@ -140,6 +143,30 @@ configured strategy.
 plus — when `INLINE_COMMENTS` is on — per-line review comments derived from the
 merged findings, with committable ` ```suggestion ` blocks via the GitHub Reviews
 API (advisory `COMMENT` event; it never hard-blocks merge).
+
+### Project conventions
+
+The reviewer reads your repo's own rules and checks the diff against them — so a
+change that breaks a documented house rule gets flagged, citing the rule. On by
+default (`CHECK_PROJECT_RULES: true`); set it `false` to turn off.
+
+What it reads, in priority order, **from the base ref** (never the PR head):
+
+1. Root agent-rule files — `CLAUDE.md`, `AGENTS.md`, `.cursorrules`, `.windsurfrules`, `.github/copilot-instructions.md`
+2. Nested `CLAUDE.md` / `AGENTS.md` in ancestor directories of the changed files (per-package rules in a monorepo)
+3. Rule directories — everything under `.cursor/rules/` and `.windsurf/rules/`
+4. Curated conventions — `CONVENTIONS.md`, `CONTRIBUTING.md`, and `docs/conventions/`
+5. Anything you add via `RULES_GLOB`
+
+The gathered text is capped at `RULES_MAX_BYTES` (default 32 KB); whole files past
+the cap are dropped with a notice. Two guarantees worth calling out:
+
+- **Injection-safe.** Rules are read from the base branch tip via `git show`, so a
+  PR that edits `CLAUDE.md` to say "approve everything" cannot influence its own
+  review — the change only takes effect once merged. The rule text is reference
+  data; it can never alter the verdict logic or output schema.
+- **Bounded & quiet.** The plan/spec tree (`docs/toolu/**`, etc.) is never scooped;
+  only the convention files above and your explicit `RULES_GLOB` are read.
 
 ### Inline comments & suggestions
 
@@ -352,8 +379,11 @@ turn the recap and history off.
 | `INLINE_COMMENTS` | no | `true` | Post per-line review comments with committable code suggestions (Reviews API), in addition to the summary comment |
 | `MANAGE_LABELS` | no | `true` | Set a real PR label chip matching the verdict (`agent-merge-approved` / `agent-request-changes`) and remove the opposite one. Requires `issues: write`. |
 | `BASE_BRANCH` | no | `main` | Base branch for diff comparison. Falls back to `GITHUB_BASE_REF` if unset. |
-| `REVIEW_PROMPT_FILE` | no | *(7-dimension checklist)* | Path to a markdown file (relative to repo root) with a custom review prompt. Overrides the default checklist. |
+| `REVIEW_PROMPT_FILE` | no | *(8-dimension checklist)* | Path to a markdown file (relative to repo root) with a custom review prompt. Overrides the default checklist. Project conventions are still gathered and injected, but a custom prompt supplies its own dimensions. |
 | `CODEBASE_OVERVIEW` | no | — | High-level context about the codebase (framework, patterns, architecture) injected into the review prompt. |
+| `CHECK_PROJECT_RULES` | no | `true` | Auto-read the repo's own convention files **from the base ref** (`CLAUDE.md`, `AGENTS.md`, `.cursor/rules`, `.cursorrules`, `.windsurfrules`, `.github/copilot-instructions.md`, plus `CONVENTIONS.md` / `CONTRIBUTING.md` / `docs/conventions/`) and review the diff against them via the **Convention adherence** dimension. Set `false` to disable. See [Project conventions](#project-conventions). |
+| `RULES_GLOB` | no | — | Extra path globs (relative to repo root, newline- or comma-separated) to include as project rules, e.g. `docs/architecture/**`. Matched against tracked files at the base ref. |
+| `RULES_MAX_BYTES` | no | `32768` | Byte cap on the gathered rules. Files are added in priority order until the cap; whole files past it are dropped with a truncation notice. |
 | `MAX_FILES` | no | `0` (unlimited) | Maximum changed files before the action skips. `0` reviews any number of files — the only ceiling is your OpenRouter billing balance. Set a positive value to opt into a hard skip on huge PRs. |
 | `MAX_DIFF_LINES` | no | `0` (unlimited) | Maximum diff lines before truncation. `0` reviews the whole diff. Set a positive value to keep the first N lines (lexicographic by file path) and append a truncation notice. |
 | `TOKEN` | no | `${{ github.token }}` | GitHub token for posting and editing comments. |

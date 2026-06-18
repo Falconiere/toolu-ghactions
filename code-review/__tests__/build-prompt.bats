@@ -170,3 +170,34 @@ load helpers
     [[ "$user" != *"UNTRUSTED"* ]]
     [[ "$user" != *"Reminder: respond ONLY"* ]]
 }
+
+@test "build-prompt: injects Project Conventions section before Changed Files (AC8)" {
+    RULES_FILE=$(mktemp)
+    printf '### CLAUDE.md\nRULE: always parameterize SQL queries\n' > "$RULES_FILE"
+    diff_data=$(cat "$FIXTURES_DIR/sample-diff.txt" | jq -Rsc '{diff: ., changed_files: ["src/auth/login.ts"], binary_files: [], total_lines: 10, total_files: 1, truncated: false}')
+
+    PROJECT_RULES_FILE="$RULES_FILE" run bash "$SRC_DIR/build-prompt.sh" <<< "$diff_data"
+    [ "$status" -eq 0 ]
+
+    # Envelope stays valid JSON.
+    echo "$output" | jq -e '.user | type == "string"'
+
+    user=$(echo "$output" | jq -r '.user')
+    [[ "$user" == *"## Project Conventions & Rules"* ]]
+    [[ "$user" == *"always parameterize SQL queries"* ]]
+    # Conventions must precede the Changed Files list.
+    conv_pos=$(awk '/## Project Conventions & Rules/{print NR; exit}' <<< "$user")
+    files_pos=$(awk '/## Changed Files/{print NR; exit}' <<< "$user")
+    [ -n "$conv_pos" ] && [ -n "$files_pos" ] && [ "$conv_pos" -lt "$files_pos" ]
+
+    rm -f "$RULES_FILE"
+}
+
+@test "build-prompt: no Project Conventions section when PROJECT_RULES_FILE unset/empty (AC8)" {
+    diff_data=$(cat "$FIXTURES_DIR/sample-diff.txt" | jq -Rsc '{diff: ., changed_files: ["a.ts"], binary_files: [], total_lines: 1, total_files: 1, truncated: false}')
+
+    PROJECT_RULES_FILE="" run bash "$SRC_DIR/build-prompt.sh" <<< "$diff_data"
+    [ "$status" -eq 0 ]
+    user=$(echo "$output" | jq -r '.user')
+    [[ "$user" != *"## Project Conventions"* ]]
+}

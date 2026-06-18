@@ -211,6 +211,22 @@ echo "$IN_PROGRESS_BODY" | bash "$SCRIPT_DIR/post-comment.sh" >/dev/null || echo
 echo "[2/5] Parallel provider reviews (strategy: $MERGE_STRATEGY)..." >&2
 TMPD=$(mktemp -d)
 trap 'rm -rf "$TMPD"' EXIT
+
+# --- Gather project convention rules ONCE (best-effort). gather-rules reads the
+# repo's CLAUDE.md/AGENTS.md/rules from the BASE ref (injection-safe) and writes a
+# blob; build-prompt.sh injects it. Exported here so the backgrounded provider
+# subshells inherit it. Any failure leaves the review running without rules. ---
+RULES_BASE_SHA=$(echo "$DIFF_DATA" | jq -r '.base_sha // ""' || true); export RULES_BASE_SHA
+if [ "${INPUT_CHECK_PROJECT_RULES:-true}" = "true" ]; then
+    RULES_FILE="$TMPD/project-rules.txt"
+    # gather-rules always exits 0; its stderr carries skip diagnostics — let it
+    # flow to the Action log rather than swallowing it.
+    if echo "$DIFF_DATA" | bash "$SCRIPT_DIR/gather-rules.sh" > "$RULES_FILE" && [ -s "$RULES_FILE" ]; then
+        export PROJECT_RULES_FILE="$RULES_FILE"
+        echo "  Project rules: $(wc -c < "$RULES_FILE" | tr -d '[:space:]') bytes from base ref" >&2
+    fi
+fi
+
 declare -A PID
 declare -A ERR_TMP
 
