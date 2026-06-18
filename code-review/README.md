@@ -75,7 +75,7 @@ model + API key:
   with:
     PROVIDERS: |
       [
-        {"provider": "openrouter", "model": "minimax/minimax-m3", "api_key": "${{ secrets.OPENROUTER_API_KEY }}"},
+        {"provider": "openrouter", "model": "deepseek/deepseek-v4-flash", "api_key": "${{ secrets.OPENROUTER_API_KEY }}"},
         {"provider": "anthropic",  "model": "claude-sonnet-4-5", "api_key": "${{ secrets.ANTHROPIC_API_KEY }}"},
         {"provider": "openai",     "model": "gpt-4o",             "api_key": "${{ secrets.OPENAI_API_KEY }}"}
       ]
@@ -111,7 +111,7 @@ auto-translated to a single-provider `PROVIDERS` list:
 - uses: falconiere/toolu-ghactions/code-review@v2
   with:
     OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-    MODEL: 'minimax/minimax-m3'
+    MODEL: 'deepseek/deepseek-v4-flash'
 ```
 
 This is identical to the v1.2 behavior and requires no migration.
@@ -343,7 +343,7 @@ turn the recap and history off.
 | `PROVIDERS` | no | — | JSON array of `{provider, model, api_key}` entries. When set, runs one review per provider in parallel. Preferred over the legacy single-provider inputs. |
 | `MERGE_STRATEGY` | no | `conservative` | How to merge N verdicts: `conservative` (any changes wins), `majority`, `all_approve` |
 | `OPENROUTER_API_KEY` | no | — | **Legacy.** OpenRouter API key. Used only when `PROVIDERS` is unset. Auto-translated to a single-provider `PROVIDERS` list. |
-| `MODEL` | no | `minimax/minimax-m3` | **Legacy.** OpenRouter model identifier. Used only when `PROVIDERS` is unset and `OPENROUTER_API_KEY` is set. |
+| `MODEL` | no | `deepseek/deepseek-v4-flash` | **Legacy.** OpenRouter model identifier. Used only when `PROVIDERS` is unset and `OPENROUTER_API_KEY` is set. |
 | `FALLBACK_MODEL` | no | *(dropped)* | **Legacy — dropped.** Extra model in the OpenRouter `models[]` fallback array. Multi-provider replaces this. Logs a deprecation hint if set. |
 | `MAX_TOKENS` | no | `4096` | Max completion tokens per request. Default for per-entry `max_tokens` when the entry omits it. |
 | `REVIEW_MODE` | no | *(no-op)* | **Legacy — no-op.** Per-dimension sub-reviewer is removed; multi-provider replaces it. |
