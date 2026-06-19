@@ -2,8 +2,8 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { findSticky, upsertComment } from "../comment.js";
-import type { CommentClient, IssueComment, CommentTarget } from "../comment.js";
+import { findSticky, upsertComment } from "@/github/comment.js";
+import type { CommentClient, IssueComment, CommentTarget } from "@/github/comment.js";
 
 // REAL recorded comment-list payloads from ./fixtures/sticky — a marker
 // comment among human + legacy comments, a legacy-only list, and a no-sticky
@@ -40,11 +40,19 @@ function fakeClient(pages: IssueComment[]): { client: CommentClient; calls: Reco
         },
         createComment: async (p) => {
           calls.created.push({ issue_number: p.issue_number, body: p.body });
-          return { data: { html_url: `https://github.com/${p.owner}/${p.repo}/issues/${p.issue_number}#created` } };
+          return {
+            data: {
+              html_url: `https://github.com/${p.owner}/${p.repo}/issues/${p.issue_number}#created`,
+            },
+          };
         },
         updateComment: async (p) => {
           calls.updated.push({ comment_id: p.comment_id, body: p.body });
-          return { data: { html_url: `https://github.com/${p.owner}/${p.repo}/issues/comments/${p.comment_id}#updated` } };
+          return {
+            data: {
+              html_url: `https://github.com/${p.owner}/${p.repo}/issues/comments/${p.comment_id}#updated`,
+            },
+          };
         },
       },
     },

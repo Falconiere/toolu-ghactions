@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { validateFindings } from "../validate.js";
-import type { Finding } from "../../llm/schema.js";
+import { validateFindings } from "@/review/validate.js";
+import type { Finding } from "@/llm/schema.js";
 
 // Real diff coordinates: src/a.ts changed lines 10..14, src/b.ts changed lines 5,6.
 const changed = new Map<string, number[]>([
@@ -30,7 +30,13 @@ describe("validateFindings", () => {
 
   it("drops a medium-confidence low-severity finding under minConfidence=high", () => {
     const findings: Finding[] = [
-      { path: "src/a.ts", line: 10, severity: "low", text: "med conf low sev", confidence: "medium" },
+      {
+        path: "src/a.ts",
+        line: 10,
+        severity: "low",
+        text: "med conf low sev",
+        confidence: "medium",
+      },
     ];
     expect(validateFindings(findings, changed, "high")).toHaveLength(0);
     // ...but kept when the floor is lowered to medium.

@@ -5,6 +5,7 @@
 // migration (fingerprints must agree or every prior finding looks resolved+new).
 import { createHash } from "node:crypto";
 import { gzipSync, gunzipSync } from "node:zlib";
+import { z } from "zod";
 
 const MARKER_PREFIX = "<!-- toolu-review-state:v1 ";
 const MARKER_SUFFIX = " -->";
@@ -26,6 +27,8 @@ export interface Finding {
   category?: string;
   text?: string;
   fp?: string;
+  /** 1-based line number when the finding is anchored to a line. */
+  line?: number;
   [k: string]: unknown;
 }
 
@@ -35,6 +38,30 @@ export interface HistoryEntry {
   verdict: string;
   counts: { new: number; open: number; resolved: number; total: number };
 }
+
+// --- Runtime validation for a decoded marker (a PR comment is attacker-influenceable). ---
+// Findings stay permissive (any object, fields preserved) so a marker the bash action
+// wrote — whose finding fields are loosely typed — still decodes byte-compatibly. History
+// is shape-checked but falls back to [] on any mismatch rather than discarding the whole
+// state, keeping decodeMarker fail-safe.
+const StoredFindingSchema = z.object({}).passthrough();
+const HistoryEntrySchema = z.object({
+  sha: z.string(),
+  ts: z.number(),
+  verdict: z.string(),
+  counts: z.object({
+    new: z.number(),
+    open: z.number(),
+    resolved: z.number(),
+    total: z.number(),
+  }),
+});
+const ReviewStateSchema = z.object({
+  schema: z.literal("toolu-review-state"),
+  version: z.literal(1),
+  findings: z.array(StoredFindingSchema).catch([]),
+  history: z.array(HistoryEntrySchema).catch([]),
+});
 
 export interface ReviewState {
   schema: "toolu-review-state";
@@ -94,9 +121,9 @@ export function decodeMarker(body: string): ReviewState | Record<string, never> 
     const json = gunzipSync(Buffer.from(payload, "base64"), {
       maxOutputLength: MAX_DECODE_BYTES,
     }).toString("utf8");
-    const parsed = JSON.parse(json) as unknown;
-    if (parsed && typeof parsed === "object") return parsed as ReviewState;
-    return {};
+    const parsed: unknown = JSON.parse(json);
+    const result = ReviewStateSchema.safeParse(parsed);
+    return result.success ? result.data : {};
   } catch {
     return {};
   }

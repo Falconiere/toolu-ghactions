@@ -32,13 +32,20 @@ const MINIFIED_LINE_BYTES = 5000;
  * the content rules only run once the cheap checks miss.
  */
 export function noiseReason(path: string, readBlob: ReadBlob, blobSize: BlobSize): string | null {
-  if (/\.lock$/.test(path) || /-lock\.json$/.test(path) || path.endsWith("/pnpm-lock.yaml") || path === "pnpm-lock.yaml" || path.endsWith("/bun.lockb") || path === "bun.lockb") {
+  if (
+    path.endsWith(".lock") ||
+    path.endsWith("-lock.json") ||
+    path.endsWith("/pnpm-lock.yaml") ||
+    path === "pnpm-lock.yaml" ||
+    path.endsWith("/bun.lockb") ||
+    path === "bun.lockb"
+  ) {
     return "lockfile";
   }
-  if (/\.min\.js$/.test(path) || /\.min\.css$/.test(path)) {
+  if (path.endsWith(".min.js") || path.endsWith(".min.css")) {
     return "minified";
   }
-  if (/\.map$/.test(path)) {
+  if (path.endsWith(".map")) {
     return "sourcemap";
   }
   if (isBuildOutput(path)) {

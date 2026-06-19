@@ -38,12 +38,7 @@ import {
   resolveChecklistPath,
   formatDuration,
 } from "./pipeline/bodies.js";
-import type {
-  GithubContext,
-  PipelineOctokit,
-  ReviewDeps,
-  ReviewResult,
-} from "./pipeline/types.js";
+import type { GithubContext, PipelineOctokit, ReviewDeps, ReviewResult } from "./pipeline/types.js";
 
 // Re-export the public pipeline types so callers keep importing from "./pipeline.js".
 export type { GithubContext, PipelineOctokit, ReviewDeps, ReviewResult };
@@ -51,7 +46,11 @@ export type { GithubContext, PipelineOctokit, ReviewDeps, ReviewResult };
 /** Run `git` and return trimmed stdout, or null on non-zero exit (the `|| true` idiom). */
 function gitOrNull(args: string[], cwd: string): string | null {
   try {
-    return execFileSync("git", args, { cwd, encoding: "utf8", maxBuffer: 1024 * 1024 * 1024 }).trim();
+    return execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024 * 1024,
+    }).trim();
   } catch {
     return null;
   }
@@ -212,7 +211,7 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
   }
 
   // --- Format the verdict comment + label. ---
-  const { body, label } = formatVerdict(validated, {
+  const { body } = formatVerdict(validated, {
     botName: inputs.botName,
     botLogoUrl: inputs.botLogoUrl,
     // Heading shows the PR SOURCE branch (bash used GITHUB_HEAD_REF); prefer it.
@@ -244,9 +243,14 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
   return { verdict, findingsCount: findings.length, commentUrl };
 }
 
+/** Type guard: a decoded marker is a usable ReviewState (vs the empty `{}` fail-safe). */
+function isReviewState(decoded: ReviewState | Record<string, never>): decoded is ReviewState {
+  return "findings" in decoded;
+}
+
 /** Narrow a decoded marker to a usable ReviewState, or null when it was the empty `{}`. */
 function asReviewState(decoded: ReviewState | Record<string, never>): ReviewState | null {
-  return "findings" in decoded ? (decoded as ReviewState) : null;
+  return isReviewState(decoded) ? decoded : null;
 }
 
 /**
@@ -263,9 +267,11 @@ async function captureUpsertId(
 ): Promise<number | undefined> {
   await upsertComment(octokit, target, body, stickyId);
   if (stickyId !== undefined) return stickyId;
-  const sticky = await findSticky(octokit, { owner: target.owner, repo: target.repo, prNumber }).catch(
-    () => null,
-  );
+  const sticky = await findSticky(octokit, {
+    owner: target.owner,
+    repo: target.repo,
+    prNumber,
+  }).catch(() => null);
   return sticky?.id;
 }
 

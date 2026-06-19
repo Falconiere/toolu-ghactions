@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { reviewWithModel } from "../openrouter.js";
-import type { Envelope } from "../../prompt.js";
+import { reviewWithModel } from "@/llm/openrouter.js";
+import type { Envelope } from "@/prompt.js";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -14,11 +14,11 @@ function fixture(name: string): unknown {
 
 /** A fetch that always replays one recorded response — no network, no code mocks. */
 function replayFetch(body: unknown): typeof fetch {
-  return (async () =>
+  return async () =>
     new Response(JSON.stringify(body), {
       status: 200,
       headers: { "content-type": "application/json" },
-    })) as typeof fetch;
+    });
 }
 
 const ENVELOPE: Envelope = {
@@ -64,7 +64,7 @@ describe("reviewWithModel", () => {
     // AbortController fires (real fetch rejects with an AbortError on signal abort).
     // A short timeoutMs proves the deadline cuts the hang instead of stalling to
     // the 6h runner ceiling. No mocks: this is exactly how the real fetch behaves.
-    const hangingFetch = ((_url: string | URL | Request, init?: RequestInit) =>
+    const hangingFetch: typeof fetch = (_url, init) =>
       new Promise<Response>((_resolve, reject) => {
         const signal = init?.signal;
         if (signal) {
@@ -72,7 +72,7 @@ describe("reviewWithModel", () => {
             reject(Object.assign(new Error("The operation was aborted."), { name: "AbortError" }));
           });
         }
-      })) as typeof fetch;
+      });
 
     const start = Date.now();
     const result = await reviewWithModel(ENVELOPE, {
@@ -92,11 +92,11 @@ describe("reviewWithModel", () => {
   });
 
   it("abstains on a non-JSON / error HTTP response instead of throwing", async () => {
-    const errorFetch = (async () =>
+    const errorFetch: typeof fetch = async () =>
       new Response("upstream exploded", {
         status: 500,
         headers: { "content-type": "text/plain" },
-      })) as typeof fetch;
+      });
 
     const result = await reviewWithModel(ENVELOPE, {
       model: "deepseek/deepseek-v4-flash",

@@ -16,12 +16,17 @@ const savedEnv = { ...process.env };
 
 /** Read the parsed key=value pairs core.setOutput wrote to GITHUB_OUTPUT. */
 function readOutputs(): Record<string, string> {
-  const raw = readFileSync(process.env["GITHUB_OUTPUT"] as string, "utf8");
+  const outputPath = process.env["GITHUB_OUTPUT"];
+  if (outputPath === undefined) throw new Error("GITHUB_OUTPUT is not set");
+  const raw = readFileSync(outputPath, "utf8");
   const out: Record<string, string> = {};
   // @actions/core writes "name<<delimiter\nvalue\ndelimiter\n" blocks.
   const re = /^([^<\n]+)<<(ghadelimiter_[^\n]+)\n([\s\S]*?)\n\2$/gm;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(raw)) !== null) out[m[1] as string] = m[3] as string;
+  while ((m = re.exec(raw)) !== null) {
+    const [, name, , value] = m;
+    if (name !== undefined && value !== undefined) out[name] = value;
+  }
   return out;
 }
 
@@ -38,7 +43,7 @@ async function runMain(): Promise<void> {
   // Drop the cached module graph so @actions/github's context singleton (built at
   // import time) re-reads the env, and main.ts's side-effecting main() re-fires.
   vi.resetModules();
-  await import("../main.js");
+  await import("@/main.js");
   // main() is fired at import as a floating promise; let the microtasks drain.
   await new Promise((r) => setTimeout(r, 50));
 }

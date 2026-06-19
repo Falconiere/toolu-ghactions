@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { shapeDiff } from "../shape.js";
+import { shapeDiff } from "@/git/shape.js";
 
 // REAL unified-diff text (the kind `git diff <base> HEAD -- <file>` emits),
 // fed straight through shapeDiff — the same payload shape-diff.sh consumes.

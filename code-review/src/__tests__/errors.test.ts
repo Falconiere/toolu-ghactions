@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { errorMessage } from "../errors.js";
+import { errorMessage } from "@/errors.js";
 
 // FIX 14: one shared errorMessage() replacing four byte-identical copies.
 // Real values only (Error / string / object / Error-with-cause) — no mocks.

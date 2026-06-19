@@ -72,7 +72,10 @@ function defaultGitShow(cwd: string): GitShow {
  * tracked paths in tree order (empty array when none / unreadable).
  */
 function listTracked(baseSha: string, cwd: string): string[] {
-  const out = gitOrNull(["-c", "core.quotePath=false", "ls-tree", "-r", "--name-only", baseSha], cwd);
+  const out = gitOrNull(
+    ["-c", "core.quotePath=false", "ls-tree", "-r", "--name-only", baseSha],
+    cwd,
+  );
   if (out === null) return [];
   return out.split("\n").filter((p) => p !== "");
 }
@@ -147,7 +150,13 @@ function selectPaths(tracked: string[], changedFiles: string[], rulesGlob: strin
   };
 
   // Tier 1: root agent-rule files.
-  for (const f of ["CLAUDE.md", "AGENTS.md", ".cursorrules", ".windsurfrules", ".github/copilot-instructions.md"]) {
+  for (const f of [
+    "CLAUDE.md",
+    "AGENTS.md",
+    ".cursorrules",
+    ".windsurfrules",
+    ".github/copilot-instructions.md",
+  ]) {
     select(f);
   }
 

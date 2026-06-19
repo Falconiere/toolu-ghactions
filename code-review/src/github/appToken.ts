@@ -12,7 +12,7 @@
 // SECURITY: the private key is never logged. @octokit/auth-app holds it in
 // memory and signs the JWT internally; no PEM ever hits stdout/stderr here.
 import { createAppAuth } from "@octokit/auth-app";
-import { errorMessage } from "../errors.js";
+import { errorMessage } from "@/errors.js";
 
 /** The installation auth call's result — just the token field we read. */
 export interface InstallationAuthResult {

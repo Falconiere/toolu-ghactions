@@ -2,11 +2,11 @@
 // dependency bundle, the GitHub context slice, the Octokit union, and the result.
 // Split out of pipeline.ts so that file stays under the 300-LOC budget. These are
 // re-exported from pipeline.ts, so callers keep importing them from "./pipeline.js".
-import type { EventPayload } from "../github/event.js";
-import type { CommentClient } from "../github/comment.js";
-import type { ReviewClient } from "../github/review.js";
-import type { LabelClient } from "../github/label.js";
-import type { ActionInputs } from "../inputs.js";
+import type { EventPayload } from "@/github/event.js";
+import type { CommentClient } from "@/github/comment.js";
+import type { ReviewClient } from "@/github/review.js";
+import type { LabelClient } from "@/github/label.js";
+import type { ActionInputs } from "@/inputs.js";
 
 /** The full Octokit slice the pipeline needs — the union of every module's client. */
 export type PipelineOctokit = CommentClient & ReviewClient & LabelClient;

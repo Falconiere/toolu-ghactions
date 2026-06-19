@@ -79,7 +79,10 @@ export function sanitizeInstruction(raw: string): string {
 function resolveSystemPrompt(opts: PromptOptions): string {
   const promptFile = opts.reviewPromptFile ?? "";
   if (promptFile !== "") {
-    const workspace = opts.githubWorkspace && opts.githubWorkspace !== "" ? opts.githubWorkspace : "/github/workspace";
+    const workspace =
+      opts.githubWorkspace && opts.githubWorkspace !== ""
+        ? opts.githubWorkspace
+        : "/github/workspace";
     const promptPath = isAbsolute(promptFile) ? promptFile : join(workspace, promptFile);
     try {
       return readFileSync(promptPath, "utf8");

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { noiseReason, type ReadBlob, type BlobSize } from "../noise.js";
+import { noiseReason, type ReadBlob, type BlobSize } from "@/git/noise.js";
 
 // REAL injected blobs — no mocks of git, just the (readBlob, blobSize) the
 // production caller routes through `git show` / `git cat-file -s`. Each case
@@ -8,8 +8,8 @@ import { noiseReason, type ReadBlob, type BlobSize } from "../noise.js";
 /** Build readBlob/blobSize from an in-memory path→content map (size = utf8 byte length). */
 function fromMap(map: Record<string, string>): { readBlob: ReadBlob; blobSize: BlobSize } {
   return {
-    readBlob: (p) => (p in map ? (map[p] as string) : null),
-    blobSize: (p) => (p in map ? Buffer.byteLength(map[p] as string, "utf8") : 0),
+    readBlob: (p) => map[p] ?? null,
+    blobSize: (p) => (p in map ? Buffer.byteLength(map[p] ?? "", "utf8") : 0),
   };
 }
 

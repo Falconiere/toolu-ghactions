@@ -81,12 +81,10 @@ export function shapeDiff(rawDiff: string): ShapedDiff {
 
   // jq group_by(.path) sorts groups by path key; reproduce that ordering so the
   // emitted files[] matches the bash output exactly.
-  const files: ShapedFile[] = [...pairsByPath.keys()]
-    .sort()
-    .map((p) => ({
-      path: p,
-      changed_lines: [...(pairsByPath.get(p) ?? new Set<number>())].sort((a, b) => a - b),
-    }));
+  const files: ShapedFile[] = [...pairsByPath.keys()].sort().map((p) => ({
+    path: p,
+    changed_lines: [...(pairsByPath.get(p) ?? new Set<number>())].sort((a, b) => a - b),
+  }));
 
   const diff = hadTrailingNewline ? `${out.join("\n")}\n` : out.join("\n");
   return { diff, files };
