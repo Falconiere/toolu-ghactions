@@ -419,10 +419,10 @@ Still accepted so existing workflows don't break, but ignored (warned in logs). 
 | Input | Default | Status |
 |---|---|---|
 | `PROVIDERS` | — | **Deprecated.** Only the first entry's `model` (+ optional `api_key` / `max_tokens`) is used; `provider` is accepted-but-ignored; extra entries dropped. Use `OPENROUTER_API_KEY` + `MODEL`. |
-| `MERGE_STRATEGY` | `conservative` | **Deprecated — no-op.** One model means one verdict; nothing to merge. |
+| `MERGE_STRATEGY` | — | **Deprecated — no-op.** One model means one verdict; nothing to merge. |
 | `ENFORCE_JSON_SCHEMA` | `true` | **Deprecated — no-op.** `generateObject` is always structured; there is no free-text/regex path. |
-| `FALLBACK_MODEL` | `anthropic/claude-sonnet-4-5` | **Deprecated — no-op.** No fallback array; set `MODEL` instead. |
-| `REVIEW_MODE` | `parallel` | **Deprecated — no-op.** The per-dimension sub-reviewer was removed. |
+| `FALLBACK_MODEL` | — | **Deprecated — no-op.** No fallback array; set `MODEL` instead. |
+| `REVIEW_MODE` | — | **Deprecated — no-op.** The per-dimension sub-reviewer was removed. |
 
 ## Outputs
 
