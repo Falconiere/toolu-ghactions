@@ -55,8 +55,8 @@ describe("outgoing request shape (reasoning-off proof)", () => {
     expect(body.provider?.require_parameters).toBe(true);
     // The selected model id reaches the wire.
     expect(body.model).toBe("deepseek/deepseek-v4-flash");
-    // Parity with build-request.sh's fixed temperature and forwarded max_tokens.
-    expect(body.temperature).toBe(0.1);
+    // temperature 0: greedy decoding for the most reproducible review output achievable.
+    expect(body.temperature).toBe(0);
     expect(body.max_tokens).toBe(4096);
   });
 });

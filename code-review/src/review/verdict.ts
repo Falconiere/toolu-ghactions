@@ -81,6 +81,7 @@ export function formatVerdict(
   const body: ReviewBody = {
     verdictLabel: `\`${label}\``,
     verdictBadge: badge,
+    errorDetail: result.error ?? "",
     header,
     branch: opts.branch ?? "unknown",
     jobUrl: opts.jobUrl ?? "https://github.com",

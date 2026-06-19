@@ -45,6 +45,8 @@ describe("formatVerdict", () => {
     // error is the do-not-approve fail-safe: request-changes label, error badge.
     expect(label).toBe("request-changes");
     expect(body).toContain("🚫 Review incomplete — provider error");
+    // The real provider-error message is surfaced (not just the generic badge).
+    expect(body).toContain("boom");
   });
 
   it("puts the state marker as the last line of the body", () => {
