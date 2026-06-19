@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.0](https://github.com/Falconiere/toolu-ghactions/compare/v3.1.0...v3.2.0) (2026-06-19)
+
+
+### Features
+
+* **code-review:** show loading gif in in-progress comment ([746f461](https://github.com/Falconiere/toolu-ghactions/commit/746f46175cda030d4f68a4a2441dbc202b788d4b))
+
 ## [3.1.0](https://github.com/Falconiere/toolu-ghactions/compare/v3.0.0...v3.1.0) (2026-06-19)
 
 
