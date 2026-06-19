@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.1](https://github.com/Falconiere/toolu-ghactions/compare/v3.3.0...v3.3.1) (2026-06-19)
+
+
+### Bug Fixes
+
+* **code-review:** retry hung provider calls instead of one 180s abort ([b4206b1](https://github.com/Falconiere/toolu-ghactions/commit/b4206b1c7bf20c6f5d46000a360d6f37425436c6))
+
 ## [3.3.0](https://github.com/Falconiere/toolu-ghactions/compare/v3.2.0...v3.3.0) (2026-06-19)
 
 
