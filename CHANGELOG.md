@@ -1,5 +1,38 @@
 # Changelog
 
+## [3.0.0](https://github.com/Falconiere/toolu-ghactions/compare/v2.3.3...v3.0.0) (2026-06-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **code-review:** hybrid review — deterministic SAST (gitleaks + opengrep) triaged by the LLM
+* **code-review:** rename verdict labels to merge-approved / request-changes
+* **code-review:** finalize node24 JS action — CI/release/docs + remove bash
+* **code-review:** package as node24 JS action (drop Docker)
+
+### Features
+
+* **code-review:** finalize node24 JS action — CI/release/docs + remove bash ([483c78a](https://github.com/Falconiere/toolu-ghactions/commit/483c78a6d2004b9b91a2118cbe6c4bcbddc8ae0f))
+* **code-review:** hybrid review — deterministic SAST (gitleaks + opengrep) triaged by the LLM ([1449dc3](https://github.com/Falconiere/toolu-ghactions/commit/1449dc36f5b054a8b47eb62c99915888c1431dea))
+* **code-review:** package as node24 JS action (drop Docker) ([cb4c50f](https://github.com/Falconiere/toolu-ghactions/commit/cb4c50f8a52a24c2a195503488ecb814622e5843))
+* **code-review:** port diff/shape/noise to TS (git workstream) ([456b660](https://github.com/Falconiere/toolu-ghactions/commit/456b6600d0cfb5ab4fba846bd6ebdcd374b55827))
+* **code-review:** port GitHub layer (appToken/event/comment/review/label) ([ad26069](https://github.com/Falconiere/toolu-ghactions/commit/ad26069d23a08c8574cab563dc8209e1a9f1e103))
+* **code-review:** port LLM layer via Vercel AI SDK (reasoning off) ([b272b95](https://github.com/Falconiere/toolu-ghactions/commit/b272b9551f398edbbcb9cae4601cc2325be3dae0))
+* **code-review:** port review output (validate/recap/verdict) ([9372d9f](https://github.com/Falconiere/toolu-ghactions/commit/9372d9f08c184920894aa23bda4ce874bf9a5ad1))
+* **code-review:** port rules + prompt to TS (injection-safe) ([315c9df](https://github.com/Falconiere/toolu-ghactions/commit/315c9df959312fced78b57c1e82636a4dc941b61))
+* **code-review:** rename verdict labels to merge-approved / request-changes ([7cc923a](https://github.com/Falconiere/toolu-ghactions/commit/7cc923ac188caeea19ec3ddfe36d669cea4c4a01))
+* **code-review:** scaffold TS rewrite + port review-state (byte-compat) ([0f946c0](https://github.com/Falconiere/toolu-ghactions/commit/0f946c068c6ba88177da12e37faf4e81962282f0))
+* **code-review:** wire integration layer (inputs/pipeline/main) ([93b275b](https://github.com/Falconiere/toolu-ghactions/commit/93b275b74d1440a217c66a8161e64c7d0ca9a202))
+
+
+### Bug Fixes
+
+* **code-review:** apply max-effort review findings (15) ([4447288](https://github.com/Falconiere/toolu-ghactions/commit/44472889444ea86a01e2030a15a0a2f158b2d9b5))
+* **code-review:** emit dist/index.cjs so the node24 action loads ([44db889](https://github.com/Falconiere/toolu-ghactions/commit/44db88959a401be469f83b5633a260ae23b03537))
+* **code-review:** gpt-4o-mini default, gitleaks --no-git + allowlist, opengrep excludes, finish_reason ([17f3881](https://github.com/Falconiere/toolu-ghactions/commit/17f3881713299a59c3e55bd3d9972022fbbe78f2))
+* **code-review:** revert default model to gemini-2.5-flash ([f6605fb](https://github.com/Falconiere/toolu-ghactions/commit/f6605fb87d20d637cd37948344a9b05bf59e3892))
+* **code-review:** stabilize LLM review — temp 0, reliable model, surface errors ([75c8c87](https://github.com/Falconiere/toolu-ghactions/commit/75c8c872d94195d4a38b8df0349b038db77c0efd))
+
 ## [2.3.3](https://github.com/Falconiere/toolu-ghactions/compare/v2.3.2...v2.3.3) (2026-06-19)
 
 
