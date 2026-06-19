@@ -7,6 +7,10 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { GithubContext } from "./types.js";
 
+/** Raw GitHub URL for the loading animation shown in the in-progress comment. */
+const LOADING_GIF_URL =
+  "https://raw.githubusercontent.com/falconiere/toolu-ghactions/main/code-review/assets/loading.gif";
+
 /**
  * Locate the shipped review-checklist.txt, mirroring build-prompt.sh's prompt_path.
  * In node24 the action's CWD is the CONSUMER repo, so its own files live at
@@ -70,6 +74,8 @@ export function noopBody(ctx: GithubContext): string {
 /** The in-progress comment body (parity with main.sh's IN_PROGRESS_BODY). */
 export function inProgressBody(ctx: GithubContext): string {
   return `**AI Code Review running** —— [View job](${jobUrl(ctx)})
+
+<p align="center"><img src="${LOADING_GIF_URL}" width="240" alt="Review in progress"></p>
 
 ---
 ### PR Review in Progress
