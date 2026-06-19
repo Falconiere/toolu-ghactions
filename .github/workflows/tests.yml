@@ -12,7 +12,7 @@ jobs:
       run:
         working-directory: code-review
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
@@ -30,7 +30,7 @@ jobs:
         run: bun run build
       - name: dist is in sync with src
         # The committed dist/index.js must match a fresh build — consumers run the
-        # checked-in bundle, not the TS sources. Fail if `node build.mjs` produced
+        # checked-in bundle, not the TS sources. Fail if `bun run build` produced
         # any change.
         run: git diff --quiet -- dist
       - name: action.yml is a node24 JS action
@@ -44,7 +44,7 @@ jobs:
     name: scripts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install bats + jq
         run: sudo apt-get update && sudo apt-get install -y bats jq
       - name: bats
@@ -62,7 +62,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install bats + jq (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y bats jq
@@ -76,7 +76,7 @@ jobs:
     name: tunnel shellcheck + action-validator
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: shellcheck
         run: shellcheck --severity=warning cloudflare-tunnel/src/*.sh
       - name: action-validator (start)

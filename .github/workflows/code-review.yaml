@@ -16,10 +16,16 @@ concurrency:
 jobs:
   review:
     runs-on: ubuntu-latest
+    # Dogfooding runs the LOCAL action (the PR's own code-review/), so restrict it
+    # to same-repo PRs — a fork PR must not execute its untrusted build on our
+    # runner. Forks are withheld the secret anyway; this also skips them cleanly.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: falconiere/toolu-ghactions/code-review@v2
+      # Dogfood the LOCAL action (this checkout), not the published @v2 — so the
+      # in-repo build reviews this repo's own PRs before it ships in a release.
+      - uses: ./code-review
         with:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
