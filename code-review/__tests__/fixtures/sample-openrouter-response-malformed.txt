@@ -1,8 +1,0 @@
-I found several issues in this PR.
-
-`src/auth/login.ts:42`: blocker: SQL injection risk — user input is interpolated directly.
-`src/utils/format.ts:17`: low: Comment says "Temporary workaround" with no removal date.
-
-Otherwise the tests pass and the code looks solid. Approved!
-
-agent-merge-approved

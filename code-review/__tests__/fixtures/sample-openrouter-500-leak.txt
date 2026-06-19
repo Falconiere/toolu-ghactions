@@ -1,1 +1,0 @@
-{"error":{"code":500,"message":"Upstream provider error while forwarding Authorization: Bearer sk-test-LEAK12345 — request rejected"}}

@@ -7,16 +7,19 @@ load helpers
 setup() { common_setup; }
 teardown() { common_teardown; }
 
-@test "code-review: mirror root has the action tree + LICENSE, image repinned to major" {
+@test "code-review: mirror root has the node24 action tree + dist bundle + LICENSE" {
     ACTION=code-review run bash "$SCRIPT" "$WORK"
     [ "$status" -eq 0 ]
     out=$(checkout_mirror)
     [ -f "$out/action.yml" ]
-    [ -f "$out/Dockerfile" ]
     [ -d "$out/src" ]
     [ -d "$out/prompts" ]
     [ -f "$out/LICENSE" ]
-    grep -qF "docker://ghcr.io/falconiere/toolu-ghactions/code-review:v2" "$out/action.yml"
+    # JS action: action.yml runs the committed dist/index.js bundle, which the
+    # mirror copies verbatim (no image rewrite).
+    [ -f "$out/dist/index.js" ]
+    grep -qF "using: 'node24'" "$out/action.yml"
+    grep -qF "main: 'dist/index.js'" "$out/action.yml"
 }
 
 @test "cloudflare-tunnel: root action.yml resolves scripts (../src dropped); subdirs kept" {

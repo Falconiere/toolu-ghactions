@@ -24,7 +24,6 @@ common_setup() {
     export SOURCE_SHA="deadbeefcafe"
     export TAG="v2.1.0"
     export MAJOR="2"
-    export IMAGE_BASE="ghcr.io/falconiere/toolu-ghactions/code-review"
 
     # Deterministic committer identity (the script also sets repo-local config).
     export GIT_AUTHOR_NAME="test"      GIT_AUTHOR_EMAIL="test@example.com"

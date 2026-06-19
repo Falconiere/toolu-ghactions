@@ -5,11 +5,11 @@ import { dirname, join } from "node:path";
 import { findSticky, upsertComment } from "../comment.js";
 import type { CommentClient, IssueComment, CommentTarget } from "../comment.js";
 
-// REAL recorded comment-list payloads from __tests__/fixtures/sticky — a marker
+// REAL recorded comment-list payloads from ./fixtures/sticky — a marker
 // comment among human + legacy comments, a legacy-only list, and a no-sticky
 // list. The Octokit client is a recording fake fed those payloads; create/update
 // calls are asserted against the injected fake (no network).
-const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "__tests__", "fixtures", "sticky");
+const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "sticky");
 
 const TARGET: CommentTarget = { owner: "test-org", repo: "test-repo", prNumber: 42 };
 

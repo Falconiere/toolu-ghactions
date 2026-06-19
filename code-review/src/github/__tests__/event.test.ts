@@ -5,11 +5,11 @@ import { dirname, join } from "node:path";
 import { resolveEvent } from "../event.js";
 import type { EventPayload } from "../event.js";
 
-// REAL recorded event payloads from __tests__/fixtures/event — pull_request and
+// REAL recorded event payloads from ./fixtures/event — pull_request and
 // issue_comment shapes the action actually receives. The permission lookup is
 // injected so the security paths (insufficient perm, fail-closed throw) run with
 // no network.
-const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "__tests__", "fixtures", "event");
+const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "event");
 
 /** Load a recorded event payload fixture. */
 function payload(name: string): EventPayload {

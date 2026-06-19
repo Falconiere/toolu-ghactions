@@ -22,8 +22,7 @@
 #   MIRROR_TOKEN  repo-scope PAT used in the default clone URL
 #   SOURCE_REPO   monorepo owner/repo, for README backlinks
 #   SOURCE_SHA    monorepo commit SHA being mirrored (commit trailer)
-# Environment (conditional / optional):
-#   IMAGE_BASE    ghcr.io/<owner>/toolu-ghactions/code-review (required for code-review)
+# Environment (optional):
 #   MIRROR_REMOTE full git URL to clone/push (default: token https URL from
 #                 MIRROR_REPO). Test seam: point at a local bare repo.
 #
@@ -37,15 +36,12 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # --- layout transforms ------------------------------------------------------
 
-# Copy the code-review action (a Docker action) to the mirror root and repin its
-# image to the GHCR image the monorepo already builds, at the release major.
+# Copy the code-review action to the mirror root. It is a node24 JS action whose
+# action.yml points at the committed dist/index.js bundle; `cp -R` copies dist/
+# along with everything else, so the mirror is self-contained with no rewrite.
 layout_code_review() {
   local dest="$1"
-  [ -n "${IMAGE_BASE:-}" ] || die "IMAGE_BASE is required for code-review"
   cp -R "$REPO_ROOT/code-review/." "$dest/"
-  sed -E "s#^([[:space:]]*image:[[:space:]]*).*#\1'docker://${IMAGE_BASE}:v${MAJOR}'#" \
-    "$dest/action.yml" >"$dest/action.yml.tmp"
-  mv "$dest/action.yml.tmp" "$dest/action.yml"
 }
 
 # Copy the cloudflare-tunnel composite sub-actions and synthesize a root
