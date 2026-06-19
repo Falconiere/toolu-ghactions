@@ -37,7 +37,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # --- layout transforms ------------------------------------------------------
 
 # Copy the code-review action to the mirror root. It is a node24 JS action whose
-# action.yml points at the committed dist/index.js bundle; `cp -R` copies dist/
+# action.yml points at the committed dist/index.cjs bundle; `cp -R` copies dist/
 # along with everything else, so the mirror is self-contained with no rewrite.
 layout_code_review() {
   local dest="$1"
