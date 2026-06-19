@@ -21,8 +21,8 @@ const GENERATED_HEAD_LINES = 20;
 /** Blob-size ceiling: a file over ~1MB is a dump/bundle/vendored blob — drop it. */
 const LARGE_FILE_BYTES = 1_000_000;
 
-/** A single line longer than this marks machine-generated/minified content. */
-const MINIFIED_LINE_CHARS = 5000;
+/** A single line longer than this (UTF-8 BYTES) marks machine-generated/minified content. */
+const MINIFIED_LINE_BYTES = 5000;
 
 /**
  * Return the drop-reason for a noise path, or null when the file is real source
@@ -62,8 +62,13 @@ export function noiseReason(path: string, readBlob: ReadBlob, blobSize: BlobSize
 
   // Minified-by-content: hash-named bundles slip past the extension/dir checks
   // but always carry a pathologically long line. Position-independent — any
-  // line over the threshold marks the file machine-generated.
-  if (blob !== null && blob.split("\n").some((line) => line.length > MINIFIED_LINE_CHARS)) {
+  // line over the threshold marks the file machine-generated. Measured in UTF-8
+  // BYTES (Buffer.byteLength), matching fetch-diff.sh's awk byte length — a
+  // multibyte line at the JS-code-unit boundary would otherwise drop differently.
+  if (
+    blob !== null &&
+    blob.split("\n").some((line) => Buffer.byteLength(line, "utf8") > MINIFIED_LINE_BYTES)
+  ) {
     return "minified";
   }
 

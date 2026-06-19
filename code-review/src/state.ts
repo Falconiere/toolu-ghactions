@@ -14,6 +14,12 @@ const MARKER_SUFFIX = " -->";
 // with no separator. Matched here for marker/fingerprint byte-compat.
 const FP_SEP = "";
 
+// Decompression output cap (bytes). A PR-comment marker is attacker-influenceable,
+// so a crafted gzip bomb (tiny base64 → GBs inflated) could OOM the runner. 5 MB is
+// orders of magnitude above any real state marker; gunzipSync throws RangeError past
+// it, which decodeMarker's try/catch turns into the `{}` fail-safe.
+const MAX_DECODE_BYTES = 5_000_000;
+
 /** A review finding. Loose by design — only the fields the fingerprint reads matter here. */
 export interface Finding {
   path?: string;
@@ -73,8 +79,9 @@ export function encodeMarker(state: ReviewState): string {
 
 /**
  * Decode a comment body (or bare marker) back into state. FAIL-SAFE: a missing
- * marker, bad base64, bad gzip, or invalid JSON all yield `{}` — never throws,
- * so a corrupt marker just starts memory fresh (matches the bash decode).
+ * marker, bad base64, bad gzip, invalid JSON, or a payload that inflates past
+ * {@link MAX_DECODE_BYTES} (gzip-bomb guard) all yield `{}` — never throws, so a
+ * corrupt or hostile marker just starts memory fresh (matches the bash decode).
  */
 export function decodeMarker(body: string): ReviewState | Record<string, never> {
   const re = new RegExp(
@@ -84,7 +91,9 @@ export function decodeMarker(body: string): ReviewState | Record<string, never> 
   const payload = m?.[1];
   if (!payload) return {};
   try {
-    const json = gunzipSync(Buffer.from(payload, "base64")).toString("utf8");
+    const json = gunzipSync(Buffer.from(payload, "base64"), {
+      maxOutputLength: MAX_DECODE_BYTES,
+    }).toString("utf8");
     const parsed = JSON.parse(json) as unknown;
     if (parsed && typeof parsed === "object") return parsed as ReviewState;
     return {};
@@ -103,6 +112,8 @@ export interface DiffInput {
   scope: { in_scope_paths: string[]; full_review: boolean };
   head_sha: string;
   verdict: string;
+  /** Clock for the history-entry timestamp (epoch MILLISECONDS), default Date.now. */
+  now?: () => number;
 }
 
 export interface DiffResult {
@@ -138,9 +149,12 @@ export function diffState(input: DiffInput): DiffResult {
     resolved: resolved.length,
     total: current.length,
   };
+  // Epoch SECONDS from the injected ms clock (default Date.now), so a pinned clock
+  // makes the marker deterministic — the module-local timer was unreachable before.
+  const nowMs = (input.now ?? Date.now)();
   const history_entry: HistoryEntry = {
     sha: input.head_sha.slice(0, 7),
-    ts: Math.floor(epochSeconds()),
+    ts: Math.floor(nowMs / 1000),
     verdict: input.verdict,
     counts,
   };
@@ -154,9 +168,4 @@ export function diffState(input: DiffInput): DiffResult {
     history_entry,
     next_state: { schema: "toolu-review-state", version: 1, findings: current, history },
   };
-}
-
-/** Wall-clock seconds — isolated so tests can pin time without touching the diff logic. */
-function epochSeconds(): number {
-  return Date.now() / 1000;
 }

@@ -64,6 +64,25 @@ describe("noiseReason", () => {
     expect(noiseReason("late-Qcc39.js", readBlob, blobSize)).toBe("minified");
   });
 
+  it("measures the long-line threshold in UTF-8 BYTES, not code units (FIX 12)", () => {
+    // 2000 emoji = 2000 UTF-16 code-unit *pairs* (line.length 4000, under 5000) but
+    // 8000 UTF-8 bytes (over 5000). The deployed awk uses byte length, so this must
+    // be flagged minified — a code-unit `.length` check would have wrongly kept it.
+    const multibyteLine = "😀".repeat(2000);
+    expect(multibyteLine.length).toBeLessThan(5000); // UTF-16 code units
+    expect(Buffer.byteLength(multibyteLine, "utf8")).toBeGreaterThan(5000); // UTF-8 bytes
+    const { readBlob, blobSize } = fromMap({ "emoji-Qcc39.js": `${multibyteLine}\n` });
+    expect(noiseReason("emoji-Qcc39.js", readBlob, blobSize)).toBe("minified");
+  });
+
+  it("keeps a file whose longest line is exactly 5000 bytes (boundary, > not >=)", () => {
+    // Exactly 5000 bytes is NOT over the threshold (strict >), matching the awk.
+    const line = "a".repeat(5000);
+    expect(Buffer.byteLength(line, "utf8")).toBe(5000);
+    const { readBlob, blobSize } = fromMap({ "src/boundary.ts": `${line}\n` });
+    expect(noiseReason("src/boundary.ts", readBlob, blobSize)).toBeNull();
+  });
+
   it("drops a >1MB short-line blob as large-file (size rule, no long line)", () => {
     // 1.2MB of short lines: no single line is long, only the size rule catches it.
     const big = Array.from({ length: 120_000 }, (_, i) => `const x${i} = ${i}`).join("\n");

@@ -143,8 +143,13 @@ function assertMarkerLast(rendered: string, marker: string): void {
   }
 }
 
-/** Default an empty/null verdict to approved (no findings) or changes (has findings). */
-function resolveVerdict(
+/**
+ * Default an empty/null verdict to approved (no findings) or changes (has findings);
+ * "error" passes through. The single home of the default-verdict rule — pipeline.ts
+ * imports this rather than re-deriving it, so the fail-safe can't drift between the
+ * two call sites.
+ */
+export function resolveVerdict(
   verdict: ProviderResult["verdict"] | "" | null | undefined,
   findingsCount: number,
 ): ProviderResult["verdict"] {

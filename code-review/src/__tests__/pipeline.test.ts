@@ -4,12 +4,14 @@
 // recording fake Octokit captures every API call. The pull_request context is a
 // real GitHub pull_request event payload shape.
 import { describe, it, expect, afterEach } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { runReview } from "../pipeline.js";
 import type { GithubContext, PipelineOctokit, ReviewDeps } from "../pipeline.js";
 import type { ActionInputs } from "../inputs.js";
+import { encodeMarker, type ReviewState } from "../state.js";
 import { git, setupGitRepo, writeFile, removeRepo } from "../git/__tests__/helpers.js";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "..", "llm", "__tests__", "fixtures");
@@ -22,6 +24,18 @@ function replayFetch(name: string): typeof fetch {
       status: 200,
       headers: { "content-type": "application/json" },
     })) as typeof fetch;
+}
+
+/** A fetch that records the outgoing request body (the prompt), then replays a fixture. */
+function capturingReplayFetch(name: string, captured: { body: unknown }): typeof fetch {
+  const body = JSON.parse(readFileSync(join(FIXTURES, `${name}.json`), "utf8"));
+  return (async (_url: string | URL | Request, init?: RequestInit) => {
+    captured.body = JSON.parse(String(init?.body ?? "{}"));
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
 }
 
 /** Every Octokit call this run can make, recorded for assertions. */
@@ -307,5 +321,137 @@ describe("runReview — end to end", () => {
     const body = rec.created.at(-1)?.body ?? "";
     expect(body).toContain("No file changes to review");
     expect(rec.addedLabels).toContainEqual(["agent-merge-approved"]);
+  });
+
+  // FIX 1: in node24 the action's CWD is the consumer repo, so the checklist must
+  // resolve via $GITHUB_ACTION_PATH (the action's own files). It is the FIRST
+  // candidate, so when set to a dir with a sentinel checklist, that wins — proven
+  // by the sentinel text reaching the system prompt on the wire.
+  it("resolves the review checklist from GITHUB_ACTION_PATH (it wins over the repo-relative paths)", async () => {
+    const { dir, headSha } = track(featureRepoWithChange());
+    const { octokit } = fakeOctokit();
+
+    // A temp action dir whose prompts/review-checklist.txt carries a sentinel that
+    // does NOT appear in the shipped checklist, so its presence proves the source.
+    const actionPath = mkdtempSync(join(tmpdir(), "action-path-"));
+    repos.push(actionPath);
+    const sentinel = "SENTINEL-GITHUB-ACTION-PATH-CHECKLIST-7f3a";
+    mkdirSync(join(actionPath, "prompts"), { recursive: true });
+    writeFileSync(join(actionPath, "prompts", "review-checklist.txt"), `${sentinel}\nReview the diff.\n`);
+
+    const saved = process.env["GITHUB_ACTION_PATH"];
+    process.env["GITHUB_ACTION_PATH"] = actionPath;
+    const captured: { body: unknown } = { body: null };
+    try {
+      const result = await runReview({
+        inputs: baseInputs(),
+        octokit,
+        context: prContext(headSha),
+        fetch: capturingReplayFetch("success", captured),
+        cwd: dir,
+        now: () => 1_700_000_000_000,
+      });
+      expect(result.verdict).toBe("changes");
+    } finally {
+      if (saved === undefined) delete process.env["GITHUB_ACTION_PATH"];
+      else process.env["GITHUB_ACTION_PATH"] = saved;
+    }
+
+    // The system prompt sent to the model is the checklist read from GITHUB_ACTION_PATH.
+    const system = (captured.body as { messages?: { role: string; content: string }[] }).messages?.find(
+      (m) => m.role === "system",
+    );
+    expect(system?.content).toContain(sentinel);
+  });
+
+  // FIX 2: a decoded marker that is a non-null object MISSING the history key
+  // (asReviewState only checks "findings") must not throw on `.history.length`.
+  it("handles a prior marker with findings but NO history key without throwing", async () => {
+    const { dir, headSha } = track(featureRepoWithChange());
+    // A real marker for a state object that has `findings` but NO `history` key —
+    // asReviewState narrows it to a ReviewState (it has "findings"), then the
+    // memory step reads prior.history.length, which must optional-chain safely.
+    const partial = { schema: "toolu-review-state", version: 1, findings: [{ path: "src/util.ts", text: "old", category: "c", fp: "deadbeef" }] };
+    const marker = encodeMarker(partial as unknown as ReviewState);
+    const { octokit, rec } = fakeOctokit([{ id: 777, body: `### Code Review — old\n\n${marker}` }]);
+
+    // Must NOT throw (the bug was a TypeError on prior.history.length).
+    const result = await runReview({
+      inputs: baseInputs({ reviewMemory: true }),
+      octokit,
+      context: prContext(headSha),
+      fetch: replayFetch("success"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    expect(result.verdict).toBe("changes");
+    // It reused the located sticky (memory still works) and posted a marker.
+    expect(rec.updated.every((u) => u.comment_id === 777)).toBe(true);
+    const lastBody = rec.updated.at(-1)?.body ?? "";
+    expect(lastBody).toContain("toolu-review-state:v1");
+  });
+
+  // FIX 3: the inline-review commit_id must be the PR HEAD sha (a commit IN the
+  // PR), not the merge/context sha — else the Reviews API 422s and comments vanish.
+  it("anchors the inline review to the PR head sha from the event, not the merge sha", async () => {
+    const { dir, headSha } = track(featureRepoWithChange());
+    const { octokit, rec } = fakeOctokit();
+    const prHeadSha = "feedface00000000000000000000000000000000";
+
+    // The merge/context sha differs from the PR head sha the event carries.
+    const ctx: GithubContext = {
+      ...prContext(headSha),
+      sha: "0000000000000000000000000000000000000000",
+      headSha: prHeadSha,
+      headRef: "feature-branch",
+    };
+
+    const result = await runReview({
+      inputs: baseInputs(),
+      octokit,
+      context: ctx,
+      // The findings fixture carries one finding anchored to src/util.ts:2 (a real
+      // changed line), so an inline review IS posted.
+      fetch: replayFetch("findings"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    expect(result.verdict).toBe("changes");
+    expect(result.findingsCount).toBe(1);
+    // An inline review was posted, anchored to the PR HEAD sha (not the merge sha).
+    expect(rec.reviews.length).toBe(1);
+    expect(rec.reviews[0]?.commit_id).toBe(prHeadSha);
+    expect(rec.reviews[0]?.commit_id).not.toBe(ctx.sha);
+    // FIX 10: the verdict heading shows the PR source branch from the event.
+    const lastBody = rec.updated.at(-1)?.body ?? rec.created.at(-1)?.body ?? "";
+    expect(lastBody).toContain("feature-branch");
+  });
+
+  // FIX 7: with memory OFF, a pre-existing sticky must still be REUSED (its id
+  // drives upsert dedup) — otherwise every run posts a brand-new comment.
+  it("reviewMemory=false still updates an existing sticky (no duplicate comment)", async () => {
+    const { dir, headSha } = track(featureRepoWithChange());
+    const priorMarker = "<!-- toolu-review-state:v1 H4sIAAAAAAAAA6tWyk0tLk5MT1WyUkrJTM8sUVKoBgBM2H3iEgAAAA== -->";
+    const { octokit, rec } = fakeOctokit([{ id: 888, body: `### Code Review — old\n\n${priorMarker}` }]);
+
+    const result = await runReview({
+      inputs: baseInputs({ reviewMemory: false }),
+      octokit,
+      context: prContext(headSha),
+      fetch: replayFetch("success"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    expect(result.verdict).toBe("changes");
+    // No new comment: the located sticky (id 888) is updated in place.
+    expect(rec.created).toEqual([]);
+    expect(rec.updated.length).toBeGreaterThanOrEqual(1);
+    expect(rec.updated.every((u) => u.comment_id === 888)).toBe(true);
+    // Memory off → no recap/history rendered, and no state marker written.
+    const lastBody = rec.updated.at(-1)?.body ?? "";
+    expect(lastBody).not.toContain("toolu-review-state:v1");
   });
 });

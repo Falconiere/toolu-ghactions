@@ -21,6 +21,17 @@ export interface GithubContext {
   repo: { owner: string; repo: string };
   /** The head commit SHA of the run (GITHUB_SHA). */
   sha: string;
+  /**
+   * The PR head commit SHA (`pull_request.head.sha`), when the event carries one.
+   * The inline-review API needs a commit that is IN the PR — the merge SHA in
+   * `sha` is rejected (422), so this is preferred for the inline-review commit_id.
+   */
+  headSha?: string;
+  /**
+   * The PR head branch name (`pull_request.head.ref`), when present. Used for the
+   * verdict heading (the bash showed GITHUB_HEAD_REF, the PR source branch).
+   */
+  headRef?: string;
   /** Server URL for the "View job" link. */
   serverUrl: string;
   /** Numeric run id for the "View job" link. */

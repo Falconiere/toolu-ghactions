@@ -236,12 +236,12 @@ export function fetchDiff(opts: DiffOptions): DiffData {
 
   const remoteBase = resolveRemoteBase(baseBranch, cwd);
   const mergeBase = resolveMergeBase(reviewHead, remoteBase, baseBranch, cwd);
-
   // base-branch TIP (not the merge-base): project-rules are read at the tip of
   // the branch we merge into, so rules added after this PR branched still apply.
   const baseSha = gitOrNull(["rev-parse", remoteBase], cwd)?.trim() ?? "";
-
-  const changedFiles = gitOrNull(["diff", "--name-only", mergeBase, reviewHead], cwd) ?? "";
+  // --no-renames on EVERY diff below: default rename detection emits an "old =>
+  // new" arrow path that breaks the pathspec'd diff; off, a rename is delete + add.
+  const changedFiles = gitOrNull(["diff", "--no-renames", "--name-only", mergeBase, reviewHead], cwd) ?? "";
   const totalFiles = changedFiles.split("\n").filter((l) => l.trim() !== "").length;
 
   if (totalFiles === 0) {
@@ -259,7 +259,7 @@ export function fetchDiff(opts: DiffOptions): DiffData {
     };
   }
 
-  const numstat = gitOrNull(["diff", "--numstat", mergeBase, reviewHead], cwd) ?? "";
+  const numstat = gitOrNull(["diff", "--no-renames", "--numstat", mergeBase, reviewHead], cwd) ?? "";
   const { binary, text, dropped } = classifyFiles(numstat, reviewHead, cwd);
 
   // Build the line-primed diff + per-file changed_lines for the text files.
@@ -267,7 +267,7 @@ export function fetchDiff(opts: DiffOptions): DiffData {
   let diff = "";
   let files: ShapedFile[] = [];
   if (text.length > 0) {
-    const rawDiff = gitOrNull(["diff", mergeBase, reviewHead, "--", ...text], cwd) ?? "";
+    const rawDiff = gitOrNull(["diff", "--no-renames", mergeBase, reviewHead, "--", ...text], cwd) ?? "";
     const shaped = shapeDiff(rawDiff);
     diff = stripTrailingNewlines(shaped.diff);
     files = shaped.files;

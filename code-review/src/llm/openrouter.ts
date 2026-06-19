@@ -17,9 +17,19 @@
 // never return a null verdict. A failed model call abstains; it does not block.
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { generateObject, NoObjectGeneratedError } from "ai";
+import { errorMessage } from "../errors.js";
 import { Verdict } from "./schema.js";
 import type { Finding } from "./schema.js";
 import type { Envelope } from "../prompt.js";
+
+/**
+ * Overall deadline for one review call, in milliseconds. generateObject has
+ * retries but NO total timeout, so a hung provider would otherwise stall the job
+ * to the 6h runner ceiling (seen in prod). On timeout the AbortController fires;
+ * the AI SDK throws the abort (it never retries an abort), which abstain() maps to
+ * a verdict:"error". Input-overridable via {@link ReviewOptions.timeoutMs}.
+ */
+export const REQUEST_TIMEOUT_MS = 180_000;
 
 /** Options for {@link reviewWithModel}: the model id, API key, and test seams. */
 export interface ReviewOptions {
@@ -31,6 +41,8 @@ export interface ReviewOptions {
   fetch?: typeof fetch;
   /** Max retries on transient failure (default 2, matching the AI SDK default). */
   maxRetries?: number;
+  /** Overall deadline in ms before the call is aborted (default {@link REQUEST_TIMEOUT_MS}). */
+  timeoutMs?: number;
 }
 
 /**
@@ -78,6 +90,13 @@ export async function reviewWithModel(
     extraBody: EXTRA_BODY,
   });
 
+  // Overall deadline: the AI SDK forwards this signal to fetch, so a hung provider
+  // is aborted instead of stalling the job. .unref() so a pending timer never keeps
+  // the process alive; cleared in finally on the normal (fast) path.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? REQUEST_TIMEOUT_MS);
+  (timeout as { unref?: () => void }).unref?.();
+
   try {
     const { object } = await generateObject({
       model: provider(opts.model),
@@ -92,6 +111,7 @@ export async function reviewWithModel(
       temperature: 0.1,
       maxTokens: envelope.max_tokens,
       maxRetries: opts.maxRetries ?? 2,
+      abortSignal: controller.signal,
     });
 
     return {
@@ -103,6 +123,8 @@ export async function reviewWithModel(
     };
   } catch (err) {
     return abstain(err);
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -115,27 +137,10 @@ function abstain(err: unknown): ProviderResult {
   const result: ProviderResult = {
     verdict: "error",
     findings: [],
-    error: errorMessage(err),
+    error: errorMessage(err, "OpenRouter request failed"),
   };
   if (NoObjectGeneratedError.isInstance(err) && err.finishReason !== undefined) {
     result.finishReason = err.finishReason;
   }
   return result;
-}
-
-/**
- * Always yield a non-empty, useful message. Some SDK/API errors carry an empty
- * `.message` (e.g. an HTTP failure with a non-JSON body); fall back through the
- * error name, then its cause's message, then a constant — never an empty string,
- * so the caller's logs always say something.
- */
-function errorMessage(err: unknown): string {
-  if (err instanceof Error) {
-    if (err.message) return err.message;
-    const cause = err.cause;
-    if (cause instanceof Error && cause.message) return `${err.name}: ${cause.message}`;
-    if (err.name) return err.name;
-  }
-  const s = String(err);
-  return s && s !== "[object Object]" ? s : "OpenRouter request failed";
 }

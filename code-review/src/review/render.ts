@@ -13,6 +13,9 @@ export const SEVERITY_RANK: Record<Finding["severity"], number> = {
   nit: 4,
 };
 
+/** Cap on the rendered top-must-fix list, matching coordinate-findings.sh `.[0:3]`. */
+const TOP_MUST_FIX_MAX = 3;
+
 /** The content the body renders, mirroring parse-response.sh's JSON object. */
 export interface ReviewBody {
   /** Resolved verdict label markdown, e.g. "`agent-merge-approved`". */
@@ -126,12 +129,29 @@ function findingLine(f: Finding): string {
  * three findings, falling back to "_None._" — exactly as build_top_must_fix_section.
  */
 function buildTopMustFixSection(body: ReviewBody): string {
-  if (body.topMustFix.length > 0) return body.topMustFix.join("\n");
+  // Parity with coordinate-findings.sh `unique | .[0:3]`: drop duplicates and cap
+  // at 3. Insertion order is kept (the model lists these worst-first, so priority
+  // must survive — unlike jq's alphabetical `unique`, which would scramble it).
+  const capped = dedupeCap(body.topMustFix, TOP_MUST_FIX_MAX);
+  if (capped.length > 0) return capped.join("\n");
 
   const highSev = body.findings.filter((f) => f.severity === "blocker" || f.severity === "high");
   if (highSev.length > 0) return highSev.map(mustFixLine).join("\n");
   if (body.findings.length > 0) return body.findings.slice(0, 3).map(mustFixLine).join("\n");
   return "_None._";
+}
+
+/** Dedupe a string list keeping first occurrence (insertion order), then cap to `max`. */
+function dedupeCap(items: string[], max: number): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of items) {
+    if (seen.has(item)) continue;
+    seen.add(item);
+    out.push(item);
+    if (out.length === max) break;
+  }
+  return out;
 }
 
 /** Auto-generated must-fix line: **`path:line`** — text. */

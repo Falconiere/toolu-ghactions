@@ -12,6 +12,7 @@
 // SECURITY: the private key is never logged. @octokit/auth-app holds it in
 // memory and signs the JWT internally; no PEM ever hits stdout/stderr here.
 import { createAppAuth } from "@octokit/auth-app";
+import { errorMessage } from "../errors.js";
 
 /** The installation auth call's result — just the token field we read. */
 export interface InstallationAuthResult {
@@ -155,11 +156,4 @@ export async function mintAppToken(
     console.warn(`[WARN] App token mint failed: ${errorMessage(err)}`);
     return null;
   }
-}
-
-/** Best-effort error message that never leaks the key (auth-app errors don't carry it). */
-function errorMessage(err: unknown): string {
-  if (err instanceof Error && err.message) return err.message;
-  const s = String(err);
-  return s && s !== "[object Object]" ? s : "unknown error";
 }
