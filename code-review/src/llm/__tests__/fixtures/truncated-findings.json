@@ -1,0 +1,19 @@
+{
+  "id": "gen-truncated-1",
+  "object": "chat.completion",
+  "created": 1781827600,
+  "model": "deepseek/deepseek-v4-flash",
+  "choices": [
+    {
+      "index": 0,
+      "logprobs": null,
+      "finish_reason": "length",
+      "native_finish_reason": "length",
+      "message": {
+        "role": "assistant",
+        "content": "{\"review_plan\":\"Reviewing the diff for correctness and security.\",\"verdict\":\"changes\",\"findings\":[{\"path\":\"src/auth.ts\",\"line\":42,\"severity\":\"high\",\"text\":\"Token expiry uses < instead of <=, an off-by-one.\"},{\"path\":\"src/db.ts\",\"line\":17,\"severity\":\"medium\",\"text\":\"Missing null check before dereference.\"},{\"path\":\"src/api.ts\",\"line\":8,\"severity\":\"hi"
+      }
+    }
+  ],
+  "usage": { "prompt_tokens": 974, "completion_tokens": 8192, "total_tokens": 9166 }
+}

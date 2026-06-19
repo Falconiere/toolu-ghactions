@@ -76,7 +76,7 @@ OpenAI-compatible:
   with:
     OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
     MODEL: 'anthropic/claude-sonnet-4-5'   # default: google/gemini-2.5-flash
-    MAX_TOKENS: '8192'                      # per-request completion budget (default 4096)
+    MAX_TOKENS: '16384'                     # per-request completion budget (default 8192)
 ```
 
 `MODEL` is an OpenRouter model id — `openai/gpt-4o`, `anthropic/claude-sonnet-4-5`,
@@ -386,7 +386,7 @@ turn the recap and history off.
 |---|---|---|---|
 | `OPENROUTER_API_KEY` | no | — | OpenRouter API key. The model runs through OpenRouter. Prefer passing via a step-level `env:` block for secret hygiene. |
 | `MODEL` | no | `google/gemini-2.5-flash` | OpenRouter model id (any OpenAI-compatible model, e.g. `anthropic/claude-sonnet-4-5`, `google/gemini-2.5-flash`). Pick one with reliable JSON-schema structured output. |
-| `MAX_TOKENS` | no | `4096` | Max completion tokens per request. |
+| `MAX_TOKENS` | no | `8192` | Max completion-token budget per request (always sent — omitting it makes OpenRouter reserve the model's full output window against your credits and can 402-reject). A response truncated at this limit (`finish_reason: length`) is retried with a doubled budget up to 32768; if it still truncates, the findings completed before the cut are salvaged. |
 | `MIN_CONFIDENCE` | no | `high` | Drop findings below this confidence unless severity is blocker/high (`high` or `medium`) |
 | `INLINE_COMMENTS` | no | `true` | Post per-line review comments with committable code suggestions (Reviews API), in addition to the summary comment |
 | `MANAGE_LABELS` | no | `true` | Set a real PR label chip matching the verdict (`merge-approved` / `request-changes`) and remove the opposite one. Requires `issues: write`. |

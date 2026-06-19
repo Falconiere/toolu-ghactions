@@ -105,9 +105,9 @@ describe("buildPrompt — security", () => {
 });
 
 describe("buildPrompt — envelope and inputs", () => {
-  it("carries max_tokens and enforce_json_schema, defaulting to 4096/true", () => {
+  it("carries max_tokens and enforce_json_schema, defaulting to 8192/true", () => {
     const def = buildPrompt({ diff: sampleDiff(), checklistPath: CHECKLIST_PATH });
-    expect(def.max_tokens).toBe(4096);
+    expect(def.max_tokens).toBe(8192);
     expect(def.enforce_json_schema).toBe(true);
 
     const custom = buildPrompt({
