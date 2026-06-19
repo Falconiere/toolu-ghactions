@@ -159,6 +159,8 @@ function baseInputs(overrides: Partial<ActionInputs> = {}): ActionInputs {
     rulesMaxBytes: 32768,
     maxFiles: 0,
     maxDiffLines: 0,
+    maxChunkLines: 0, // never chunk: existing tests exercise the single-call fast path
+    maxChunks: 20,
     token: "ghs_test",
     appId: "",
     appPrivateKey: "",
@@ -516,5 +518,102 @@ describe("runReview — end to end", () => {
     // Memory off → no recap/history rendered, and no state marker written.
     const lastBody = rec.updated.at(-1)?.body ?? "";
     expect(lastBody).not.toContain("toolu-review-state:v1");
+  });
+});
+
+/**
+ * A fetch that picks a recorded fixture per call by matching the OUTGOING request
+ * body (the chunk's prompt carries its file paths) — so each chunk gets a distinct
+ * recorded response. No network, no code mocks.
+ */
+function routingFetch(routes: Array<[match: string, fixture: string]>): typeof fetch {
+  return async (_url, init) => {
+    const raw = typeof init?.body === "string" ? init.body : "";
+    const hit = routes.find(([m]) => raw.includes(m));
+    const fixture = hit ? hit[1] : "approved";
+    const body = JSON.parse(readFileSync(join(FIXTURES, `${fixture}.json`), "utf8"));
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+}
+
+/**
+ * Two real files that split into two chunks under a small budget: src/util.ts
+ * (the add/subtract bug at line 2 — matches the `findings` fixture) plus a big
+ * padding file that lands in its own chunk.
+ */
+function twoChunkRepo(): { dir: string; headSha: string } {
+  const dir = setupGitRepo();
+  git(dir, "checkout", "-b", "feature", "--quiet");
+  writeFile(
+    dir,
+    "src/util.ts",
+    "export function add(a: number, b: number): number {\n  return a - b;\n}\n",
+  );
+  const pad = Array.from({ length: 40 }, (_, n) => `export const pad_${n} = ${n}`).join("\n");
+  writeFile(dir, "zzz/pad.ts", `${pad}\n`);
+  git(dir, "add", "-A");
+  git(dir, "commit", "-m", "two files", "--quiet");
+  return { dir, headSha: git(dir, "rev-parse", "HEAD").trim() };
+}
+
+describe("runReview — chunked large diff", () => {
+  it("chunks the diff, reviews each chunk, and merges findings + verdict", async () => {
+    const { dir, headSha } = track(twoChunkRepo());
+    const { octokit } = fakeOctokit();
+
+    const result = await runReview({
+      inputs: baseInputs({
+        maxChunkLines: 15,
+        maxChunks: 20,
+        manageLabels: false,
+        inlineComments: false,
+      }),
+      octokit,
+      context: prContext(headSha),
+      // util.ts chunk → a finding (changes); pad.ts chunk → clean (approved).
+      fetch: routingFetch([
+        ["src/util.ts", "findings"],
+        ["zzz/pad.ts", "approved"],
+      ]),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    // Any chunk requesting changes wins; the util.ts:2 finding survives validation.
+    expect(result.verdict).toBe("changes");
+    expect(result.findingsCount).toBe(1);
+  });
+
+  it("degrades gracefully when one chunk errors: keeps the survivor, notes the failure", async () => {
+    const { dir, headSha } = track(twoChunkRepo());
+    const { octokit, rec } = fakeOctokit();
+
+    const result = await runReview({
+      inputs: baseInputs({
+        maxChunkLines: 15,
+        maxChunks: 20,
+        manageLabels: false,
+        inlineComments: false,
+      }),
+      octokit,
+      context: prContext(headSha),
+      // util.ts chunk succeeds with a finding; pad.ts chunk abstains (empty content).
+      fetch: routingFetch([
+        ["src/util.ts", "findings"],
+        ["zzz/pad.ts", "empty-content"],
+      ]),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    // The whole review is NOT abstained: the surviving chunk's finding + verdict stand.
+    expect(result.verdict).toBe("changes");
+    expect(result.findingsCount).toBe(1);
+    // …and the partial failure is surfaced in the posted comment.
+    const lastBody = rec.updated.at(-1)?.body ?? rec.created.at(-1)?.body ?? "";
+    expect(lastBody).toContain("chunks failed");
   });
 });

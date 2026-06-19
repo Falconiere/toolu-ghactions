@@ -82,9 +82,17 @@ inputs:
     required: false
     default: '0'
   MAX_DIFF_LINES:
-    description: 'Maximum diff lines before truncation (first N lines kept, lexicographic by file path). 0 (default) = unlimited; review the whole diff. Set a positive value to opt into truncation.'
+    description: 'Maximum diff lines before truncation (first N lines kept, lexicographic by file path). 0 (default) = unlimited; review the whole diff. Set a positive value to opt into truncation. Applied BEFORE chunking.'
     required: false
     default: '0'
+  MAX_CHUNK_LINES:
+    description: 'Per-chunk diff-line budget. When the diff exceeds this, it is split into chunks of whole files (≤ this many primed lines each) reviewed in separate model calls and merged — so large PRs no longer overwhelm one call. 0 = never chunk (single call). Default 1500.'
+    required: false
+    default: '1500'
+  MAX_CHUNKS:
+    description: 'Maximum number of chunks (= model calls) per review, bounding cost and wall-clock on very large PRs. Files beyond the limit are not reviewed and the comment says so. 0 = unlimited. Default 20.'
+    required: false
+    default: '20'
   TOKEN:
     description: 'GitHub token for posting/editing comments'
     required: false
@@ -219,6 +227,8 @@ runs:
         INPUT_RULES_MAX_BYTES: ${{ inputs.RULES_MAX_BYTES }}
         INPUT_MAX_FILES: ${{ inputs.MAX_FILES }}
         INPUT_MAX_DIFF_LINES: ${{ inputs.MAX_DIFF_LINES }}
+        INPUT_MAX_CHUNK_LINES: ${{ inputs.MAX_CHUNK_LINES }}
+        INPUT_MAX_CHUNKS: ${{ inputs.MAX_CHUNKS }}
         INPUT_TOKEN: ${{ inputs.TOKEN }}
         INPUT_APP_ID: ${{ inputs.APP_ID }}
         INPUT_APP_PRIVATE_KEY: ${{ inputs.APP_PRIVATE_KEY }}

@@ -46,8 +46,12 @@ export interface ActionInputs {
   rulesMaxBytes: number;
   /** Max changed files before the action skips (0 = unlimited). */
   maxFiles: number;
-  /** Max diff lines before truncation (0 = unlimited). */
+  /** Max diff lines before truncation (0 = unlimited); applied before chunking. */
   maxDiffLines: number;
+  /** Per-chunk diff-line budget; diffs over this are chunked into separate calls (0 = never chunk). */
+  maxChunkLines: number;
+  /** Max chunks (= model calls) per review, bounding cost; files beyond are skipped (0 = unlimited). */
+  maxChunks: number;
   /** GitHub token for posting/editing comments. */
   token: string;
   /** GitHub App id (empty when no App identity configured). */
@@ -83,8 +87,10 @@ type ProviderEntry = z.infer<typeof ProviderEntrySchema>;
 /** Default model — kept in sync with action.yml MODEL default. gemini-2.5-flash:
  * constrained-decoding structured output, broadly accessible on OpenRouter (gpt-4o-mini
  * 404s on accounts without OpenAI access; deepseek json-mode returns empty content).
- * NOTE: on an exceptionally large diff the structured output can still fail to parse —
- * that is a diff-size problem (see the action's MAX_DIFF_LINES), not the model. */
+ * NOTE: on an exceptionally large diff the structured output can fail to parse — a
+ * diff-size problem, not the model. The pipeline mitigates it by CHUNKING the diff
+ * (see MAX_CHUNK_LINES / MAX_CHUNKS and git/chunk.ts), reviewing each chunk in its
+ * own call and merging the results. */
 const DEFAULT_MODEL = "google/gemini-2.5-flash";
 
 /** Default completion-token budget — kept in sync with action.yml MAX_TOKENS default. */
@@ -270,6 +276,8 @@ export function readInputs(): ActionInputs {
     rulesMaxBytes: intInput("RULES_MAX_BYTES", 32768),
     maxFiles: intInput("MAX_FILES", 0),
     maxDiffLines: intInput("MAX_DIFF_LINES", 0),
+    maxChunkLines: intInput("MAX_CHUNK_LINES", 1500),
+    maxChunks: intInput("MAX_CHUNKS", 20),
     token: core.getInput("TOKEN") || (process.env["GITHUB_TOKEN"] ?? ""),
     appId: core.getInput("APP_ID").trim(),
     appPrivateKey: core.getInput("APP_PRIVATE_KEY"),

@@ -206,7 +206,7 @@ function classifyFiles(
  * records, so a non-empty string with no trailing newline still counts its last
  * line. An empty string is 0 lines.
  */
-function countLines(diff: string): number {
+export function countLines(diff: string): number {
   if (diff === "") return 0;
   const newlines = (diff.match(/\n/g) ?? []).length;
   return diff.endsWith("\n") ? newlines : newlines + 1;

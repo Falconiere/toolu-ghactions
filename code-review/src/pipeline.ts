@@ -18,6 +18,7 @@ import { buildPrompt } from "./prompt.js";
 import { gatherMechanical } from "./mechanical/gather.js";
 import { reviewWithModel } from "./llm/openrouter.js";
 import type { ProviderResult } from "./llm/openrouter.js";
+import { reviewChunked } from "./review/chunked.js";
 import { validateFindings } from "./review/validate.js";
 import { renderRecapSection, renderHistorySection } from "./review/recap.js";
 import { formatVerdict, resolveVerdict } from "./review/verdict.js";
@@ -163,24 +164,33 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
   // Fed to the LLM as triage context AND summarized in the comment; absent dir → []. ---
   const mechanical = gatherMechanical(deps.sarifDir);
 
-  // --- Build the prompt envelope and run the single-model review. ---
-  const envelope = buildPrompt({
+  // --- Build the prompt + run the review, chunking the diff when it exceeds the
+  // per-chunk budget (a large diff would otherwise overwhelm one structured-output
+  // call and abstain). A within-budget diff stays a single call. See review/chunked.ts. ---
+  const result: ProviderResult = await reviewChunked({
     diff,
-    checklistPath: resolveChecklistPath(),
-    maxTokens: inputs.maxTokens,
-    enforceJsonSchema: inputs.enforceJsonSchema,
-    reviewPromptFile: inputs.reviewPromptFile,
-    codebaseOverview: inputs.codebaseOverview,
-    reviewInstruction: event.instruction ?? "",
-    projectRules,
-    githubWorkspace: cwd,
-    mechanicalFindings: mechanical,
-  });
-
-  const result: ProviderResult = await reviewWithModel(envelope, {
-    model: inputs.model,
-    apiKey: inputs.apiKey,
-    ...(deps.fetch ? { fetch: deps.fetch } : {}),
+    maxChunkLines: inputs.maxChunkLines,
+    maxChunks: inputs.maxChunks,
+    mechanical,
+    buildEnvelope: (subDiff, chunkMechanical) =>
+      buildPrompt({
+        diff: subDiff,
+        checklistPath: resolveChecklistPath(),
+        maxTokens: inputs.maxTokens,
+        enforceJsonSchema: inputs.enforceJsonSchema,
+        reviewPromptFile: inputs.reviewPromptFile,
+        codebaseOverview: inputs.codebaseOverview,
+        reviewInstruction: event.instruction ?? "",
+        projectRules,
+        githubWorkspace: cwd,
+        mechanicalFindings: chunkMechanical,
+      }),
+    review: (envelope) =>
+      reviewWithModel(envelope, {
+        model: inputs.model,
+        apiKey: inputs.apiKey,
+        ...(deps.fetch ? { fetch: deps.fetch } : {}),
+      }),
   });
 
   // --- Validate findings against the diff's changed lines (anti-hallucination,
