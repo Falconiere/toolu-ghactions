@@ -93,8 +93,13 @@ type ProviderEntry = z.infer<typeof ProviderEntrySchema>;
  * own call and merging the results. */
 const DEFAULT_MODEL = "google/gemini-2.5-flash";
 
-/** Default completion-token budget — kept in sync with action.yml MAX_TOKENS default. */
-const DEFAULT_MAX_TOKENS = 4096;
+/**
+ * Default completion-token budget — kept in sync with action.yml MAX_TOKENS default.
+ * 8192 (not 4096): a single chunk's structured output (review_plan + findings +
+ * other_checks) overran 4096 and truncated mid-JSON (finish_reason "length"). This
+ * is a cap, billed on actual output, so the headroom is free for small reviews.
+ */
+const DEFAULT_MAX_TOKENS = 8192;
 
 /**
  * Parse a string input as a base-10 integer, falling back to `fallback` for an

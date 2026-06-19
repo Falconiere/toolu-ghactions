@@ -24,7 +24,7 @@ export interface Envelope {
 /**
  * Inputs for buildPrompt, mirroring the env vars build-prompt.sh reads — passed in
  * (never read from process.env) so the module is testable: maxTokens ←
- * INPUT_MAX_TOKENS (4096), enforceJsonSchema ← INPUT_ENFORCE_JSON_SCHEMA (true),
+ * INPUT_MAX_TOKENS (8192), enforceJsonSchema ← INPUT_ENFORCE_JSON_SCHEMA (true),
  * reviewPromptFile ← INPUT_REVIEW_PROMPT_FILE (custom system prompt path, relative
  * to githubWorkspace), codebaseOverview ← INPUT_CODEBASE_OVERVIEW, reviewInstruction
  * ← INPUT_REVIEW_INSTRUCTION (UNTRUSTED), projectRules ← gathered rules blob
@@ -129,7 +129,7 @@ function resolveSystemPrompt(opts: PromptOptions): string {
  * The SYSTEM prompt is the unmodified checklist (or custom prompt file).
  */
 export function buildPrompt(opts: PromptOptions): Envelope {
-  const maxTokens = opts.maxTokens ?? 4096;
+  const maxTokens = opts.maxTokens ?? 8192;
   const enforceJsonSchema = opts.enforceJsonSchema ?? true;
   const overview = opts.codebaseOverview ?? "";
   const reviewInstruction = opts.reviewInstruction ?? "";

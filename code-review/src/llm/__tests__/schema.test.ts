@@ -72,13 +72,30 @@ describe("Verdict schema", () => {
     expect(Verdict.safeParse(missingText).success).toBe(false);
   });
 
-  it("rejects a verdict missing a required top-level key", () => {
-    const missingOtherChecks = {
+  it("rejects a verdict missing a required top-level key (verdict)", () => {
+    const missingVerdict = {
       review_plan: "",
-      verdict: "approved",
       findings: [],
+      other_checks: "",
       top_must_fix: [],
     };
-    expect(Verdict.safeParse(missingOtherChecks).success).toBe(false);
+    expect(Verdict.safeParse(missingVerdict).success).toBe(false);
+  });
+
+  // other_checks / top_must_fix are emitted AFTER findings, so a length-truncated
+  // response often lacks them. They default so a repaired/partial object still
+  // validates and the findings completed before the cut survive.
+  it("defaults other_checks and top_must_fix when absent (truncation resilience)", () => {
+    const truncatedAfterFindings = {
+      review_plan: "plan",
+      verdict: "changes",
+      findings: [],
+    };
+    const parsed = Verdict.safeParse(truncatedAfterFindings);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.other_checks).toBe("");
+      expect(parsed.data.top_must_fix).toEqual([]);
+    }
   });
 });

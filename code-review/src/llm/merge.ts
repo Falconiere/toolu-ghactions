@@ -28,6 +28,9 @@ export function mergeResults(results: ProviderResult[]): ProviderResult {
 
   const errored = results.filter((r) => r.verdict === "error");
   const succeeded = results.filter((r) => r.verdict !== "error");
+  // A salvaged chunk has verdict "changes" (so it counts as a success above) but
+  // was recovered from a length-truncated response — surface that distinctly below.
+  const partials = results.filter((r) => r.partial);
 
   const verdict: ProviderResult["verdict"] =
     succeeded.length === 0
@@ -44,10 +47,17 @@ export function mergeResults(results: ProviderResult[]): ProviderResult {
     top_must_fix: capUnion(results.flatMap((r) => r.top_must_fix ?? [])),
   };
 
+  if (partials.length > 0) merged.partial = true;
   if (errored.length > 0) {
     const first = errored[0]!;
     merged.error = `${errored.length}/${results.length} chunks failed: ${first.error ?? "unknown error"}`;
     if (first.finishReason !== undefined) merged.finishReason = first.finishReason;
+  } else if (partials.length > 0) {
+    merged.error =
+      `${partials.length}/${results.length} chunks truncated at the output-token limit — ` +
+      `recovered the findings completed before the cut; later findings may be missing. ` +
+      `Raise MAX_TOKENS to avoid.`;
+    merged.finishReason = "length";
   }
   return merged;
 }

@@ -30,9 +30,9 @@ inputs:
     description: 'DEPRECATED: Dropped in multi-provider mode. Use PROVIDERS array to configure multiple models.'
     required: false
   MAX_TOKENS:
-    description: 'Max completion tokens per request. Always sent — omitting it makes OpenRouter reserve the model''s full output capacity against your credit budget'
+    description: 'Max completion tokens per request. Always sent — omitting it makes OpenRouter reserve the model''s full output capacity against your credit budget. A truncated (finish_reason "length") chunk is retried with a doubled budget up to 32768.'
     required: false
-    default: '4096'
+    default: '8192'
   REVIEW_MODE:
     description: 'DEPRECATED: No-op. Previously parallel=single vs parallel=multi-dimension; multi-provider ensemble review replaces this. Kept for backward compatibility.'
     required: false

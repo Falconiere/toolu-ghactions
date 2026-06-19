@@ -28191,7 +28191,7 @@ var ProviderEntrySchema = external_exports.object({
   max_tokens: external_exports.number().optional()
 });
 var DEFAULT_MODEL = "google/gemini-2.5-flash";
-var DEFAULT_MAX_TOKENS = 4096;
+var DEFAULT_MAX_TOKENS = 8192;
 function intInput(name17, fallback) {
   const raw = core.getInput(name17).trim();
   if (raw === "") return fallback;
@@ -28835,7 +28835,7 @@ function resolveSystemPrompt(opts) {
   }
 }
 function buildPrompt(opts) {
-  const maxTokens = opts.maxTokens ?? 4096;
+  const maxTokens = opts.maxTokens ?? 8192;
   const enforceJsonSchema = opts.enforceJsonSchema ?? true;
   const overview = opts.codebaseOverview ?? "";
   const reviewInstruction = opts.reviewInstruction ?? "";
@@ -36743,6 +36743,672 @@ function trimStartOfStream() {
 }
 var HANGING_STREAM_WARNING_TIME_MS = 15 * 1e3;
 
+// node_modules/jsonrepair/lib/esm/utils/JSONRepairError.js
+var JSONRepairError = class extends Error {
+  constructor(message, position) {
+    super(`${message} at position ${position}`);
+    this.position = position;
+  }
+};
+
+// node_modules/jsonrepair/lib/esm/utils/stringUtils.js
+var codeSpace = 32;
+var codeNewline = 10;
+var codeTab = 9;
+var codeReturn = 13;
+var codeNonBreakingSpace = 160;
+var codeMongolianVowelSeparator = 6158;
+var codeEnQuad = 8192;
+var codeZeroWidthSpace = 8203;
+var codeNarrowNoBreakSpace = 8239;
+var codeMediumMathematicalSpace = 8287;
+var codeIdeographicSpace = 12288;
+var codeZeroWidthNoBreakSpace = 65279;
+function isHex(char) {
+  return /^[0-9A-Fa-f]$/.test(char);
+}
+function isDigit(char) {
+  return char >= "0" && char <= "9";
+}
+function isValidStringCharacter(char) {
+  return char >= " ";
+}
+function isDelimiter(char) {
+  return ",:[]/{}()\n+".includes(char);
+}
+function isFunctionNameCharStart(char) {
+  return char >= "a" && char <= "z" || char >= "A" && char <= "Z" || char === "_" || char === "$";
+}
+function isFunctionNameChar(char) {
+  return char >= "a" && char <= "z" || char >= "A" && char <= "Z" || char === "_" || char === "$" || char >= "0" && char <= "9";
+}
+var regexUrlStart = /^(http|https|ftp|mailto|file|data|irc):\/\/$/;
+var regexUrlChar = /^[A-Za-z0-9-._~:/?#@!$&'()*+;=]$/;
+function isUnquotedStringDelimiter(char) {
+  return ",[]/{}\n+".includes(char);
+}
+function isStartOfValue(char) {
+  return isQuote(char) || regexStartOfValue.test(char);
+}
+var regexStartOfValue = /^[[{\w-]$/;
+function isControlCharacter(char) {
+  return char === "\n" || char === "\r" || char === "	" || char === "\b" || char === "\f";
+}
+function isWhitespace(text2, index) {
+  const code = text2.charCodeAt(index);
+  return code === codeSpace || code === codeNewline || code === codeTab || code === codeReturn;
+}
+function isWhitespaceExceptNewline(text2, index) {
+  const code = text2.charCodeAt(index);
+  return code === codeSpace || code === codeTab || code === codeReturn;
+}
+function isSpecialWhitespace(text2, index) {
+  const code = text2.charCodeAt(index);
+  return code === codeNonBreakingSpace || code === codeMongolianVowelSeparator || code >= codeEnQuad && code <= codeZeroWidthSpace || code === codeNarrowNoBreakSpace || code === codeMediumMathematicalSpace || code === codeIdeographicSpace || code === codeZeroWidthNoBreakSpace;
+}
+function isQuote(char) {
+  return isDoubleQuoteLike(char) || isSingleQuoteLike(char);
+}
+function isDoubleQuoteLike(char) {
+  return char === '"' || char === "\u201C" || char === "\u201D";
+}
+function isDoubleQuote(char) {
+  return char === '"';
+}
+function isSingleQuoteLike(char) {
+  return char === "'" || char === "\u2018" || char === "\u2019" || char === "`" || char === "\xB4";
+}
+function isSingleQuote(char) {
+  return char === "'";
+}
+function stripLastOccurrence(text2, textToStrip) {
+  let stripRemainingText = arguments.length > 2 && arguments[2] !== void 0 ? arguments[2] : false;
+  const index = text2.lastIndexOf(textToStrip);
+  return index !== -1 ? text2.substring(0, index) + (stripRemainingText ? "" : text2.substring(index + 1)) : text2;
+}
+function insertBeforeLastWhitespace(text2, textToInsert) {
+  let index = text2.length;
+  if (!isWhitespace(text2, index - 1)) {
+    return text2 + textToInsert;
+  }
+  while (isWhitespace(text2, index - 1)) {
+    index--;
+  }
+  return text2.substring(0, index) + textToInsert + text2.substring(index);
+}
+function removeAtIndex(text2, start, count) {
+  return text2.substring(0, start) + text2.substring(start + count);
+}
+function endsWithCommaOrNewline(text2) {
+  return /[,\n][ \t\r]*$/.test(text2);
+}
+
+// node_modules/jsonrepair/lib/esm/regular/jsonrepair.js
+var controlCharacters = {
+  "\b": "\\b",
+  "\f": "\\f",
+  "\n": "\\n",
+  "\r": "\\r",
+  "	": "\\t"
+};
+var escapeCharacters = {
+  '"': '"',
+  "\\": "\\",
+  "/": "/",
+  b: "\b",
+  f: "\f",
+  n: "\n",
+  r: "\r",
+  t: "	"
+  // note that \u is handled separately in parseString()
+};
+function jsonrepair(text2) {
+  let i = 0;
+  let output = "";
+  parseMarkdownCodeBlock(["```", "[```", "{```"]);
+  const processed = parseValue();
+  if (!processed) {
+    throwUnexpectedEnd();
+  }
+  parseMarkdownCodeBlock(["```", "```]", "```}"]);
+  const processedComma = parseCharacter(",");
+  if (processedComma) {
+    parseWhitespaceAndSkipComments();
+  }
+  if (isStartOfValue(text2[i]) && endsWithCommaOrNewline(output)) {
+    if (!processedComma) {
+      output = insertBeforeLastWhitespace(output, ",");
+    }
+    parseNewlineDelimitedJSON();
+  } else if (processedComma) {
+    output = stripLastOccurrence(output, ",");
+  }
+  while (text2[i] === "}" || text2[i] === "]") {
+    i++;
+    parseWhitespaceAndSkipComments();
+  }
+  if (i >= text2.length) {
+    return output;
+  }
+  throwUnexpectedCharacter();
+  function parseValue() {
+    parseWhitespaceAndSkipComments();
+    const processed2 = parseObject() || parseArray() || parseString() || parseNumber() || parseKeywords() || parseUnquotedString(false) || parseRegex();
+    parseWhitespaceAndSkipComments();
+    return processed2;
+  }
+  function parseWhitespaceAndSkipComments() {
+    let skipNewline = arguments.length > 0 && arguments[0] !== void 0 ? arguments[0] : true;
+    const start = i;
+    let changed = parseWhitespace(skipNewline);
+    do {
+      changed = parseComment();
+      if (changed) {
+        changed = parseWhitespace(skipNewline);
+      }
+    } while (changed);
+    return i > start;
+  }
+  function parseWhitespace(skipNewline) {
+    const _isWhiteSpace = skipNewline ? isWhitespace : isWhitespaceExceptNewline;
+    let whitespace = "";
+    while (true) {
+      if (_isWhiteSpace(text2, i)) {
+        whitespace += text2[i];
+        i++;
+      } else if (isSpecialWhitespace(text2, i)) {
+        whitespace += " ";
+        i++;
+      } else {
+        break;
+      }
+    }
+    if (whitespace.length > 0) {
+      output += whitespace;
+      return true;
+    }
+    return false;
+  }
+  function parseComment() {
+    if (text2[i] === "/" && text2[i + 1] === "*") {
+      while (i < text2.length && !atEndOfBlockComment(text2, i)) {
+        i++;
+      }
+      i += 2;
+      return true;
+    }
+    if (text2[i] === "/" && text2[i + 1] === "/") {
+      while (i < text2.length && text2[i] !== "\n") {
+        i++;
+      }
+      return true;
+    }
+    return false;
+  }
+  function parseMarkdownCodeBlock(blocks) {
+    if (skipMarkdownCodeBlock(blocks)) {
+      if (isFunctionNameCharStart(text2[i])) {
+        while (i < text2.length && isFunctionNameChar(text2[i])) {
+          i++;
+        }
+      }
+      parseWhitespaceAndSkipComments();
+      return true;
+    }
+    return false;
+  }
+  function skipMarkdownCodeBlock(blocks) {
+    parseWhitespace(true);
+    for (const block of blocks) {
+      const end = i + block.length;
+      if (text2.slice(i, end) === block) {
+        i = end;
+        return true;
+      }
+    }
+    return false;
+  }
+  function parseCharacter(char) {
+    if (text2[i] === char) {
+      output += text2[i];
+      i++;
+      return true;
+    }
+    return false;
+  }
+  function skipCharacter(char) {
+    if (text2[i] === char) {
+      i++;
+      return true;
+    }
+    return false;
+  }
+  function skipEscapeCharacter() {
+    return skipCharacter("\\");
+  }
+  function skipEllipsis() {
+    parseWhitespaceAndSkipComments();
+    if (text2[i] === "." && text2[i + 1] === "." && text2[i + 2] === ".") {
+      i += 3;
+      parseWhitespaceAndSkipComments();
+      skipCharacter(",");
+      return true;
+    }
+    return false;
+  }
+  function parseObject() {
+    if (text2[i] === "{") {
+      output += "{";
+      i++;
+      parseWhitespaceAndSkipComments();
+      if (skipCharacter(",")) {
+        parseWhitespaceAndSkipComments();
+      }
+      let initial = true;
+      while (i < text2.length && text2[i] !== "}") {
+        let processedComma2;
+        if (!initial) {
+          processedComma2 = parseCharacter(",");
+          if (!processedComma2) {
+            output = insertBeforeLastWhitespace(output, ",");
+          }
+          parseWhitespaceAndSkipComments();
+        } else {
+          processedComma2 = true;
+          initial = false;
+        }
+        skipEllipsis();
+        const processedKey = parseString() || parseUnquotedString(true);
+        if (!processedKey) {
+          if (text2[i] === "}" || text2[i] === "{" || text2[i] === "]" || text2[i] === "[" || text2[i] === void 0) {
+            output = stripLastOccurrence(output, ",");
+          } else {
+            throwObjectKeyExpected();
+          }
+          break;
+        }
+        parseWhitespaceAndSkipComments();
+        const processedColon = parseCharacter(":");
+        const truncatedText = i >= text2.length;
+        if (!processedColon) {
+          if (isStartOfValue(text2[i]) || truncatedText) {
+            output = insertBeforeLastWhitespace(output, ":");
+          } else {
+            throwColonExpected();
+          }
+        }
+        const processedValue = parseValue();
+        if (!processedValue) {
+          if (processedColon || truncatedText) {
+            output += "null";
+          } else {
+            throwColonExpected();
+          }
+        }
+      }
+      if (text2[i] === "}") {
+        output += "}";
+        i++;
+      } else {
+        output = insertBeforeLastWhitespace(output, "}");
+      }
+      return true;
+    }
+    return false;
+  }
+  function parseArray() {
+    if (text2[i] === "[") {
+      output += "[";
+      i++;
+      parseWhitespaceAndSkipComments();
+      if (skipCharacter(",")) {
+        parseWhitespaceAndSkipComments();
+      }
+      let initial = true;
+      while (i < text2.length && text2[i] !== "]") {
+        if (!initial) {
+          const processedComma2 = parseCharacter(",");
+          if (!processedComma2) {
+            output = insertBeforeLastWhitespace(output, ",");
+          }
+        } else {
+          initial = false;
+        }
+        skipEllipsis();
+        const processedValue = parseValue();
+        if (!processedValue) {
+          output = stripLastOccurrence(output, ",");
+          break;
+        }
+      }
+      if (text2[i] === "]") {
+        output += "]";
+        i++;
+      } else {
+        output = insertBeforeLastWhitespace(output, "]");
+      }
+      return true;
+    }
+    return false;
+  }
+  function parseNewlineDelimitedJSON() {
+    let initial = true;
+    let processedValue = true;
+    while (processedValue) {
+      if (!initial) {
+        const processedComma2 = parseCharacter(",");
+        if (!processedComma2) {
+          output = insertBeforeLastWhitespace(output, ",");
+        }
+      } else {
+        initial = false;
+      }
+      processedValue = parseValue();
+    }
+    if (!processedValue) {
+      output = stripLastOccurrence(output, ",");
+    }
+    output = `[
+${output}
+]`;
+  }
+  function parseString() {
+    let stopAtDelimiter = arguments.length > 0 && arguments[0] !== void 0 ? arguments[0] : false;
+    let stopAtIndex = arguments.length > 1 && arguments[1] !== void 0 ? arguments[1] : -1;
+    let skipEscapeChars = text2[i] === "\\";
+    if (skipEscapeChars) {
+      i++;
+      skipEscapeChars = true;
+    }
+    if (isQuote(text2[i])) {
+      const isEndQuote = isDoubleQuote(text2[i]) ? isDoubleQuote : isSingleQuote(text2[i]) ? isSingleQuote : isSingleQuoteLike(text2[i]) ? isSingleQuoteLike : isDoubleQuoteLike;
+      const iBefore = i;
+      const oBefore = output.length;
+      let str = '"';
+      i++;
+      while (true) {
+        if (i >= text2.length) {
+          const iPrev = prevNonWhitespaceIndex(i - 1);
+          if (!stopAtDelimiter && isDelimiter(text2.charAt(iPrev))) {
+            i = iBefore;
+            output = output.substring(0, oBefore);
+            return parseString(true);
+          }
+          str = insertBeforeLastWhitespace(str, '"');
+          output += str;
+          return true;
+        }
+        if (i === stopAtIndex) {
+          str = insertBeforeLastWhitespace(str, '"');
+          output += str;
+          return true;
+        }
+        if (isEndQuote(text2[i])) {
+          const iQuote = i;
+          const oQuote = str.length;
+          str += '"';
+          i++;
+          output += str;
+          parseWhitespaceAndSkipComments(false);
+          if (stopAtDelimiter || i >= text2.length || isDelimiter(text2[i]) || isQuote(text2[i]) || isDigit(text2[i])) {
+            parseConcatenatedString();
+            return true;
+          }
+          const iPrevChar = prevNonWhitespaceIndex(iQuote - 1);
+          const prevChar = text2.charAt(iPrevChar);
+          if (prevChar === ",") {
+            i = iBefore;
+            output = output.substring(0, oBefore);
+            return parseString(false, iPrevChar);
+          }
+          if (isDelimiter(prevChar)) {
+            i = iBefore;
+            output = output.substring(0, oBefore);
+            return parseString(true);
+          }
+          output = output.substring(0, oBefore);
+          i = iQuote + 1;
+          str = `${str.substring(0, oQuote)}\\${str.substring(oQuote)}`;
+        } else if (stopAtDelimiter && isUnquotedStringDelimiter(text2[i])) {
+          if (text2[i - 1] === ":" && regexUrlStart.test(text2.substring(iBefore + 1, i + 2))) {
+            while (i < text2.length && regexUrlChar.test(text2[i])) {
+              str += text2[i];
+              i++;
+            }
+          }
+          str = insertBeforeLastWhitespace(str, '"');
+          output += str;
+          parseConcatenatedString();
+          return true;
+        } else if (text2[i] === "\\") {
+          const char = text2.charAt(i + 1);
+          const escapeChar = escapeCharacters[char];
+          if (escapeChar !== void 0) {
+            str += text2.slice(i, i + 2);
+            i += 2;
+          } else if (char === "u") {
+            let j = 2;
+            while (j < 6 && isHex(text2[i + j])) {
+              j++;
+            }
+            if (j === 6) {
+              str += text2.slice(i, i + 6);
+              i += 6;
+            } else if (i + j >= text2.length) {
+              i = text2.length;
+            } else {
+              throwInvalidUnicodeCharacter();
+            }
+          } else if (char === "\n") {
+            str += "\\n";
+            i += 2;
+          } else {
+            str += char;
+            i += 2;
+          }
+        } else {
+          const char = text2.charAt(i);
+          if (char === '"' && text2[i - 1] !== "\\") {
+            str += `\\${char}`;
+            i++;
+          } else if (isControlCharacter(char)) {
+            str += controlCharacters[char];
+            i++;
+          } else {
+            if (!isValidStringCharacter(char)) {
+              throwInvalidCharacter(char);
+            }
+            str += char;
+            i++;
+          }
+        }
+        if (skipEscapeChars) {
+          skipEscapeCharacter();
+        }
+      }
+    }
+    return false;
+  }
+  function parseConcatenatedString() {
+    let processed2 = false;
+    parseWhitespaceAndSkipComments();
+    while (text2[i] === "+") {
+      processed2 = true;
+      i++;
+      parseWhitespaceAndSkipComments();
+      output = stripLastOccurrence(output, '"', true);
+      const start = output.length;
+      const parsedStr = parseString();
+      if (parsedStr) {
+        output = removeAtIndex(output, start, 1);
+      } else {
+        output = insertBeforeLastWhitespace(output, '"');
+      }
+    }
+    return processed2;
+  }
+  function parseNumber() {
+    const start = i;
+    if (text2[i] === "-") {
+      i++;
+      if (atEndOfNumber()) {
+        repairNumberEndingWithNumericSymbol(start);
+        return true;
+      }
+      if (!isDigit(text2[i])) {
+        i = start;
+        return false;
+      }
+    }
+    while (isDigit(text2[i])) {
+      i++;
+    }
+    if (text2[i] === ".") {
+      i++;
+      if (atEndOfNumber()) {
+        repairNumberEndingWithNumericSymbol(start);
+        return true;
+      }
+      if (!isDigit(text2[i])) {
+        i = start;
+        return false;
+      }
+      while (isDigit(text2[i])) {
+        i++;
+      }
+    }
+    if (text2[i] === "e" || text2[i] === "E") {
+      i++;
+      if (text2[i] === "-" || text2[i] === "+") {
+        i++;
+      }
+      if (atEndOfNumber()) {
+        repairNumberEndingWithNumericSymbol(start);
+        return true;
+      }
+      if (!isDigit(text2[i])) {
+        i = start;
+        return false;
+      }
+      while (isDigit(text2[i])) {
+        i++;
+      }
+    }
+    if (!atEndOfNumber()) {
+      i = start;
+      return false;
+    }
+    if (i > start) {
+      const num = text2.slice(start, i);
+      const hasInvalidLeadingZero = /^0\d/.test(num);
+      output += hasInvalidLeadingZero ? `"${num}"` : num;
+      return true;
+    }
+    return false;
+  }
+  function parseKeywords() {
+    return parseKeyword("true", "true") || parseKeyword("false", "false") || parseKeyword("null", "null") || // repair Python keywords True, False, None
+    parseKeyword("True", "true") || parseKeyword("False", "false") || parseKeyword("None", "null");
+  }
+  function parseKeyword(name17, value) {
+    if (text2.slice(i, i + name17.length) === name17) {
+      output += value;
+      i += name17.length;
+      return true;
+    }
+    return false;
+  }
+  function parseUnquotedString(isKey) {
+    const start = i;
+    if (isFunctionNameCharStart(text2[i])) {
+      while (i < text2.length && isFunctionNameChar(text2[i])) {
+        i++;
+      }
+      let j = i;
+      while (isWhitespace(text2, j)) {
+        j++;
+      }
+      if (text2[j] === "(") {
+        i = j + 1;
+        parseValue();
+        if (text2[i] === ")") {
+          i++;
+          if (text2[i] === ";") {
+            i++;
+          }
+        }
+        return true;
+      }
+    }
+    while (i < text2.length && !isUnquotedStringDelimiter(text2[i]) && !isQuote(text2[i]) && (!isKey || text2[i] !== ":")) {
+      i++;
+    }
+    if (text2[i - 1] === ":" && regexUrlStart.test(text2.substring(start, i + 2))) {
+      while (i < text2.length && regexUrlChar.test(text2[i])) {
+        i++;
+      }
+    }
+    if (i > start) {
+      while (isWhitespace(text2, i - 1) && i > 0) {
+        i--;
+      }
+      const symbol17 = text2.slice(start, i);
+      output += symbol17 === "undefined" ? "null" : JSON.stringify(symbol17);
+      if (text2[i] === '"') {
+        i++;
+      }
+      return true;
+    }
+  }
+  function parseRegex() {
+    if (text2[i] === "/") {
+      const start = i;
+      i++;
+      while (i < text2.length && (text2[i] !== "/" || text2[i - 1] === "\\")) {
+        i++;
+      }
+      i++;
+      output += JSON.stringify(text2.substring(start, i));
+      return true;
+    }
+  }
+  function prevNonWhitespaceIndex(start) {
+    let prev = start;
+    while (prev > 0 && isWhitespace(text2, prev)) {
+      prev--;
+    }
+    return prev;
+  }
+  function atEndOfNumber() {
+    return i >= text2.length || isDelimiter(text2[i]) || isWhitespace(text2, i);
+  }
+  function repairNumberEndingWithNumericSymbol(start) {
+    output += `${text2.slice(start, i)}0`;
+  }
+  function throwInvalidCharacter(char) {
+    throw new JSONRepairError(`Invalid character ${JSON.stringify(char)}`, i);
+  }
+  function throwUnexpectedCharacter() {
+    throw new JSONRepairError(`Unexpected character ${JSON.stringify(text2[i])}`, i);
+  }
+  function throwUnexpectedEnd() {
+    throw new JSONRepairError("Unexpected end of json string", text2.length);
+  }
+  function throwObjectKeyExpected() {
+    throw new JSONRepairError("Object key expected", i);
+  }
+  function throwColonExpected() {
+    throw new JSONRepairError("Colon expected", i);
+  }
+  function throwInvalidUnicodeCharacter() {
+    const chars = text2.slice(i, i + 6);
+    throw new JSONRepairError(`Invalid unicode character "${chars}"`, i);
+  }
+}
+function atEndOfBlockComment(text2, i) {
+  return text2[i] === "*" && text2[i + 1] === "/";
+}
+
 // src/errors.ts
 function errorMessage(err, fallback = "unknown error") {
   if (err instanceof Error) {
@@ -36777,13 +37443,19 @@ var Verdict = external_exports.object({
   review_plan: external_exports.string(),
   verdict: external_exports.enum(["approved", "changes"]),
   findings: external_exports.array(Finding),
-  other_checks: external_exports.string(),
-  top_must_fix: external_exports.array(external_exports.string())
+  other_checks: external_exports.string().default(""),
+  top_must_fix: external_exports.array(external_exports.string()).default([])
+});
+var PartialVerdict = external_exports.object({
+  review_plan: external_exports.string().optional(),
+  verdict: external_exports.enum(["approved", "changes"]).optional(),
+  findings: external_exports.array(external_exports.unknown()).optional()
 });
 
 // src/llm/openrouter.ts
 var REQUEST_TIMEOUT_MS = 6e4;
 var MAX_ATTEMPTS = 3;
+var MAX_TOKEN_CEILING = 32768;
 var EXTRA_BODY = {
   // Disable reasoning so the model spends max_tokens on the answer, not hidden
   // thinking. "none" is not in the SDK's typed reasoning effort union, so it
@@ -36801,6 +37473,7 @@ async function reviewWithModel(envelope, opts) {
   });
   const perAttemptMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
   const maxAttempts = opts.maxAttempts ?? MAX_ATTEMPTS;
+  let budget = envelope.max_tokens;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), perAttemptMs);
@@ -36817,7 +37490,7 @@ async function reviewWithModel(envelope, opts) {
         system: envelope.system,
         prompt: envelope.user,
         temperature: 0,
-        maxTokens: envelope.max_tokens,
+        maxTokens: budget,
         maxRetries: opts.maxRetries ?? 2,
         abortSignal: controller.signal
       });
@@ -36836,12 +37509,50 @@ async function reviewWithModel(envelope, opts) {
         });
         continue;
       }
+      if (isLengthTruncation(err)) {
+        if (budget < MAX_TOKEN_CEILING && attempt < maxAttempts) {
+          budget = Math.min(budget * 2, MAX_TOKEN_CEILING);
+          continue;
+        }
+        const salvaged = salvageTruncated(err);
+        if (salvaged !== null) return salvaged;
+      }
       return abstain(err);
     } finally {
       clearTimeout(timeout);
     }
   }
   return abstain(new Error("OpenRouter request failed"));
+}
+function isLengthTruncation(err) {
+  return NoObjectGeneratedError.isInstance(err) && err.finishReason === "length";
+}
+function salvageTruncated(err) {
+  if (!NoObjectGeneratedError.isInstance(err) || typeof err.text !== "string") return null;
+  let repaired;
+  try {
+    repaired = JSON.parse(jsonrepair(err.text));
+  } catch {
+    return null;
+  }
+  const loose = PartialVerdict.safeParse(repaired);
+  if (!loose.success) return null;
+  const findings = [];
+  for (const f of loose.data.findings ?? []) {
+    const r = Finding.safeParse(f);
+    if (r.success) findings.push(r.data);
+  }
+  if (findings.length === 0) return null;
+  return {
+    verdict: loose.data.verdict ?? "changes",
+    findings,
+    review_plan: loose.data.review_plan ?? "",
+    other_checks: "",
+    top_must_fix: [],
+    partial: true,
+    finishReason: "length",
+    error: `output truncated at the token limit \u2014 recovered ${findings.length} finding(s) completed before the cut; later findings may be missing. Raise MAX_TOKENS to avoid.`
+  };
 }
 function abstain(err) {
   const result = {
@@ -36956,6 +37667,7 @@ function mergeResults(results) {
   }
   const errored = results.filter((r) => r.verdict === "error");
   const succeeded = results.filter((r) => r.verdict !== "error");
+  const partials = results.filter((r) => r.partial);
   const verdict = succeeded.length === 0 ? "error" : succeeded.some((r) => r.verdict === "changes") ? "changes" : "approved";
   const merged = {
     verdict,
@@ -36964,10 +37676,14 @@ function mergeResults(results) {
     other_checks: joinNonEmpty(results.map((r) => r.other_checks)),
     top_must_fix: capUnion(results.flatMap((r) => r.top_must_fix ?? []))
   };
+  if (partials.length > 0) merged.partial = true;
   if (errored.length > 0) {
     const first = errored[0];
     merged.error = `${errored.length}/${results.length} chunks failed: ${first.error ?? "unknown error"}`;
     if (first.finishReason !== void 0) merged.finishReason = first.finishReason;
+  } else if (partials.length > 0) {
+    merged.error = `${partials.length}/${results.length} chunks truncated at the output-token limit \u2014 recovered the findings completed before the cut; later findings may be missing. Raise MAX_TOKENS to avoid.`;
+    merged.finishReason = "length";
   }
   return merged;
 }

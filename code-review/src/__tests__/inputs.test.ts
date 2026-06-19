@@ -32,30 +32,30 @@ afterEach(() => {
 });
 
 describe("FIX 8 — token budget must be positive", () => {
-  it('MAX_TOKENS="0" falls back to the 4096 default with a warning', () => {
+  it('MAX_TOKENS="0" falls back to the 8192 default with a warning', () => {
     setInput("MAX_TOKENS", "0");
     const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
     const inputs = readInputs();
-    expect(inputs.maxTokens).toBe(4096);
+    expect(inputs.maxTokens).toBe(8192);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("MAX_TOKENS=0"));
   });
 
-  it('MAX_TOKENS="-1" (negative) also falls back to 4096 with a warning', () => {
+  it('MAX_TOKENS="-1" (negative) also falls back to 8192 with a warning', () => {
     setInput("MAX_TOKENS", "-1");
     const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
     const inputs = readInputs();
-    expect(inputs.maxTokens).toBe(4096);
+    expect(inputs.maxTokens).toBe(8192);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("MAX_TOKENS=-1"));
   });
 
-  it("a PROVIDERS entry with max_tokens:0 falls back to 4096 with a warning", () => {
+  it("a PROVIDERS entry with max_tokens:0 falls back to 8192 with a warning", () => {
     setInput(
       "PROVIDERS",
       JSON.stringify([{ model: "deepseek/deepseek-v4-flash", api_key: "k", max_tokens: 0 }]),
     );
     const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
     const inputs = readInputs();
-    expect(inputs.maxTokens).toBe(4096);
+    expect(inputs.maxTokens).toBe(8192);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("PROVIDERS[0].max_tokens=0"));
   });
 
