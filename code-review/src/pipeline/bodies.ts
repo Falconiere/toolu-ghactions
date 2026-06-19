@@ -63,7 +63,7 @@ export function noopBody(ctx: GithubContext): string {
 
 **No file changes to review.** 🎉
 
-\`agent-merge-approved\`
+\`merge-approved\`
 `;
 }
 

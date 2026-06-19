@@ -89,7 +89,7 @@ construction** (with automatic retries and schema repair) rather than parsed out
 of free text. Reasoning is disabled to keep the run fast and the token budget on
 the review itself. If the model returns empty or unparseable output after retries,
 the action surfaces an `error` verdict carrying the finish reason — rendered as
-"🚫 Review incomplete" and labeled `agent-request-changes`, so a failed review
+"🚫 Review incomplete" and labeled `request-changes`, so a failed review
 never auto-merges. It never emits a silent null verdict.
 
 ### Deprecated inputs (no-ops, kept for back-compat)
@@ -193,10 +193,10 @@ match. Tighten to assert full identity.
 **`src/utils/format.ts:17`** — Add a removal date or tracking issue.
 **`src/utils/__tests__/format.test.ts:6`** — Tighten test assertion.
 
-`agent-merge-approved`
+`merge-approved`
 ```
 
-The verdict label at the bottom is machine-readable: `` `agent-merge-approved` `` or `` `agent-request-changes` ``. `pr-babysit` parses it to decide whether the PR is ready to merge. Unless `MANAGE_LABELS` is `false`, the same verdict is also applied as a real PR **label chip** (the opposite one is removed), so PRs are filterable in the GitHub UI — this needs `issues: write` in the workflow's `permissions` block.
+The verdict label at the bottom is machine-readable: `` `merge-approved` `` or `` `request-changes` ``. `pr-babysit` parses it to decide whether the PR is ready to merge. Unless `MANAGE_LABELS` is `false`, the same verdict is also applied as a real PR **label chip** (the opposite one is removed), so PRs are filterable in the GitHub UI — this needs `issues: write` in the workflow's `permissions` block.
 
 ## Custom identity (GitHub App)
 
@@ -367,7 +367,7 @@ turn the recap and history off.
 | `MAX_TOKENS` | no | `4096` | Max completion tokens per request. |
 | `MIN_CONFIDENCE` | no | `high` | Drop findings below this confidence unless severity is blocker/high (`high` or `medium`) |
 | `INLINE_COMMENTS` | no | `true` | Post per-line review comments with committable code suggestions (Reviews API), in addition to the summary comment |
-| `MANAGE_LABELS` | no | `true` | Set a real PR label chip matching the verdict (`agent-merge-approved` / `agent-request-changes`) and remove the opposite one. Requires `issues: write`. |
+| `MANAGE_LABELS` | no | `true` | Set a real PR label chip matching the verdict (`merge-approved` / `request-changes`) and remove the opposite one. Requires `issues: write`. |
 | `BASE_BRANCH` | no | `main` | Base branch for diff comparison. Falls back to `GITHUB_BASE_REF` if unset. |
 | `REVIEW_PROMPT_FILE` | no | *(8-dimension checklist)* | Path to a markdown file (relative to repo root) with a custom review prompt. Overrides the default checklist. Project conventions are still gathered and injected, but a custom prompt supplies its own dimensions. |
 | `CODEBASE_OVERVIEW` | no | — | High-level context about the codebase (framework, patterns, architecture) injected into the review prompt. |

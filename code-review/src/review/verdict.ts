@@ -5,9 +5,9 @@
 // always survive — the marker MUST stay the last line.
 //
 // VERDICT MAPPING (parity-critical):
-//   approved → `agent-merge-approved` / "✅ Approved"
-//   error    → `agent-request-changes` / "🚫 Review incomplete — provider error"
-//   changes  → `agent-request-changes` / "⚠️ Changes requested"
+//   approved → `merge-approved` / "✅ Approved"
+//   error    → `request-changes` / "🚫 Review incomplete — provider error"
+//   changes  → `request-changes` / "⚠️ Changes requested"
 // "error" carries the request-changes label on purpose: a failed review must
 // never auto-merge (the do-not-approve fail-safe), but the badge says plainly it
 // was a provider error, not a real request for changes.
@@ -63,7 +63,7 @@ export class VerdictIntegrityError extends Error {
  *   when there are no findings, else "changes" (the bash default).
  * @param opts - branding + the pre-rendered recap/history + the state marker.
  * @returns `{ body, label }` — the full markdown body (marker last) and the bare
- *   label slug ("agent-merge-approved" | "agent-request-changes").
+ *   label slug ("merge-approved" | "request-changes").
  * @throws VerdictIntegrityError if even a findings-free body + marker exceeds the
  *   size cap (never silently drops the marker).
  */
@@ -160,12 +160,12 @@ export function resolveVerdict(
 /** Map the verdict to its PR label slug + human badge (the parity-critical table). */
 function labelAndBadge(verdict: ProviderResult["verdict"]): { label: string; badge: string } {
   if (verdict === "approved") {
-    return { label: "agent-merge-approved", badge: "✅ Approved" };
+    return { label: "merge-approved", badge: "✅ Approved" };
   }
   if (verdict === "error") {
-    return { label: "agent-request-changes", badge: "🚫 Review incomplete — provider error" };
+    return { label: "request-changes", badge: "🚫 Review incomplete — provider error" };
   }
-  return { label: "agent-request-changes", badge: "⚠️ Changes requested" };
+  return { label: "request-changes", badge: "⚠️ Changes requested" };
 }
 
 /** The header line: "**AI Code Review finished[ in DURATION]** —— [View job](url)". */

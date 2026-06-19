@@ -36985,12 +36985,12 @@ function resolveVerdict(verdict, findingsCount) {
 }
 function labelAndBadge(verdict) {
   if (verdict === "approved") {
-    return { label: "agent-merge-approved", badge: "\u2705 Approved" };
+    return { label: "merge-approved", badge: "\u2705 Approved" };
   }
   if (verdict === "error") {
-    return { label: "agent-request-changes", badge: "\u{1F6AB} Review incomplete \u2014 provider error" };
+    return { label: "request-changes", badge: "\u{1F6AB} Review incomplete \u2014 provider error" };
   }
-  return { label: "agent-request-changes", badge: "\u26A0\uFE0F Changes requested" };
+  return { label: "request-changes", badge: "\u26A0\uFE0F Changes requested" };
 }
 function buildHeader(duration, jobUrl2) {
   const base = duration ? `**AI Code Review finished in ${duration}**` : "**AI Code Review finished**";
@@ -37269,8 +37269,8 @@ async function postInlineReview(octokit, findings, target) {
 }
 
 // src/github/label.ts
-var APPROVED_LABEL = "agent-merge-approved";
-var CHANGES_LABEL = "agent-request-changes";
+var APPROVED_LABEL = "merge-approved";
+var CHANGES_LABEL = "request-changes";
 var APPROVED_COLOR = "0e8a16";
 var CHANGES_COLOR = "d93f0b";
 function mapVerdict(verdict) {
@@ -37361,7 +37361,7 @@ function noopBody(ctx) {
 
 **No file changes to review.** \u{1F389}
 
-\`agent-merge-approved\`
+\`merge-approved\`
 `;
 }
 function inProgressBody(ctx) {
@@ -41625,7 +41625,7 @@ async function postErrorComment(octokit, message) {
 
 **Error:** ${message}
 
-\`agent-request-changes\`
+\`request-changes\`
 `;
   const { data } = await octokit.rest.issues.createComment({
     owner: ctx.repo.owner,

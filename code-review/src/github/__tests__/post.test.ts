@@ -136,28 +136,28 @@ function fakeLabelClient(opts: { failAdd?: boolean } = {}): {
 }
 
 describe("setVerdictLabel", () => {
-  it("adds agent-merge-approved and removes agent-request-changes on approved", async () => {
+  it("adds merge-approved and removes request-changes on approved", async () => {
     const { client, calls } = fakeLabelClient();
     const r = await setVerdictLabel(client, "approved", LABEL_TARGET);
     expect(r.changed).toBe(true);
-    expect(r.added).toBe("agent-merge-approved");
-    expect(calls.added).toEqual([["agent-merge-approved"]]);
-    expect(calls.removed).toEqual(["agent-request-changes"]);
+    expect(r.added).toBe("merge-approved");
+    expect(calls.added).toEqual([["merge-approved"]]);
+    expect(calls.removed).toEqual(["request-changes"]);
   });
 
-  it("adds agent-request-changes and removes agent-merge-approved on changes", async () => {
+  it("adds request-changes and removes merge-approved on changes", async () => {
     const { client, calls } = fakeLabelClient();
     const r = await setVerdictLabel(client, "changes", LABEL_TARGET);
-    expect(r.added).toBe("agent-request-changes");
-    expect(calls.added).toEqual([["agent-request-changes"]]);
-    expect(calls.removed).toEqual(["agent-merge-approved"]);
+    expect(r.added).toBe("request-changes");
+    expect(calls.added).toEqual([["request-changes"]]);
+    expect(calls.removed).toEqual(["merge-approved"]);
   });
 
   it("maps error to the request-changes label (a failed review must not auto-merge)", async () => {
     const { client, calls } = fakeLabelClient();
     const r = await setVerdictLabel(client, "error", LABEL_TARGET);
-    expect(r.added).toBe("agent-request-changes");
-    expect(calls.removed).toEqual(["agent-merge-approved"]);
+    expect(r.added).toBe("request-changes");
+    expect(calls.removed).toEqual(["merge-approved"]);
   });
 
   it("MANAGE_LABELS=false → complete no-op", async () => {

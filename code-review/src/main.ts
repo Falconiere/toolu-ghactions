@@ -98,7 +98,7 @@ async function postErrorComment(
 
 **Error:** ${message}
 
-\`agent-request-changes\`
+\`request-changes\`
 `;
   const { data } = await octokit.rest.issues.createComment({
     owner: ctx.repo.owner,
