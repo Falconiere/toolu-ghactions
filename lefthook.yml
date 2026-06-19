@@ -1,0 +1,36 @@
+# Git hooks for the code-review TypeScript action (lefthook v2).
+#
+# Config lives at the repo ROOT because git runs hooks from the worktree root and
+# lefthook discovers its config there. Every job sets `root: "code-review/"` so it
+# runs from the action dir, where the toolchain (oxlint/oxfmt/bun) and tsconfig
+# live; {staged_files} are filtered to that root.
+#
+# pre-commit is FAST (oxlint --fix + oxfmt on staged TS only — no type-aware, which
+# needs whole-program analysis). pre-push runs the FULL gate incl. type-aware lint,
+# and rebuilds the committed dist bundle, failing if it drifted from source.
+
+pre-commit:
+  parallel: true
+  jobs:
+    - name: lint
+      root: "code-review/"
+      glob: "*.ts"
+      run: "bunx oxlint --fix {staged_files}"
+      stage_fixed: true
+    - name: format
+      root: "code-review/"
+      glob: "*.ts"
+      run: "bunx oxfmt {staged_files}"
+      stage_fixed: true
+
+pre-push:
+  jobs:
+    - name: lint
+      root: "code-review/"
+      run: "bun run lint"
+    - name: typecheck
+      root: "code-review/"
+      run: "bun run typecheck"
+    - name: dist-sync
+      root: "code-review/"
+      run: "bun run build && git diff --quiet -- dist || { echo 'dist out of sync — run: cd code-review && bun run build, then commit dist'; exit 1; }"
