@@ -37660,6 +37660,7 @@ async function setVerdictLabel(octokit, verdict, target, opts = {}) {
 // src/pipeline/bodies.ts
 var import_node_fs4 = require("node:fs");
 var import_node_path3 = require("node:path");
+var LOADING_GIF_URL = "https://raw.githubusercontent.com/falconiere/toolu-ghactions/main/code-review/assets/loading.gif";
 function resolveChecklistPath() {
   const fallback = "/action/prompts/review-checklist.txt";
   const here = typeof __dirname !== "undefined" ? __dirname : "";
@@ -37702,6 +37703,8 @@ function noopBody(ctx) {
 }
 function inProgressBody(ctx) {
   return `**AI Code Review running** \u2014\u2014 [View job](${jobUrl(ctx)})
+
+<p align="center"><img src="${LOADING_GIF_URL}" width="240" alt="Review in progress"></p>
 
 ---
 ### PR Review in Progress
