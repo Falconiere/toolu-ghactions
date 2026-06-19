@@ -37,6 +37,7 @@ export function validateFindings(
   findings: Finding[],
   changedLinesByPath: Map<string, number[]>,
   minConfidence: MinConfidence,
+  lineTextByPath?: Map<string, Map<number, string>>,
 ): Finding[] {
   const kept: Finding[] = [];
   for (const f of findings) {
@@ -45,6 +46,17 @@ export function validateFindings(
 
     // 1. Anchored: the cited line must be a real changed line in the diff.
     if (!changedSet.has(f.line)) continue;
+
+    // 1b. Quote-anchored (LLM findings only): if the finding quotes a line, it
+    // must match the real new-file text at the cited line. Catches diff misreads
+    // where the model cites a valid line number but quotes content from an
+    // adjacent removed (`L---:`) line — i.e. flags deleted code as if it were
+    // still present. Mechanical scanners anchor exactly, so they are exempt.
+    const isLlm = f.source === undefined || f.source === "llm";
+    if (isLlm && f.quoted_line !== undefined && lineTextByPath !== undefined) {
+      const actual = lineTextByPath.get(f.path)?.get(f.line);
+      if (actual !== undefined && !quotesMatch(actual, f.quoted_line)) continue;
+    }
 
     // 2. Confidence gate. Missing confidence is treated as below medium ("low").
     const c = f.confidence ?? "low";
@@ -67,6 +79,21 @@ export function validateFindings(
   }
 
   return dedup(kept);
+}
+
+/**
+ * Tolerant comparison between a finding's `quoted_line` and the real new-file
+ * line at the cited number. Whitespace-normalized; either string may be a
+ * substring of the other (the model often quotes only the salient part of a
+ * long line, or joins a short span). Returns false only when the two share no
+ * containment — i.e. the quote does not come from the cited line at all.
+ */
+function quotesMatch(actual: string, quoted: string): boolean {
+  const norm = (s: string): string => s.replace(/\s+/g, " ").trim();
+  const a = norm(actual);
+  const q = norm(quoted);
+  if (q === "") return true;
+  return a.includes(q) || q.includes(a);
 }
 
 /**

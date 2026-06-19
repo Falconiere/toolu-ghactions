@@ -9,6 +9,13 @@
 export interface ShapedFile {
   path: string;
   changed_lines: number[];
+  /**
+   * New-file line number → that line's content (the leading `+`/space marker
+   * stripped). Lets the finding gate verify a finding's `quoted_line` against
+   * the real post-change text, so a finding that quotes a removed (`L---:`) line
+   * — flagging deleted code as if still present — is dropped.
+   */
+  line_text: Record<number, string>;
 }
 
 /** Line-primed diff text plus the per-file anchorable line sets. */
@@ -39,6 +46,8 @@ export function shapeDiff(rawDiff: string): ShapedDiff {
   // Pairs of (path, newLine) in encounter order — grouped/uniqued at the end,
   // mirroring jq's `group_by(.path) | map(... unique)`.
   const pairsByPath = new Map<string, Set<number>>();
+  // New-file line number → content, per path (mirrors pairsByPath; feeds line_text).
+  const textByPath = new Map<string, Map<number, string>>();
   // First-seen path order, so the emitted files[] order is stable and matches
   // jq group_by (which sorts by key — see note below).
   let path = "";
@@ -66,12 +75,14 @@ export function shapeDiff(rawDiff: string): ShapedDiff {
     } else if (line.startsWith("+")) {
       out.push(`L${newLine}: ${line}`);
       record(pairsByPath, path, newLine);
+      recordText(textByPath, path, newLine, line.slice(1));
       newLine++;
     } else if (line.startsWith("-")) {
       out.push(`L---: ${line}`);
     } else if (line.startsWith(" ")) {
       out.push(`L${newLine}: ${line}`);
       record(pairsByPath, path, newLine);
+      recordText(textByPath, path, newLine, line.slice(1));
       newLine++;
     } else {
       // index/mode/rename headers, "\ No newline", blank lines
@@ -84,6 +95,7 @@ export function shapeDiff(rawDiff: string): ShapedDiff {
   const files: ShapedFile[] = [...pairsByPath.keys()].sort().map((p) => ({
     path: p,
     changed_lines: [...(pairsByPath.get(p) ?? new Set<number>())].sort((a, b) => a - b),
+    line_text: Object.fromEntries(textByPath.get(p) ?? new Map<number, string>()),
   }));
 
   const diff = hadTrailingNewline ? `${out.join("\n")}\n` : out.join("\n");
@@ -98,4 +110,19 @@ function record(byPath: Map<string, Set<number>>, path: string, line: number): v
     byPath.set(path, set);
   }
   set.add(line);
+}
+
+/** Record a new-file line's content (last write wins within a path). */
+function recordText(
+  byPath: Map<string, Map<number, string>>,
+  path: string,
+  line: number,
+  text: string,
+): void {
+  let map = byPath.get(path);
+  if (!map) {
+    map = new Map<number, string>();
+    byPath.set(path, map);
+  }
+  map.set(line, text);
 }

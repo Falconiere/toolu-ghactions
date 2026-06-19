@@ -28343,6 +28343,7 @@ function shapeDiff(rawDiff) {
   }
   const out = [];
   const pairsByPath = /* @__PURE__ */ new Map();
+  const textByPath = /* @__PURE__ */ new Map();
   let path = "";
   let newLine = 0;
   const lines = rawDiff.split("\n");
@@ -28363,12 +28364,14 @@ function shapeDiff(rawDiff) {
     } else if (line.startsWith("+")) {
       out.push(`L${newLine}: ${line}`);
       record(pairsByPath, path, newLine);
+      recordText(textByPath, path, newLine, line.slice(1));
       newLine++;
     } else if (line.startsWith("-")) {
       out.push(`L---: ${line}`);
     } else if (line.startsWith(" ")) {
       out.push(`L${newLine}: ${line}`);
       record(pairsByPath, path, newLine);
+      recordText(textByPath, path, newLine, line.slice(1));
       newLine++;
     } else {
       out.push(line);
@@ -28376,7 +28379,8 @@ function shapeDiff(rawDiff) {
   }
   const files = [...pairsByPath.keys()].sort().map((p) => ({
     path: p,
-    changed_lines: [...pairsByPath.get(p) ?? /* @__PURE__ */ new Set()].sort((a, b) => a - b)
+    changed_lines: [...pairsByPath.get(p) ?? /* @__PURE__ */ new Set()].sort((a, b) => a - b),
+    line_text: Object.fromEntries(textByPath.get(p) ?? /* @__PURE__ */ new Map())
   }));
   const diff = hadTrailingNewline ? `${out.join("\n")}
 ` : out.join("\n");
@@ -28389,6 +28393,14 @@ function record(byPath, path, line) {
     byPath.set(path, set2);
   }
   set2.add(line);
+}
+function recordText(byPath, path, line, text2) {
+  let map = byPath.get(path);
+  if (!map) {
+    map = /* @__PURE__ */ new Map();
+    byPath.set(path, map);
+  }
+  map.set(line, text2);
 }
 
 // src/git/noise.ts
@@ -37162,12 +37174,17 @@ function buildSeveritySummary(findings) {
 }
 
 // src/review/validate.ts
-function validateFindings(findings, changedLinesByPath, minConfidence) {
+function validateFindings(findings, changedLinesByPath, minConfidence, lineTextByPath) {
   const kept = [];
   for (const f of findings) {
     const changed = changedLinesByPath.get(f.path) ?? [];
     const changedSet = new Set(changed);
     if (!changedSet.has(f.line)) continue;
+    const isLlm = f.source === void 0 || f.source === "llm";
+    if (isLlm && f.quoted_line !== void 0 && lineTextByPath !== void 0) {
+      const actual = lineTextByPath.get(f.path)?.get(f.line);
+      if (actual !== void 0 && !quotesMatch(actual, f.quoted_line)) continue;
+    }
     const c = f.confidence ?? "low";
     const keep = f.severity === "blocker" || f.severity === "high" || minConfidence === "high" && c === "high" || minConfidence === "medium" && (c === "high" || c === "medium");
     if (!keep) continue;
@@ -37180,6 +37197,13 @@ function validateFindings(findings, changedLinesByPath, minConfidence) {
     }
   }
   return dedup(kept);
+}
+function quotesMatch(actual, quoted) {
+  const norm = (s) => s.replace(/\s+/g, " ").trim();
+  const a = norm(actual);
+  const q = norm(quoted);
+  if (q === "") return true;
+  return a.includes(q) || q.includes(a);
 }
 function spanIsInDiff(f, changedSet) {
   const end = f.end_line ?? f.line;
@@ -37846,7 +37870,18 @@ async function runReview(deps) {
   const changedLinesByPath = new Map(
     diff.files.map((f) => [f.path, f.changed_lines])
   );
-  const findings = validateFindings(result.findings, changedLinesByPath, inputs.minConfidence);
+  const lineTextByPath = new Map(
+    diff.files.map((f) => [
+      f.path,
+      new Map(Object.entries(f.line_text).map(([n, text2]) => [Number(n), text2]))
+    ])
+  );
+  const findings = validateFindings(
+    result.findings,
+    changedLinesByPath,
+    inputs.minConfidence,
+    lineTextByPath
+  );
   const validated = { ...result, findings };
   const verdict = resolveVerdict(validated.verdict, findings.length);
   let recap = "";
