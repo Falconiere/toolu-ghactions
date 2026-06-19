@@ -1,14 +1,140 @@
-// main.ts — entry point for the Toolu AI Code Review action.
-// Thin wrapper: read inputs, run the review pipeline, set outputs. The
-// orchestration lives in pipeline.ts; this file stays small and side-effect-only.
-// (Scaffold stub — fleshed out in step 18b once the pipeline modules land.)
+// main.ts — entry point for the Toolu AI Code Review action. Thin wrapper:
+// read inputs, mint the GitHub App token (when configured), build the deps
+// bundle, run the pipeline, set outputs. All orchestration lives in pipeline.ts.
+//
+// TOP-LEVEL GUARD: a thrown infra error (diff resolution, comment-post, an
+// unexpected crash) sets verdict=error, posts a best-effort error comment, and
+// calls setFailed so the job goes red. A provider ABSTAIN is NOT an infra error
+// — runReview returns verdict:"error" normally and the job stays green.
+import * as core from "@actions/core";
+import * as github from "@actions/github";
+import { readInputs } from "./inputs.js";
+import type { ActionInputs } from "./inputs.js";
+import { runReview } from "./pipeline.js";
+import type { GithubContext, PipelineOctokit } from "./pipeline.js";
+import { mintAppToken } from "./github/appToken.js";
+import type { InstallationLookupClient } from "./github/appToken.js";
+import { createAppAuth } from "@octokit/auth-app";
+import type { EventPayload } from "./github/event.js";
+
+/** Build the GithubContext slice the pipeline reads from the @actions/github context. */
+function buildContext(): GithubContext {
+  return {
+    eventName: github.context.eventName,
+    payload: (github.context.payload as EventPayload | undefined) ?? null,
+    repo: github.context.repo,
+    sha: github.context.sha,
+    serverUrl: github.context.serverUrl,
+    runId: github.context.runId,
+  };
+}
+
+/**
+ * Resolve the Octokit token: mint a GitHub App installation token when APP_ID +
+ * APP_PRIVATE_KEY are set (so the bot posts under the App identity), else the
+ * default TOKEN. Mint failures fall back to the default token (never throws).
+ */
+async function resolveToken(inputs: ActionInputs): Promise<string> {
+  if (inputs.appId === "" || inputs.appPrivateKey === "") return inputs.token;
+  const repo = `${github.context.repo.owner}/${github.context.repo.repo}`;
+  const minted = await mintAppToken(inputs.appId, inputs.appPrivateKey, repo, {
+    // App-JWT-authed Octokit used only to resolve the installation. createAppAuth
+    // is the authStrategy; the app credentials ride in `auth`.
+    octokitFactory: ({ appId, privateKey }) =>
+      github.getOctokit("", {
+        authStrategy: createAppAuth,
+        auth: { appId, privateKey },
+      }) as unknown as InstallationLookupClient,
+  }).catch(() => null);
+  if (minted) {
+    core.info("Using GitHub App identity for PR comments");
+    return minted;
+  }
+  return inputs.token;
+}
+
+/** Look up a commenter's repo permission via the collaborators API (fail-closed on throw). */
+function permissionLookup(octokit: ReturnType<typeof github.getOctokit>) {
+  return async (commenter: string): Promise<string> => {
+    const { data } = await octokit.rest.repos.getCollaboratorPermissionLevel({
+      owner: github.context.repo.owner,
+      repo: github.context.repo.repo,
+      username: commenter,
+    });
+    return data.permission;
+  };
+}
+
+/** Look up a PR's base ref via the pulls API (best-effort; a throw → ""). */
+function baseRefLookup(octokit: ReturnType<typeof github.getOctokit>) {
+  return async (prNumber: number): Promise<string> => {
+    const { data } = await octokit.rest.pulls.get({
+      owner: github.context.repo.owner,
+      repo: github.context.repo.repo,
+      pull_number: prNumber,
+    });
+    return data.base.ref;
+  };
+}
+
+/** Post a best-effort error comment when the pipeline crashes before posting one. */
+async function postErrorComment(
+  octokit: ReturnType<typeof github.getOctokit>,
+  message: string,
+): Promise<string> {
+  const ctx = github.context;
+  const url = `${ctx.serverUrl}/${ctx.repo.owner}/${ctx.repo.repo}/actions/runs/${ctx.runId}`;
+  const prNumber = ctx.payload.pull_request?.number ?? ctx.payload.issue?.number;
+  if (prNumber === undefined) return "";
+  const body = `**AI Code Review failed** —— [View job](${url})
+
+---
+### Code Review — error
+
+**Error:** ${message}
+
+\`agent-request-changes\`
+`;
+  const { data } = await octokit.rest.issues.createComment({
+    owner: ctx.repo.owner,
+    repo: ctx.repo.repo,
+    issue_number: prNumber,
+    body,
+  });
+  return data.html_url;
+}
+
 async function main(): Promise<void> {
-  // Pipeline wired up in later steps.
+  const inputs = readInputs();
+  const token = await resolveToken(inputs);
+  const octokit = github.getOctokit(token);
+
+  try {
+    const result = await runReview({
+      inputs,
+      octokit: octokit as unknown as PipelineOctokit,
+      context: buildContext(),
+      lookupPermission: permissionLookup(octokit),
+      lookupBaseRef: baseRefLookup(octokit),
+    });
+
+    core.setOutput("verdict", result.verdict);
+    core.setOutput("findings-count", result.findingsCount);
+    core.setOutput("comment-url", result.commentUrl);
+    core.info(`Review complete: ${result.verdict} (${result.findingsCount} findings) — ${result.commentUrl}`);
+  } catch (err) {
+    // True infra failure: surface verdict=error, post a best-effort comment, fail the job.
+    const message = err instanceof Error ? err.message : String(err);
+    core.setOutput("verdict", "error");
+    core.setOutput("findings-count", 0);
+    const url = await postErrorComment(octokit, message).catch(() => "");
+    if (url !== "") core.setOutput("comment-url", url);
+    core.setFailed(`AI Code Review failed: ${message}`);
+  }
 }
 
 main().catch((err: unknown) => {
-  // Top-level guard: never crash silently. Real verdict/abstain handling is
-  // added with the pipeline in step 18b.
-  console.error(err instanceof Error ? err.stack ?? err.message : String(err));
-  process.exitCode = 1;
+  // Last-resort guard: readInputs / token mint threw before the try/catch above.
+  core.setOutput("verdict", "error");
+  core.setFailed(err instanceof Error ? (err.stack ?? err.message) : String(err));
 });
