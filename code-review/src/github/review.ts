@@ -6,8 +6,8 @@
 // ANY failure (no PR context, unset token, an unanchorable-line 422, etc.) is
 // caught and reported, never thrown. Only findings anchored by a real `line`
 // are posted; a multi-line span uses start_line..line.
-import { errorMessage } from "../errors.js";
-import type { Finding } from "../llm/schema.js";
+import { errorMessage } from "@/errors.js";
+import type { Finding } from "@/llm/schema.js";
 
 /** One inline review comment in the Reviews-API request body. */
 export interface ReviewComment {
@@ -73,7 +73,14 @@ function buildComment(f: Finding): ReviewComment {
 
   const end = f.end_line ?? f.line;
   if (end > f.line) {
-    return { path: f.path, body, start_line: f.line, start_side: "RIGHT", line: end, side: "RIGHT" };
+    return {
+      path: f.path,
+      body,
+      start_line: f.line,
+      start_side: "RIGHT",
+      line: end,
+      side: "RIGHT",
+    };
   }
   return { path: f.path, body, line: f.line, side: "RIGHT" };
 }

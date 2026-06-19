@@ -2,8 +2,8 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { resolveEvent } from "../event.js";
-import type { EventPayload } from "../event.js";
+import { resolveEvent } from "@/github/event.js";
+import type { EventPayload } from "@/github/event.js";
 
 // REAL recorded event payloads from ./fixtures/event — pull_request and
 // issue_comment shapes the action actually receives. The permission lookup is

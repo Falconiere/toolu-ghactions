@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { fetchDiff } from "../diff.js";
+import { fetchDiff } from "@/git/diff.js";
 import { git, setupGitRepo, writeFile, removeRepo } from "./helpers.js";
 
 // REAL temp git repos exercising the two opt-in limits (MAX_FILES skip and

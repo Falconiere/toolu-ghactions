@@ -11,6 +11,7 @@
 // multi-provider knobs (MERGE_STRATEGY, FALLBACK_MODEL, REVIEW_MODE) and
 // ENFORCE_JSON_SCHEMA=false are deprecated no-ops that emit a core.warning.
 import * as core from "@actions/core";
+import { z } from "zod";
 
 /** Minimum confidence floor for the validate gate (high|medium). */
 export type MinConfidence = "high" | "medium";
@@ -65,13 +66,19 @@ export interface ActionInputs {
   reviewMemory: boolean;
 }
 
-/** One PROVIDERS array entry; only the fields we read are typed (loose by design). */
-interface ProviderEntry {
-  model?: string;
-  api_key?: string;
-  enforce_json_schema?: boolean;
-  max_tokens?: number;
-}
+/**
+ * One PROVIDERS array entry; only the fields we read are typed (loose by design —
+ * unknown keys like `provider` are stripped). Validated, not asserted: a non-object
+ * entry or a wrong-typed field is rejected by {@link parseProviders} instead of
+ * being silently mistyped.
+ */
+const ProviderEntrySchema = z.object({
+  model: z.string().optional(),
+  api_key: z.string().optional(),
+  enforce_json_schema: z.boolean().optional(),
+  max_tokens: z.number().optional(),
+});
+type ProviderEntry = z.infer<typeof ProviderEntrySchema>;
 
 /** Default model — kept in sync with action.yml MODEL default and build_providers_list. */
 const DEFAULT_MODEL = "deepseek/deepseek-v4-flash";
@@ -112,7 +119,9 @@ function readMinConfidence(): MinConfidence {
 
 /** Read MIN_TRIGGER_PERMISSION, defaulting to "write"; only "admin" tightens it. */
 function readMinTriggerPermission(): "write" | "admin" {
-  return core.getInput("MIN_TRIGGER_PERMISSION").trim().toLowerCase() === "admin" ? "admin" : "write";
+  return core.getInput("MIN_TRIGGER_PERMISSION").trim().toLowerCase() === "admin"
+    ? "admin"
+    : "write";
 }
 
 /**
@@ -132,7 +141,11 @@ function parseProviders(raw: string): ProviderEntry[] | null {
   if (!Array.isArray(parsed) || parsed.length === 0) {
     throw new Error("PROVIDERS is set but is not a non-empty JSON array.");
   }
-  return parsed as ProviderEntry[];
+  const result = ProviderEntrySchema.array().safeParse(parsed);
+  if (!result.success) {
+    throw new Error(`PROVIDERS entries are not valid: ${result.error.message}`);
+  }
+  return result.data;
 }
 
 /**
@@ -218,10 +231,19 @@ export function readInputs(): ActionInputs {
   const legacyEnforce = readBool("ENFORCE_JSON_SCHEMA", true);
   // MAX_TOKENS must be a positive budget; MAX_TOKENS="0"/"-1" is a typo that would
   // 400 → silent abstain, so clamp it to the default with a warning (FIX 8).
-  const legacyMaxTokens = validateTokenBudget(intInput("MAX_TOKENS", DEFAULT_MAX_TOKENS), "MAX_TOKENS");
+  const legacyMaxTokens = validateTokenBudget(
+    intInput("MAX_TOKENS", DEFAULT_MAX_TOKENS),
+    "MAX_TOKENS",
+  );
 
   const providers = parseProviders(core.getInput("PROVIDERS"));
-  const effective = resolveProvider(providers, legacyKey, legacyModel, legacyEnforce, legacyMaxTokens);
+  const effective = resolveProvider(
+    providers,
+    legacyKey,
+    legacyModel,
+    legacyEnforce,
+    legacyMaxTokens,
+  );
 
   warnDeprecated(legacyEnforce);
 

@@ -7,7 +7,7 @@
 // to the request-changes label on purpose (a failed review must not auto-merge).
 // Honors MANAGE_LABELS (false → no-op). Non-fatal: any API error is caught and
 // reported; this never throws.
-import { errorMessage } from "../errors.js";
+import { errorMessage } from "@/errors.js";
 
 const APPROVED_LABEL = "agent-merge-approved";
 const CHANGES_LABEL = "agent-request-changes";
@@ -65,9 +65,7 @@ export interface LabelResult {
 }
 
 /** Map a verdict to (label-to-add, label-to-remove, chip-color), or null for no change. */
-function mapVerdict(
-  verdict: string,
-): { add: string; remove: string; color: string } | null {
+function mapVerdict(verdict: string): { add: string; remove: string; color: string } | null {
   switch (verdict) {
     case "approved":
       return { add: APPROVED_LABEL, remove: CHANGES_LABEL, color: APPROVED_COLOR };

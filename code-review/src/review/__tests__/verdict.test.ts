@@ -1,14 +1,21 @@
 import { describe, it, expect } from "vitest";
-import { formatVerdict } from "../verdict.js";
-import type { ProviderResult } from "../../llm/openrouter.js";
-import type { Finding } from "../../llm/schema.js";
-import { encodeMarker, type ReviewState } from "../../state.js";
+import { formatVerdict } from "@/review/verdict.js";
+import type { ProviderResult } from "@/llm/openrouter.js";
+import type { Finding } from "@/llm/schema.js";
+import { encodeMarker } from "@/state.js";
 
 const MARKER = encodeMarker({
   schema: "toolu-review-state",
   version: 1,
   findings: [{ path: "src/a.ts", line: 10, text: "remembered", category: "c", fp: "x" }],
-  history: [{ sha: "abc1234", ts: 1700000000, verdict: "changes", counts: { new: 1, open: 0, resolved: 0, total: 1 } }],
+  history: [
+    {
+      sha: "abc1234",
+      ts: 1700000000,
+      verdict: "changes",
+      counts: { new: 1, open: 0, resolved: 0, total: 1 },
+    },
+  ],
 });
 
 /** The last non-empty line of a body. */
@@ -101,7 +108,8 @@ describe("formatVerdict", () => {
     const findings: Finding[] = [];
     for (let i = 0; i < 400; i++) {
       // Mostly nits/low, a handful of blockers — the worst must survive longest.
-      const severity: Finding["severity"] = i < 3 ? "blocker" : i < 6 ? "high" : i % 2 === 0 ? "nit" : "low";
+      const severity: Finding["severity"] =
+        i < 3 ? "blocker" : i < 6 ? "high" : i % 2 === 0 ? "nit" : "low";
       findings.push({
         path: `src/file${i}.ts`,
         line: 10,

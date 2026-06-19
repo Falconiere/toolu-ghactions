@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
-import { mintAppToken, normalizeKey } from "../appToken.js";
-import type { AppAuthFactory, OctokitFactory, InstallationLookupClient } from "../appToken.js";
+import { mintAppToken, normalizeKey } from "@/github/appToken.js";
+import type {
+  AppAuthFactory,
+  OctokitFactory,
+  InstallationLookupClient,
+} from "@/github/appToken.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -100,7 +104,10 @@ describe("mintAppToken", () => {
     // The repo-installation lookup got the split owner/repo.
     expect(calls.lookupArgs).toEqual({ owner: "test-org", repo: "test-repo" });
     // The install token call used the installation id from the recorded payload.
-    expect(calls.installArgs).toEqual({ type: "installation", installationId: installationFixture().id });
+    expect(calls.installArgs).toEqual({
+      type: "installation",
+      installationId: installationFixture().id,
+    });
     // The app id + normalized key reached the auth factory.
     expect(calls.authFactoryArgs?.appId).toBe("901234");
     expect(calls.authFactoryArgs?.privateKey).toBe(pem);
@@ -129,13 +136,19 @@ describe("mintAppToken", () => {
 
   it("returns null when only the app id is set (misconfiguration)", async () => {
     const { authFactory, octokitFactory } = recordingSeams("unused");
-    const token = await mintAppToken("901234", "", "test-org/test-repo", { authFactory, octokitFactory });
+    const token = await mintAppToken("901234", "", "test-org/test-repo", {
+      authFactory,
+      octokitFactory,
+    });
     expect(token).toBeNull();
   });
 
   it("returns null when only the private key is set (misconfiguration)", async () => {
     const { authFactory, octokitFactory } = recordingSeams("unused");
-    const token = await mintAppToken("", realPem(), "test-org/test-repo", { authFactory, octokitFactory });
+    const token = await mintAppToken("", realPem(), "test-org/test-repo", {
+      authFactory,
+      octokitFactory,
+    });
     expect(token).toBeNull();
   });
 

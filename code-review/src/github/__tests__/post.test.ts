@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { postInlineReview } from "../review.js";
-import type { ReviewClient, ReviewComment, ReviewTarget } from "../review.js";
-import { setVerdictLabel } from "../label.js";
-import type { LabelClient, LabelTarget } from "../label.js";
-import type { Finding } from "../../llm/schema.js";
+import { postInlineReview } from "@/github/review.js";
+import type { ReviewClient, ReviewComment, ReviewTarget } from "@/github/review.js";
+import { setVerdictLabel } from "@/github/label.js";
+import type { LabelClient, LabelTarget } from "@/github/label.js";
+import type { Finding } from "@/llm/schema.js";
 
 const REVIEW_TARGET: ReviewTarget = {
   owner: "test-org",
@@ -24,7 +24,9 @@ function fakeReviewClient(): {
       pulls: {
         createReview: async (p) => {
           calls.push({ comments: p.comments, body: p.body, commit_id: p.commit_id });
-          return { data: { html_url: "https://github.com/test-org/test-repo/pull/42#pullrequestreview-1" } };
+          return {
+            data: { html_url: "https://github.com/test-org/test-repo/pull/42#pullrequestreview-1" },
+          };
         },
       },
     },
@@ -63,14 +65,22 @@ describe("postInlineReview", () => {
     expect(single?.body).toBe("**high** _(correctness)_: off-by-one");
 
     // Multi-line span: start_line..line, plus a committable suggestion fence.
-    expect(span).toMatchObject({ path: "src/a.ts", start_line: 12, line: 14, side: "RIGHT", start_side: "RIGHT" });
+    expect(span).toMatchObject({
+      path: "src/a.ts",
+      start_line: 12,
+      line: 14,
+      side: "RIGHT",
+      start_side: "RIGHT",
+    });
     expect(span?.body).toContain("```suggestion\nfor (let i = 0; i < n; i++) {\n```");
   });
 
   it("skips (no review posted) when there are no anchored findings", async () => {
     const { client, calls } = fakeReviewClient();
-    // A finding with no `line` is unanchorable; cast to exercise the runtime guard.
-    const unanchored = [{ path: "x.ts", severity: "low", text: "no line" } as unknown as Finding];
+    // A finding with no `line` is unanchorable — it exercises the runtime guard.
+    // The LLM emits findings as JSON, so a parsed payload missing `line` is the
+    // real shape the guard defends against (no compile-time `line` to assert away).
+    const unanchored: Finding[] = JSON.parse('[{"path":"x.ts","severity":"low","text":"no line"}]');
     const r = await postInlineReview(client, unanchored, REVIEW_TARGET);
     expect(r.posted).toBe(false);
     expect(r.count).toBe(0);
@@ -98,7 +108,11 @@ function fakeLabelClient(opts: { failAdd?: boolean } = {}): {
   client: LabelClient;
   calls: { created: string[]; removed: string[]; added: string[][] };
 } {
-  const calls = { created: [] as string[], removed: [] as string[], added: [] as string[][] };
+  const calls: { created: string[]; removed: string[]; added: string[][] } = {
+    created: [],
+    removed: [],
+    added: [],
+  };
   const client: LabelClient = {
     rest: {
       issues: {

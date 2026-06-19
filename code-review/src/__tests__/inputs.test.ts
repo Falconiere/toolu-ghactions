@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as core from "@actions/core";
-import { readInputs } from "../inputs.js";
+import { readInputs } from "@/inputs.js";
 
 // readInputs() reads real INPUT_* env vars via @actions/core.getInput (the same
 // pattern main.test.ts uses). No mocks of getInput — we set the env directly and
@@ -49,7 +49,10 @@ describe("FIX 8 — token budget must be positive", () => {
   });
 
   it("a PROVIDERS entry with max_tokens:0 falls back to 4096 with a warning", () => {
-    setInput("PROVIDERS", JSON.stringify([{ model: "deepseek/deepseek-v4-flash", api_key: "k", max_tokens: 0 }]));
+    setInput(
+      "PROVIDERS",
+      JSON.stringify([{ model: "deepseek/deepseek-v4-flash", api_key: "k", max_tokens: 0 }]),
+    );
     const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
     const inputs = readInputs();
     expect(inputs.maxTokens).toBe(4096);
@@ -93,5 +96,17 @@ describe("FIX 9 — REVIEW_PROMPT_FILE / CODEBASE_OVERVIEW are trimmed", () => {
     vi.spyOn(core, "warning").mockImplementation(() => {});
     const inputs = readInputs();
     expect(inputs.reviewPromptFile).toBe("prompts/custom.txt");
+  });
+});
+
+describe("PROVIDERS zod validation (rejects malformed entries instead of mistyping them)", () => {
+  it("throws when a PROVIDERS entry is not an object", () => {
+    setInput("PROVIDERS", JSON.stringify(["deepseek/deepseek-v4-flash"]));
+    expect(() => readInputs()).toThrow(/PROVIDERS entries are not valid/);
+  });
+
+  it("throws when a PROVIDERS entry has a wrong-typed field", () => {
+    setInput("PROVIDERS", JSON.stringify([{ model: 123 }]));
+    expect(() => readInputs()).toThrow(/PROVIDERS entries are not valid/);
   });
 });

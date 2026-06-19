@@ -16,10 +16,11 @@ const LEGACY_HEADER_RE = /### Code Review|### PR Review in Progress/;
 const MAX_PAGES = 20;
 const PER_PAGE = 100;
 
-/** One issue comment, with only the fields this module reads. */
+/** One issue comment, with only the fields this module reads. `body` is optional to
+ * match the Octokit REST response (a comment can have an empty/absent body). */
 export interface IssueComment {
   id: number;
-  body: string;
+  body?: string;
   created_at: string;
   html_url: string;
 }
@@ -93,8 +94,8 @@ export async function findSticky(
       page,
     });
     for (const c of data) {
-      if (hasMarker(c.body)) markerMatches.push(c);
-      else if (LEGACY_HEADER_RE.test(c.body)) legacyMatches.push(c);
+      if (hasMarker(c.body ?? "")) markerMatches.push(c);
+      else if (LEGACY_HEADER_RE.test(c.body ?? "")) legacyMatches.push(c);
     }
     // Stop at a short page (the last page) or the hard cap.
     if (data.length < PER_PAGE) break;
@@ -105,7 +106,7 @@ export async function findSticky(
 
   // Latest by created_at (string ISO timestamps sort lexically == chronologically).
   const latest = selected.reduce((a, b) => (a.created_at <= b.created_at ? b : a));
-  return { id: latest.id, body: latest.body };
+  return { id: latest.id, body: latest.body ?? "" };
 }
 
 /**

@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { gatherRules } from "../rules.js";
+import { gatherRules } from "@/rules.js";
 
 // REAL temp git repos (no mocks): commit convention files, then read them back
 // from the BASE ref via gatherRules — exactly as the action does in production.

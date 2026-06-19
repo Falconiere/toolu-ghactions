@@ -8,34 +8,48 @@ import { readFileSync, mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { runReview } from "../pipeline.js";
-import type { GithubContext, PipelineOctokit, ReviewDeps } from "../pipeline.js";
-import type { ActionInputs } from "../inputs.js";
-import { encodeMarker, type ReviewState } from "../state.js";
-import { git, setupGitRepo, writeFile, removeRepo } from "../git/__tests__/helpers.js";
+import { runReview } from "@/pipeline.js";
+import type { GithubContext, PipelineOctokit, ReviewDeps } from "@/pipeline.js";
+import type { ActionInputs } from "@/inputs.js";
+import { encodeMarker, type ReviewState } from "@/state.js";
+import { git, setupGitRepo, writeFile, removeRepo } from "@/git/__tests__/helpers.js";
 
-const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "..", "llm", "__tests__", "fixtures");
+const FIXTURES = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "llm",
+  "__tests__",
+  "fixtures",
+);
 
 /** A fetch that replays one recorded OpenRouter chat-completions response — no network. */
 function replayFetch(name: string): typeof fetch {
   const body = JSON.parse(readFileSync(join(FIXTURES, `${name}.json`), "utf8"));
-  return (async () =>
+  return async () =>
     new Response(JSON.stringify(body), {
       status: 200,
       headers: { "content-type": "application/json" },
-    })) as typeof fetch;
+    });
+}
+
+/** The captured outgoing request body the prompt-routing assertions read. */
+interface CapturedRequestBody {
+  messages?: { role: string; content: string }[];
 }
 
 /** A fetch that records the outgoing request body (the prompt), then replays a fixture. */
-function capturingReplayFetch(name: string, captured: { body: unknown }): typeof fetch {
+function capturingReplayFetch(
+  name: string,
+  captured: { body: CapturedRequestBody | null },
+): typeof fetch {
   const body = JSON.parse(readFileSync(join(FIXTURES, `${name}.json`), "utf8"));
-  return (async (_url: string | URL | Request, init?: RequestInit) => {
-    captured.body = JSON.parse(String(init?.body ?? "{}"));
+  return async (_url, init) => {
+    captured.body = JSON.parse(typeof init?.body === "string" ? init.body : "{}");
     return new Response(JSON.stringify(body), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
-  }) as typeof fetch;
+  };
 }
 
 /** Every Octokit call this run can make, recorded for assertions. */
@@ -76,47 +90,54 @@ function fakeOctokit(existing: { id: number; body: string }[] = []): {
   }));
   let nextId = 9000;
 
-  const octokit = {
+  const octokit: PipelineOctokit = {
     rest: {
       issues: {
-        listComments: async (p: { page: number }) => {
+        listComments: async (p) => {
           rec.listComments++;
           return { data: p.page === 1 ? store : [] };
         },
-        createComment: async (p: { owner: string; repo: string; issue_number: number; body: string }) => {
+        createComment: async (p) => {
           rec.created.push({ issue_number: p.issue_number, body: p.body });
           const id = nextId++;
           const html_url = `https://github.com/${p.owner}/${p.repo}/issues/${p.issue_number}#c${id}`;
-          store.push({ id, body: p.body, created_at: `2026-06-01T00:00:0${store.length}Z`, html_url });
+          store.push({
+            id,
+            body: p.body,
+            created_at: `2026-06-01T00:00:0${store.length}Z`,
+            html_url,
+          });
           return { data: { html_url } };
         },
-        updateComment: async (p: { comment_id: number; body: string }) => {
+        updateComment: async (p) => {
           rec.updated.push({ comment_id: p.comment_id, body: p.body });
           const c = store.find((s) => s.id === p.comment_id);
           if (c) c.body = p.body;
-          return { data: { html_url: `https://github.com/o/r/issues/comments/${p.comment_id}#updated` } };
+          return {
+            data: { html_url: `https://github.com/o/r/issues/comments/${p.comment_id}#updated` },
+          };
         },
-        createLabel: async (p: { name: string }) => {
+        createLabel: async (p) => {
           rec.createdLabels.push(p.name);
           return {};
         },
-        removeLabel: async (p: { name: string }) => {
+        removeLabel: async (p) => {
           rec.removedLabels.push(p.name);
           return {};
         },
-        addLabels: async (p: { labels: string[] }) => {
+        addLabels: async (p) => {
           rec.addedLabels.push(p.labels);
           return {};
         },
       },
       pulls: {
-        createReview: async (p: { commit_id: string; comments: unknown[]; body: string }) => {
+        createReview: async (p) => {
           rec.reviews.push({ commit_id: p.commit_id, comments: p.comments.length, body: p.body });
           return { data: { html_url: "https://github.com/o/r/pull/7#review" } };
         },
       },
     },
-  } as unknown as PipelineOctokit;
+  };
   return { octokit, rec };
 }
 
@@ -159,7 +180,11 @@ function featureRepoWithChange(): { dir: string; headSha: string } {
   const dir = setupGitRepo();
   git(dir, "checkout", "-b", "feature", "--quiet");
   // A real source change so the diff is non-empty and line-anchored.
-  writeFile(dir, "src/util.ts", "export function add(a: number, b: number): number {\n  return a - b;\n}\n");
+  writeFile(
+    dir,
+    "src/util.ts",
+    "export function add(a: number, b: number): number {\n  return a - b;\n}\n",
+  );
   git(dir, "add", "src/util.ts");
   git(dir, "commit", "-m", "add util", "--quiet");
   const headSha = git(dir, "rev-parse", "HEAD").trim();
@@ -224,8 +249,11 @@ describe("runReview — end to end", () => {
   it("re-uses the existing sticky: in-progress + verdict update the SAME comment, no second create", async () => {
     const { dir, headSha } = track(featureRepoWithChange());
     // A prior sticky comment carrying a marker → memory reads it, and all posts update it.
-    const priorMarker = "<!-- toolu-review-state:v1 H4sIAAAAAAAAA6tWyk0tLk5MT1WyUkrJTM8sUVKoBgBM2H3iEgAAAA== -->";
-    const { octokit, rec } = fakeOctokit([{ id: 555, body: `### Code Review — old\n\n${priorMarker}` }]);
+    const priorMarker =
+      "<!-- toolu-review-state:v1 H4sIAAAAAAAAA6tWyk0tLk5MT1WyUkrJTM8sUVKoBgBM2H3iEgAAAA== -->";
+    const { octokit, rec } = fakeOctokit([
+      { id: 555, body: `### Code Review — old\n\n${priorMarker}` },
+    ]);
 
     const result = await runReview({
       inputs: baseInputs(),
@@ -246,10 +274,10 @@ describe("runReview — end to end", () => {
   it("non-trigger event → verdict skip, NO review (no comment, no label, no LLM)", async () => {
     const { octokit, rec } = fakeOctokit();
     let fetchCalled = false;
-    const guardFetch = (async () => {
+    const guardFetch: typeof fetch = async () => {
       fetchCalled = true;
       return new Response("{}", { status: 200 });
-    }) as typeof fetch;
+    };
 
     const result = await runReview({
       inputs: baseInputs(),
@@ -337,11 +365,14 @@ describe("runReview — end to end", () => {
     repos.push(actionPath);
     const sentinel = "SENTINEL-GITHUB-ACTION-PATH-CHECKLIST-7f3a";
     mkdirSync(join(actionPath, "prompts"), { recursive: true });
-    writeFileSync(join(actionPath, "prompts", "review-checklist.txt"), `${sentinel}\nReview the diff.\n`);
+    writeFileSync(
+      join(actionPath, "prompts", "review-checklist.txt"),
+      `${sentinel}\nReview the diff.\n`,
+    );
 
     const saved = process.env["GITHUB_ACTION_PATH"];
     process.env["GITHUB_ACTION_PATH"] = actionPath;
-    const captured: { body: unknown } = { body: null };
+    const captured: { body: CapturedRequestBody | null } = { body: null };
     try {
       const result = await runReview({
         inputs: baseInputs(),
@@ -358,9 +389,7 @@ describe("runReview — end to end", () => {
     }
 
     // The system prompt sent to the model is the checklist read from GITHUB_ACTION_PATH.
-    const system = (captured.body as { messages?: { role: string; content: string }[] }).messages?.find(
-      (m) => m.role === "system",
-    );
+    const system = captured.body?.messages?.find((m) => m.role === "system");
     expect(system?.content).toContain(sentinel);
   });
 
@@ -371,8 +400,10 @@ describe("runReview — end to end", () => {
     // A real marker for a state object that has `findings` but NO `history` key —
     // asReviewState narrows it to a ReviewState (it has "findings"), then the
     // memory step reads prior.history.length, which must optional-chain safely.
-    const partial = { schema: "toolu-review-state", version: 1, findings: [{ path: "src/util.ts", text: "old", category: "c", fp: "deadbeef" }] };
-    const marker = encodeMarker(partial as unknown as ReviewState);
+    const partial: ReviewState = JSON.parse(
+      '{"schema":"toolu-review-state","version":1,"findings":[{"path":"src/util.ts","text":"old","category":"c","fp":"deadbeef"}]}',
+    );
+    const marker = encodeMarker(partial);
     const { octokit, rec } = fakeOctokit([{ id: 777, body: `### Code Review — old\n\n${marker}` }]);
 
     // Must NOT throw (the bug was a TypeError on prior.history.length).
@@ -433,8 +464,11 @@ describe("runReview — end to end", () => {
   // drives upsert dedup) — otherwise every run posts a brand-new comment.
   it("reviewMemory=false still updates an existing sticky (no duplicate comment)", async () => {
     const { dir, headSha } = track(featureRepoWithChange());
-    const priorMarker = "<!-- toolu-review-state:v1 H4sIAAAAAAAAA6tWyk0tLk5MT1WyUkrJTM8sUVKoBgBM2H3iEgAAAA== -->";
-    const { octokit, rec } = fakeOctokit([{ id: 888, body: `### Code Review — old\n\n${priorMarker}` }]);
+    const priorMarker =
+      "<!-- toolu-review-state:v1 H4sIAAAAAAAAA6tWyk0tLk5MT1WyUkrJTM8sUVKoBgBM2H3iEgAAAA== -->";
+    const { octokit, rec } = fakeOctokit([
+      { id: 888, body: `### Code Review — old\n\n${priorMarker}` },
+    ]);
 
     const result = await runReview({
       inputs: baseInputs({ reviewMemory: false }),

@@ -5,7 +5,7 @@
 // Pure rendering — it never calls diffState itself. The markdown shape matches
 // the bash exactly: bucket lines "<emoji label> (N)" with capped `path:line —
 // text` lists, a "_… N more_" overflow note, and the <details> history table.
-import type { DiffResult, Finding, HistoryEntry } from "../state.js";
+import type { DiffResult, Finding, HistoryEntry } from "@/state.js";
 
 /** How many items to inline per recap bucket before collapsing the overflow. */
 const RECAP_LIST_CAP = 8;

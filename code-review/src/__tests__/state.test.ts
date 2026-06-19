@@ -8,13 +8,20 @@ import {
   diffState,
   type ReviewState,
   type Finding,
-} from "../state.js";
+} from "@/state.js";
 
 const sampleState: ReviewState = {
   schema: "toolu-review-state",
   version: 1,
   findings: [{ path: "src/a.ts", line: 10, text: "bug here", category: "correctness", fp: "z" }],
-  history: [{ sha: "abc1234", ts: 1700000000, verdict: "changes", counts: { new: 1, open: 0, resolved: 0, total: 1 } }],
+  history: [
+    {
+      sha: "abc1234",
+      ts: 1700000000,
+      verdict: "changes",
+      counts: { new: 1, open: 0, resolved: 0, total: 1 },
+    },
+  ],
 };
 
 describe("encode/decode marker", () => {
@@ -36,6 +43,15 @@ describe("encode/decode marker", () => {
   it("fail-safe to {} on valid base64 that is not gzip", () => {
     const notGzip = `<!-- toolu-review-state:v1 ${Buffer.from("hello").toString("base64")} -->`;
     expect(decodeMarker(notGzip)).toEqual({});
+  });
+
+  it("fail-safe to {} on a valid marker payload whose JSON is the wrong shape", () => {
+    // A real gzip+base64 marker carrying syntactically-valid JSON that is NOT a
+    // ReviewState (no schema/version literals). zod rejects it → {} fail-safe.
+    const payload = gzipSync(
+      Buffer.from(JSON.stringify({ not: "a review state" }), "utf8"),
+    ).toString("base64");
+    expect(decodeMarker(`<!-- toolu-review-state:v1 ${payload} -->`)).toEqual({});
   });
 
   it("fail-safe to {} on a gzip bomb that inflates past the 5MB cap (FIX 4)", () => {
@@ -68,7 +84,9 @@ describe("fingerprint", () => {
   });
 
   it("differs when path or category differs", () => {
-    expect(fingerprint({ path: "a.ts", text: "t" })).not.toBe(fingerprint({ path: "b.ts", text: "t" }));
+    expect(fingerprint({ path: "a.ts", text: "t" })).not.toBe(
+      fingerprint({ path: "b.ts", text: "t" }),
+    );
     expect(fingerprint({ path: "a.ts", text: "t", category: "x" })).not.toBe(
       fingerprint({ path: "a.ts", text: "t", category: "y" }),
     );
@@ -88,20 +106,44 @@ describe("diffState", () => {
       { path: "src/a.ts", text: "finding A", category: "c" }, // open
       { path: "src/b.ts", text: "finding B", category: "c" }, // new
     ];
-    const r = diffState({ prior, current_findings: current, scope: { in_scope_paths: ["src/a.ts", "src/b.ts"], full_review: true }, head_sha: "deadbeefcafe", verdict: "changes" });
+    const r = diffState({
+      prior,
+      current_findings: current,
+      scope: { in_scope_paths: ["src/a.ts", "src/b.ts"], full_review: true },
+      head_sha: "deadbeefcafe",
+      verdict: "changes",
+    });
     expect(r.counts).toMatchObject({ new: 1, open: 1, resolved: 0, total: 2 });
     expect(r.new[0]?.path).toBe("src/b.ts");
     expect(r.open[0]?.path).toBe("src/a.ts");
   });
 
   it("marks a prior finding resolved only on a full review within scope", () => {
-    const full = diffState({ prior, current_findings: [], scope: { in_scope_paths: ["src/a.ts"], full_review: true }, head_sha: "deadbeef", verdict: "approved" });
+    const full = diffState({
+      prior,
+      current_findings: [],
+      scope: { in_scope_paths: ["src/a.ts"], full_review: true },
+      head_sha: "deadbeef",
+      verdict: "approved",
+    });
     expect(full.resolved.map((f) => f.path)).toEqual(["src/a.ts"]);
 
-    const partial = diffState({ prior, current_findings: [], scope: { in_scope_paths: ["src/a.ts"], full_review: false }, head_sha: "deadbeef", verdict: "approved" });
+    const partial = diffState({
+      prior,
+      current_findings: [],
+      scope: { in_scope_paths: ["src/a.ts"], full_review: false },
+      head_sha: "deadbeef",
+      verdict: "approved",
+    });
     expect(partial.resolved).toEqual([]);
 
-    const outOfScope = diffState({ prior, current_findings: [], scope: { in_scope_paths: ["other.ts"], full_review: true }, head_sha: "deadbeef", verdict: "approved" });
+    const outOfScope = diffState({
+      prior,
+      current_findings: [],
+      scope: { in_scope_paths: ["other.ts"], full_review: true },
+      head_sha: "deadbeef",
+      verdict: "approved",
+    });
     expect(outOfScope.resolved).toEqual([]);
   });
 
@@ -140,9 +182,20 @@ describe("diffState", () => {
   it("caps history at the last 10 entries", () => {
     const longHistory: ReviewState = {
       ...prior,
-      history: Array.from({ length: 12 }, (_, i) => ({ sha: `sha${i}`, ts: i, verdict: "changes", counts: { new: 0, open: 0, resolved: 0, total: 0 } })),
+      history: Array.from({ length: 12 }, (_, i) => ({
+        sha: `sha${i}`,
+        ts: i,
+        verdict: "changes",
+        counts: { new: 0, open: 0, resolved: 0, total: 0 },
+      })),
     };
-    const r = diffState({ prior: longHistory, current_findings: [], scope: { in_scope_paths: [], full_review: true }, head_sha: "abcdef0", verdict: "approved" });
+    const r = diffState({
+      prior: longHistory,
+      current_findings: [],
+      scope: { in_scope_paths: [], full_review: true },
+      head_sha: "abcdef0",
+      verdict: "approved",
+    });
     expect(r.next_state.history).toHaveLength(10);
     expect(r.next_state.history.at(-1)).toEqual(r.history_entry);
   });

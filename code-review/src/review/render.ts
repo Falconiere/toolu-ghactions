@@ -2,7 +2,7 @@
 // out of verdict.ts (which owns the verdict→label mapping and the size-cap loop)
 // so each file stays under 300 LOC. Pure string assembly: every section here is
 // a line-for-line port of format-verdict.sh's render_body and its helpers.
-import type { Finding } from "../llm/schema.js";
+import type { Finding } from "@/llm/schema.js";
 
 /** Severity rank, blocker (worst) → nit (least). Used to order/shrink findings. */
 export const SEVERITY_RANK: Record<Finding["severity"], number> = {
@@ -107,7 +107,9 @@ export function buildTruncatedFindingsSection(
   keep: number,
   jobUrl: string,
 ): string {
-  const ordered = [...findings].sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]);
+  const ordered = [...findings].sort(
+    (a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity],
+  );
   const shown = ordered.slice(0, keep);
   const lines = shown.map(findingLine);
   const extra = findings.length - keep;

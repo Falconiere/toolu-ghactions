@@ -14,7 +14,7 @@
 //      finding survives, only the unsafe-to-apply patch is removed).
 // Then dedup by (path|line|end_line|normalized-text) fingerprint, keeping the
 // max severity within each group.
-import type { Finding } from "../llm/schema.js";
+import type { Finding } from "@/llm/schema.js";
 // SEVERITY_RANK is owned by render.ts (single source of truth) — imported here so
 // the dedup's max-severity comparison can never drift from the render ordering.
 import { SEVERITY_RANK } from "./render.js";
@@ -100,7 +100,7 @@ function dedup(findings: Finding[]): Finding[] {
       byKey.set(key, { ...existing, severity: f.severity });
     }
   }
-  return order.map((k) => byKey.get(k) as Finding);
+  return order.map((k) => byKey.get(k)).filter((f) => f !== undefined);
 }
 
 /** The dedup group key: path|line|end_line|first-80-chars of normalized text. */

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { renderRecap, renderHistorySection } from "../recap.js";
-import { diffState, attachFps, type ReviewState } from "../../state.js";
+import { renderRecap, renderHistorySection } from "@/review/recap.js";
+import { diffState, attachFps, type ReviewState } from "@/state.js";
 
 // A real prior state with one finding (A) and one history pass.
 const prior: ReviewState = {
@@ -11,7 +11,12 @@ const prior: ReviewState = {
     { path: "src/c.ts", line: 3, text: "finding C", category: "perf" },
   ]),
   history: [
-    { sha: "aaaaaaa", ts: 1700000000, verdict: "changes", counts: { new: 2, open: 0, resolved: 0, total: 2 } },
+    {
+      sha: "aaaaaaa",
+      ts: 1700000000,
+      verdict: "changes",
+      counts: { new: 2, open: 0, resolved: 0, total: 2 },
+    },
   ],
 };
 
@@ -52,7 +57,9 @@ describe("renderRecap", () => {
   it("omits the Resolved bucket and notes scope on a scoped (non-full) review", () => {
     const diff = diffState({
       prior,
-      current_findings: [{ path: "src/a.ts", line: 10, text: "finding A", category: "correctness" }],
+      current_findings: [
+        { path: "src/a.ts", line: 10, text: "finding A", category: "correctness" },
+      ],
       scope: { in_scope_paths: ["src/a.ts"], full_review: false },
       head_sha: "0123456789",
       verdict: "changes",

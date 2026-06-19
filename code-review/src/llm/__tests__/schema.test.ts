@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Verdict } from "../schema.js";
+import { Verdict } from "@/llm/schema.js";
 
 describe("Verdict schema", () => {
   it("parses a valid verdict with findings", () => {

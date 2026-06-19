@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fetchDiff } from "../diff.js";
+import { fetchDiff } from "@/git/diff.js";
 import { git, setupGitRepo, writeFile, removeRepo, makeTmpDir } from "./helpers.js";
 
 // REAL temp git repos (no mocks), mirroring the cases in __tests__/fetch-diff.bats.
@@ -91,7 +91,9 @@ describe("fetchDiff", () => {
     const r = fetchDiff({ ...BASE, cwd: dir, maxFiles: 100, maxDiffLines: 8000 });
     const droppedPaths = r.dropped_files.map((d) => d.path);
     expect(droppedPaths).toContain("package-lock.json");
-    expect(r.dropped_files.find((d) => d.path === "web/dist/assets/index-AbC123.js")?.reason).toBe("build-output");
+    expect(r.dropped_files.find((d) => d.path === "web/dist/assets/index-AbC123.js")?.reason).toBe(
+      "build-output",
+    );
     expect(droppedPaths).toContain("src/build/out.js");
     expect(r.changed_files).toContain("app.ts");
     expect(r.changed_files).not.toContain("package-lock.json");
@@ -112,7 +114,13 @@ describe("fetchDiff", () => {
     // HEAD vs main is empty; REVIEW_HEAD points at the fetched feature ref.
     expect(git(dir, "diff", "--name-only", "main", "HEAD").trim()).toBe("");
 
-    const r = fetchDiff({ ...BASE, cwd: dir, maxFiles: 100, maxDiffLines: 8000, reviewHead: featureSha });
+    const r = fetchDiff({
+      ...BASE,
+      cwd: dir,
+      maxFiles: 100,
+      maxDiffLines: 8000,
+      reviewHead: featureSha,
+    });
     expect(r.total_files).toBe(1);
     expect(r.changed_files).toContain("review-only.ts");
     expect(r.diff).toMatch(/^L[0-9]+: \+export const reviewed = true$/m);
@@ -182,7 +190,16 @@ describe("fetchDiff", () => {
     // mirrors actions/checkout's default fetch-depth: 1, so merge-base is empty.
     const clone = makeTmpDir();
     repos.push(clone);
-    git(clone, "clone", "--depth=1", "--no-single-branch", "--branch", "feature", `file://${origin}`, ".");
+    git(
+      clone,
+      "clone",
+      "--depth=1",
+      "--no-single-branch",
+      "--branch",
+      "feature",
+      `file://${origin}`,
+      ".",
+    );
     git(clone, "config", "user.email", "test@test.com");
     git(clone, "config", "user.name", "Test");
 

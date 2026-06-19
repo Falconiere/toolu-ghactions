@@ -11,15 +11,14 @@ import * as github from "@actions/github";
 import { readInputs } from "./inputs.js";
 import type { ActionInputs } from "./inputs.js";
 import { runReview } from "./pipeline.js";
-import type { GithubContext, PipelineOctokit } from "./pipeline.js";
+import type { GithubContext } from "./pipeline.js";
 import { mintAppToken } from "./github/appToken.js";
-import type { InstallationLookupClient } from "./github/appToken.js";
 import { createAppAuth } from "@octokit/auth-app";
 import type { EventPayload } from "./github/event.js";
 
 /** Build the GithubContext slice the pipeline reads from the @actions/github context. */
 function buildContext(): GithubContext {
-  const payload = (github.context.payload as EventPayload | undefined) ?? null;
+  const payload: EventPayload | null = github.context.payload ?? null;
   const head = payload?.pull_request?.head;
   return {
     eventName: github.context.eventName,
@@ -50,7 +49,7 @@ async function resolveToken(inputs: ActionInputs): Promise<string> {
       github.getOctokit("", {
         authStrategy: createAppAuth,
         auth: { appId, privateKey },
-      }) as unknown as InstallationLookupClient,
+      }),
   }).catch(() => null);
   if (minted) {
     core.info("Using GitHub App identity for PR comments");
@@ -118,7 +117,7 @@ async function main(): Promise<void> {
   try {
     const result = await runReview({
       inputs,
-      octokit: octokit as unknown as PipelineOctokit,
+      octokit,
       context: buildContext(),
       lookupPermission: permissionLookup(octokit),
       lookupBaseRef: baseRefLookup(octokit),
@@ -127,7 +126,9 @@ async function main(): Promise<void> {
     core.setOutput("verdict", result.verdict);
     core.setOutput("findings-count", result.findingsCount);
     core.setOutput("comment-url", result.commentUrl);
-    core.info(`Review complete: ${result.verdict} (${result.findingsCount} findings) — ${result.commentUrl}`);
+    core.info(
+      `Review complete: ${result.verdict} (${result.findingsCount} findings) — ${result.commentUrl}`,
+    );
   } catch (err) {
     // True infra failure: surface verdict=error, post a best-effort comment, fail the job.
     const message = err instanceof Error ? err.message : String(err);

@@ -17,10 +17,10 @@
 // never return a null verdict. A failed model call abstains; it does not block.
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { generateObject, NoObjectGeneratedError } from "ai";
-import { errorMessage } from "../errors.js";
+import { errorMessage } from "@/errors.js";
 import { Verdict } from "./schema.js";
 import type { Finding } from "./schema.js";
-import type { Envelope } from "../prompt.js";
+import type { Envelope } from "@/prompt.js";
 
 /**
  * Overall deadline for one review call, in milliseconds. generateObject has
@@ -95,7 +95,7 @@ export async function reviewWithModel(
   // the process alive; cleared in finally on the normal (fast) path.
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? REQUEST_TIMEOUT_MS);
-  (timeout as { unref?: () => void }).unref?.();
+  timeout.unref?.();
 
   try {
     const { object } = await generateObject({

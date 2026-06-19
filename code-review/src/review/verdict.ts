@@ -11,8 +11,8 @@
 // "error" carries the request-changes label on purpose: a failed review must
 // never auto-merge (the do-not-approve fail-safe), but the badge says plainly it
 // was a provider error, not a real request for changes.
-import type { ProviderResult } from "../llm/openrouter.js";
-import type { Finding } from "../llm/schema.js";
+import type { ProviderResult } from "@/llm/openrouter.js";
+import type { Finding } from "@/llm/schema.js";
 import {
   buildFindingsSection,
   buildTruncatedFindingsSection,
@@ -170,7 +170,9 @@ function labelAndBadge(verdict: ProviderResult["verdict"]): { label: string; bad
 
 /** The header line: "**AI Code Review finished[ in DURATION]** —— [View job](url)". */
 function buildHeader(duration: string | undefined, jobUrl: string): string {
-  const base = duration ? `**AI Code Review finished in ${duration}**` : "**AI Code Review finished**";
+  const base = duration
+    ? `**AI Code Review finished in ${duration}**`
+    : "**AI Code Review finished**";
   return `${base} —— [View job](${jobUrl})`;
 }
 
