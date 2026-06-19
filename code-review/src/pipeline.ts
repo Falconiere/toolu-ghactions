@@ -199,7 +199,18 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
   const changedLinesByPath = new Map<string, number[]>(
     diff.files.map((f) => [f.path, f.changed_lines]),
   );
-  const findings = validateFindings(result.findings, changedLinesByPath, inputs.minConfidence);
+  const lineTextByPath = new Map<string, Map<number, string>>(
+    diff.files.map((f) => [
+      f.path,
+      new Map(Object.entries(f.line_text).map(([n, text]) => [Number(n), text])),
+    ]),
+  );
+  const findings = validateFindings(
+    result.findings,
+    changedLinesByPath,
+    inputs.minConfidence,
+    lineTextByPath,
+  );
   const validated: ProviderResult = { ...result, findings };
   const verdict = resolveVerdict(validated.verdict, findings.length);
 

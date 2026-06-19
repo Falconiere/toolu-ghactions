@@ -88,4 +88,75 @@ describe("validateFindings", () => {
     expect(kept).toHaveLength(1);
     expect(kept[0]?.severity).toBe("blocker");
   });
+
+  // Quote-anchored gate: a finding's quoted_line must match the real new-file
+  // text at the cited line. Models misread the diff and quote a removed (`L---:`)
+  // line as if still present (the action.yml `default:` removal bug).
+  const lineText = new Map<string, Map<number, string>>([
+    [
+      "src/a.ts",
+      new Map([
+        [10, "    description: 'DEPRECATED: No-op. Kept for backward compatibility.'"],
+        [11, "    required: false"],
+      ]),
+    ],
+  ]);
+
+  it("drops an LLM finding whose quoted_line does not match the cited new-file line", () => {
+    const findings: Finding[] = [
+      {
+        path: "src/a.ts",
+        line: 10,
+        severity: "medium",
+        confidence: "high",
+        // Quotes a line that the diff REMOVED — absent from the new file.
+        quoted_line: "    default: 'conservative'",
+        text: "MERGE_STRATEGY still has a default value defined.",
+      },
+    ];
+    expect(validateFindings(findings, changed, "high", lineText)).toHaveLength(0);
+  });
+
+  it("keeps an LLM finding whose quoted_line matches the cited line (substring tolerated)", () => {
+    const findings: Finding[] = [
+      {
+        path: "src/a.ts",
+        line: 10,
+        severity: "medium",
+        confidence: "high",
+        quoted_line: "description: 'DEPRECATED: No-op.",
+        text: "Real issue on the actual new line.",
+      },
+    ];
+    expect(validateFindings(findings, changed, "high", lineText)).toHaveLength(1);
+  });
+
+  it("skips the quote check when no line text is supplied (backward compatible)", () => {
+    const findings: Finding[] = [
+      {
+        path: "src/a.ts",
+        line: 10,
+        severity: "medium",
+        confidence: "high",
+        quoted_line: "    default: 'conservative'",
+        text: "No line text → cannot verify, keep.",
+      },
+    ];
+    expect(validateFindings(findings, changed, "high")).toHaveLength(1);
+  });
+
+  it("exempts mechanical-scanner findings from the quote check", () => {
+    const findings: Finding[] = [
+      {
+        path: "src/a.ts",
+        line: 10,
+        severity: "high",
+        confidence: "high",
+        source: "gitleaks",
+        quoted_line: "anything that does not match",
+        text: "Secret detected.",
+      },
+    ];
+    expect(validateFindings(findings, changed, "high", lineText)).toHaveLength(1);
+  });
 });

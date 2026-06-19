@@ -70,11 +70,20 @@ The available review dimensions are:
 - No general advice ("consider adding error handling"). A finding must name a
   specific failure at a specific line.
 - No findings on code outside this diff.
-- The diff may be line-primed with `Lnnn:` prefixes — cite those exact numbers.
+- The diff is line-primed. `Lnnn:` marks an added or unchanged line that EXISTS in
+  the resulting code at line nnn — cite those exact numbers. `L---:` marks a
+  REMOVED line: it is deleted and is NOT present in the result. Never raise a
+  finding that treats removed (`L---:`) content as if it still exists, and never
+  suggest removing a line that the diff already removes. Review the post-change
+  state only.
+- For every finding, set `quoted_line` to the verbatim text of the cited `Lnnn:`
+  line (without the `Lnnn:` prefix). A finding whose `quoted_line` does not match
+  the cited line is discarded.
 
 Output your review as a JSON object with:
 - review_plan: (string, markdown) — the Phase 1 plan
 - verdict: ("approved"|"changes") — overall verdict
-- findings[]: ({path, line, severity, text}) — issues found during Phase 2
+- findings[]: ({path, line, quoted_line, severity, text}) — issues found during
+  Phase 2. `quoted_line` is the verbatim text of the cited `Lnnn:` line.
 - other_checks: (string, markdown) — non-finding observations
 - top_must_fix[]: (string[]) — the 1-3 most critical items from findings
