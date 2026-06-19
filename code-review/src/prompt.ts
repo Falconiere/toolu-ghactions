@@ -11,6 +11,7 @@
 import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import type { DiffData } from "./git/diff.js";
+import type { MechanicalFinding } from "./mechanical/sarif.js";
 
 /** The provider-agnostic envelope each provider's request builder wraps. */
 export interface Envelope {
@@ -39,6 +40,27 @@ export interface PromptOptions {
   reviewInstruction?: string;
   projectRules?: string;
   githubWorkspace?: string;
+  /** Deterministic findings (gitleaks/opengrep) to inject as TRUSTED triage context. */
+  mechanicalFindings?: MechanicalFinding[];
+}
+
+/**
+ * Render the deterministic-findings triage block: a TRUSTED list the model must
+ * assess (confirm real ones into findings[] with `source` set, ignore false positives).
+ * Empty list → "" (no block).
+ */
+function renderMechanicalBlock(findings: MechanicalFinding[]): string {
+  if (findings.length === 0) return "";
+  const lines = findings.map(
+    (f) => `- [${f.tool}] ${f.ruleId} at ${f.path}:${f.line} (${f.severity}) — ${f.message}`,
+  );
+  return (
+    "\n\n## Deterministic findings to assess (from secret + SAST scanners — TRUSTED)\n" +
+    "These were found by deterministic tools. For EACH, decide if it is a real issue or a\n" +
+    "false positive. Include the real ones in your findings[] with `source` set to the tool\n" +
+    "name (gitleaks/opengrep) and an appropriate severity; silently drop false positives.\n" +
+    lines.join("\n")
+  );
 }
 
 /** Thrown when no system prompt is available (the bash `exit 1` paths). */
@@ -156,6 +178,8 @@ export function buildPrompt(opts: PromptOptions): Envelope {
   if (truncated) {
     user += `\n\n[Diff truncated at ${totalLines} lines; some hunks omitted. Review what is shown.]`;
   }
+
+  user += renderMechanicalBlock(opts.mechanicalFindings ?? []);
 
   if (reviewInstruction !== "") {
     const sanitized = sanitizeInstruction(reviewInstruction);

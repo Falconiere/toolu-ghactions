@@ -93,3 +93,35 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: node scripts/injection-probe.mjs
+
+  hybrid-sast-smoke:
+    # E2E for the hybrid deterministic layer: plant a secret + an eval pattern, then run
+    # the SAME pinned gitleaks + opengrep binaries the composite action installs, and assert
+    # they produce SARIF findings. Also validates the pinned release-download URLs in
+    # code-review/action.yml. NON-REQUIRED — never gate `main` on this job.
+    name: hybrid SAST smoke (gitleaks + opengrep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Plant a secret + an eval pattern
+        # Build the test PAT at runtime: the `ghp_` prefix and the body are SEPARATE
+        # literals here, so the committed workflow never contains a contiguous
+        # github-pat token (which GitHub push protection blocks) — yet the file written
+        # on the runner does, so gitleaks detects it.
+        run: |
+          mkdir -p planted
+          PFX=ghp_
+          printf 'export const t = "%s%s";\nexport const r = (i) => eval(i);\n' \
+            "$PFX" "wWPw5k4aXcaT4fNP0UcnZwJUVFk6LO0pINUx" > planted/leak.ts
+      - name: gitleaks (pinned) finds the planted secret
+        run: |
+          GL=8.30.1
+          curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GL}/gitleaks_${GL}_linux_x64.tar.gz" | tar -xz gitleaks
+          ./gitleaks detect --source planted --no-git --report-format sarif --report-path gitleaks.sarif --exit-code 0 || true
+          test "$(jq '.runs[0].results | length' gitleaks.sarif)" -ge 1
+      - name: opengrep (pinned) runs and emits SARIF
+        run: |
+          OG=v1.22.0
+          curl -fsSL -o opengrep "https://github.com/opengrep/opengrep/releases/download/${OG}/opengrep_manylinux_x86" && chmod +x opengrep
+          ./opengrep scan --sarif --output opengrep.sarif --config p/typescript planted || true
+          test -f opengrep.sarif

@@ -3,6 +3,7 @@
 // so each file stays under 300 LOC. Pure string assembly: every section here is
 // a line-for-line port of format-verdict.sh's render_body and its helpers.
 import type { Finding } from "@/llm/schema.js";
+import type { MechanicalFinding } from "@/mechanical/sarif.js";
 
 /** Severity rank, blocker (worst) → nit (least). Used to order/shrink findings. */
 export const SEVERITY_RANK: Record<Finding["severity"], number> = {
@@ -48,6 +49,8 @@ export interface ReviewBody {
   history: string;
   /** Pre-encoded state marker, appended verbatim as the LAST line ("" → omit). */
   marker: string;
+  /** Deterministic findings (gitleaks/opengrep) for the Mechanical-checks summary ([] → omit). */
+  mechanical: MechanicalFinding[];
 }
 
 /**
@@ -81,6 +84,7 @@ export function renderBody(body: ReviewBody, findingsSection: string): string {
   section += `${body.reviewPlan !== "" ? body.reviewPlan : "_No review plan provided._"}\n\n`;
   section += `### Findings (${body.findings.length})\n\n`;
   section += `${findingsSection}\n\n`;
+  section += buildMechanicalSection(body.mechanical, body.errorDetail !== "");
   section += "### Other checks\n";
   section += `${body.otherChecks !== "" ? body.otherChecks : "_No additional checks performed._"}\n\n`;
   section += "### Top-N must-fix\n";
@@ -122,12 +126,40 @@ export function buildTruncatedFindingsSection(
   return lines.join("\n");
 }
 
-/** One finding line: ``path:line``: severity: text (category · confidence). */
+/** One finding line: ``path:line`` [source]: severity: text (category · confidence). */
 function findingLine(f: Finding): string {
   const loc = f.line !== undefined && f.line !== null ? `:${f.line}` : "";
+  // Provenance tag for findings the model confirmed from a deterministic tool.
+  const src = f.source !== undefined && f.source !== "llm" ? ` _[${f.source}]_` : "";
   const meta = [f.category, f.confidence].filter((x): x is string => x !== undefined && x !== "");
   const suffix = meta.length > 0 ? ` _(${meta.join(" · ")})_` : "";
-  return `\`${f.path}${loc}\`: ${f.severity}: ${f.text}${suffix}`;
+  return `\`${f.path}${loc}\`${src}: ${f.severity}: ${f.text}${suffix}`;
+}
+
+/**
+ * The "### Mechanical checks" section — a per-tool count of the deterministic
+ * findings (uploaded to the Code Scanning tab), plus, when the LLM errored, a
+ * "judgment unavailable" note so a provider failure still yields a useful review
+ * (graceful degradation). Empty deterministic set → "" (section omitted).
+ */
+export function buildMechanicalSection(
+  mechanical: MechanicalFinding[],
+  llmErrored: boolean,
+): string {
+  if (mechanical.length === 0) {
+    return llmErrored
+      ? "> ⚠️ **LLM judgment unavailable** — no deterministic findings either.\n\n"
+      : "";
+  }
+  const byTool = new Map<string, number>();
+  for (const f of mechanical) byTool.set(f.tool, (byTool.get(f.tool) ?? 0) + 1);
+  const counts = [...byTool.entries()].map(([tool, n]) => `${n} ${tool}`).join(", ");
+  let out = "### Mechanical checks\n\n";
+  out += `${mechanical.length} deterministic finding(s) — ${counts}. See the **Code Scanning** tab for details.\n`;
+  if (llmErrored) {
+    out += "\n> ⚠️ **LLM judgment unavailable** — showing deterministic findings only.\n";
+  }
+  return `${out}\n`;
 }
 
 /**

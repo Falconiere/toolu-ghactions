@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { formatVerdict } from "@/review/verdict.js";
 import type { ProviderResult } from "@/llm/openrouter.js";
 import type { Finding } from "@/llm/schema.js";
+import type { MechanicalFinding } from "@/mechanical/sarif.js";
 import { encodeMarker } from "@/state.js";
 
 const MARKER = encodeMarker({
@@ -143,5 +144,40 @@ describe("formatVerdict", () => {
     const blockerIdx = body.indexOf(": blocker:");
     const nitIdx = body.indexOf(": nit:");
     if (nitIdx !== -1) expect(blockerIdx).toBeLessThan(nitIdx);
+  });
+});
+
+describe("formatVerdict — mechanical findings + graceful degradation", () => {
+  const secret: MechanicalFinding = {
+    tool: "gitleaks",
+    ruleId: "github-pat",
+    path: "src/a.ts",
+    line: 5,
+    severity: "error",
+    message: "secret detected",
+  };
+
+  it("renders a Mechanical-checks section with per-tool counts + provenance tag on confirmed findings", () => {
+    const result: ProviderResult = {
+      verdict: "changes",
+      findings: [
+        { path: "src/a.ts", line: 5, severity: "high", text: "leaked token", source: "gitleaks" },
+      ],
+      review_plan: "",
+      other_checks: "",
+      top_must_fix: [],
+    };
+    const { body } = formatVerdict(result, { mechanical: [secret] });
+    expect(body).toContain("### Mechanical checks");
+    expect(body).toContain("1 gitleaks");
+    expect(body).toContain("_[gitleaks]_"); // provenance tag on the finding line
+  });
+
+  it("on LLM error WITH mechanical findings, degrades gracefully (section + 'LLM judgment unavailable')", () => {
+    const result: ProviderResult = { verdict: "error", findings: [], error: "boom" };
+    const { body, label } = formatVerdict(result, { mechanical: [secret] });
+    expect(body).toContain("### Mechanical checks");
+    expect(body).toContain("LLM judgment unavailable");
+    expect(label).toBe("request-changes"); // error still fails-safe to do-not-merge
   });
 });
