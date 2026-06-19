@@ -26,7 +26,7 @@ inputs:
   MODEL:
     description: 'OpenRouter model identifier'
     required: false
-    default: 'openai/gpt-4o-mini'
+    default: 'google/gemini-2.5-flash'
   FALLBACK_MODEL:
     description: 'DEPRECATED: Dropped in multi-provider mode. Use PROVIDERS array to configure multiple models.'
     required: false

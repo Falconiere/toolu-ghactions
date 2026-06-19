@@ -80,11 +80,12 @@ const ProviderEntrySchema = z.object({
 });
 type ProviderEntry = z.infer<typeof ProviderEntrySchema>;
 
-/** Default model — kept in sync with action.yml MODEL default. gpt-4o-mini has the most
- * reliable JSON-schema structured output (~99.9%, constrained decoding) and is NOT a
- * thinking model, so the reasoning-off extraBody can't interfere with it — gemini-2.5-flash
- * (a thinking model) returned unparseable structured output through OpenRouter. */
-const DEFAULT_MODEL = "openai/gpt-4o-mini";
+/** Default model — kept in sync with action.yml MODEL default. gemini-2.5-flash:
+ * constrained-decoding structured output, broadly accessible on OpenRouter (gpt-4o-mini
+ * 404s on accounts without OpenAI access; deepseek json-mode returns empty content).
+ * NOTE: on an exceptionally large diff the structured output can still fail to parse —
+ * that is a diff-size problem (see the action's MAX_DIFF_LINES), not the model. */
+const DEFAULT_MODEL = "google/gemini-2.5-flash";
 
 /** Default completion-token budget — kept in sync with action.yml MAX_TOKENS default. */
 const DEFAULT_MAX_TOKENS = 4096;

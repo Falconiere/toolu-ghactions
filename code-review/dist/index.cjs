@@ -28190,7 +28190,7 @@ var ProviderEntrySchema = external_exports.object({
   enforce_json_schema: external_exports.boolean().optional(),
   max_tokens: external_exports.number().optional()
 });
-var DEFAULT_MODEL = "openai/gpt-4o-mini";
+var DEFAULT_MODEL = "google/gemini-2.5-flash";
 var DEFAULT_MAX_TOKENS = 4096;
 function intInput(name17, fallback) {
   const raw = core.getInput(name17).trim();
