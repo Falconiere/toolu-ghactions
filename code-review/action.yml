@@ -4,9 +4,9 @@ description: |
   against an 8-dimension checklist (correctness, security, performance, test
   coverage, doc accuracy, tight assertions, migration warnings, and adherence
   to the project's own convention files read from the base ref) and posts a
-  structured verdict with actionable findings. Supports 6 AI vendors
-  (OpenRouter, OpenAI, Anthropic, DeepSeek, Moonshot, MiniMax) with parallel
-  ensemble review and configurable merge strategies.
+  structured verdict with actionable findings. Runs on OpenRouter (any
+  OpenAI-compatible model) via the Vercel AI SDK with structured-output
+  validation and retries.
 author: 'Falconiere'
 branding:
   icon: 'check-circle'
@@ -125,7 +125,5 @@ outputs:
     description: 'URL of the posted verdict comment'
 
 runs:
-  using: 'docker'
-  image: 'docker://ghcr.io/falconiere/toolu-ghactions/code-review:v2'
-  env:
-    GITHUB_TOKEN: ${{ inputs.TOKEN }}
+  using: 'node24'
+  main: 'dist/index.js'
