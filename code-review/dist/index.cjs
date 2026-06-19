@@ -37714,6 +37714,8 @@ function inProgressBody(ctx) {
 - [ ] Analyze correctness, security, performance
 - [ ] Post findings
 - [ ] Set verdict label
+
+<p align="left"><img src="${LOADING_GIF_URL}" width="100" alt="Review in progress"></p>
 `;
 }
 
