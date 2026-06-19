@@ -18,7 +18,7 @@ const TOP_MUST_FIX_MAX = 3;
 
 /** The content the body renders, mirroring parse-response.sh's JSON object. */
 export interface ReviewBody {
-  /** Resolved verdict label markdown, e.g. "`agent-merge-approved`". */
+  /** Resolved verdict label markdown, e.g. "`merge-approved`". */
   verdictLabel: string;
   /** Verdict badge text, e.g. "✅ Approved". */
   verdictBadge: string;

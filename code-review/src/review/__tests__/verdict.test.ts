@@ -25,7 +25,7 @@ function lastLine(body: string): string {
 }
 
 describe("formatVerdict", () => {
-  it("maps approved → agent-merge-approved label and ✅ badge", () => {
+  it("maps approved → merge-approved label and ✅ badge", () => {
     const result: ProviderResult = {
       verdict: "approved",
       findings: [],
@@ -34,16 +34,16 @@ describe("formatVerdict", () => {
       top_must_fix: [],
     };
     const { body, label } = formatVerdict(result, {});
-    expect(label).toBe("agent-merge-approved");
-    expect(body).toContain("`agent-merge-approved`");
+    expect(label).toBe("merge-approved");
+    expect(body).toContain("`merge-approved`");
     expect(body).toContain("✅ Approved");
   });
 
-  it("maps error → agent-request-changes label + provider-error badge", () => {
+  it("maps error → request-changes label + provider-error badge", () => {
     const result: ProviderResult = { verdict: "error", findings: [], error: "boom" };
     const { body, label } = formatVerdict(result, {});
     // error is the do-not-approve fail-safe: request-changes label, error badge.
-    expect(label).toBe("agent-request-changes");
+    expect(label).toBe("request-changes");
     expect(body).toContain("🚫 Review incomplete — provider error");
   });
 

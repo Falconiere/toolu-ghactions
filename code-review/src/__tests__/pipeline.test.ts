@@ -238,11 +238,11 @@ describe("runReview — end to end", () => {
     // A comment was upserted: created (in-progress), then updated (verdict).
     expect(rec.created.length + rec.updated.length).toBeGreaterThanOrEqual(1);
     // The verdict label chip was set to request-changes (and the opposite removed).
-    expect(rec.addedLabels).toContainEqual(["agent-request-changes"]);
-    expect(rec.removedLabels).toContain("agent-merge-approved");
+    expect(rec.addedLabels).toContainEqual(["request-changes"]);
+    expect(rec.removedLabels).toContain("merge-approved");
     // The final verdict comment body carries the verdict label token + state marker.
     const lastBody = rec.updated.at(-1)?.body ?? rec.created.at(-1)?.body ?? "";
-    expect(lastBody).toContain("agent-request-changes");
+    expect(lastBody).toContain("request-changes");
     expect(lastBody).toContain("toolu-review-state:v1");
   });
 
@@ -322,7 +322,7 @@ describe("runReview — end to end", () => {
     expect(result.commentUrl).toBeTruthy();
     // The comment is still posted and the error maps to the request-changes label.
     expect(rec.created.length + rec.updated.length).toBeGreaterThanOrEqual(1);
-    expect(rec.addedLabels).toContainEqual(["agent-request-changes"]);
+    expect(rec.addedLabels).toContainEqual(["request-changes"]);
     const lastBody = rec.updated.at(-1)?.body ?? rec.created.at(-1)?.body ?? "";
     expect(lastBody).toContain("provider error");
   });
@@ -348,7 +348,7 @@ describe("runReview — end to end", () => {
     // The no-op approved comment + the approved label.
     const body = rec.created.at(-1)?.body ?? "";
     expect(body).toContain("No file changes to review");
-    expect(rec.addedLabels).toContainEqual(["agent-merge-approved"]);
+    expect(rec.addedLabels).toContainEqual(["merge-approved"]);
   });
 
   // FIX 1: in node24 the action's CWD is the consumer repo, so the checklist must

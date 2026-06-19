@@ -52,7 +52,7 @@ inputs:
     required: false
     default: 'true'
   MANAGE_LABELS:
-    description: 'When true, set a real PR label chip matching the verdict (agent-merge-approved / agent-request-changes) and remove the opposite one. Requires issues: write. Set false to leave PR labels untouched'
+    description: 'When true, set a real PR label chip matching the verdict (merge-approved / request-changes) and remove the opposite one. Requires issues: write. Set false to leave PR labels untouched'
     required: false
     default: 'true'
   BASE_BRANCH:

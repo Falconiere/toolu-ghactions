@@ -3,14 +3,14 @@
 // filterable/automatable from the UI. Port of post-label.sh.
 //
 // Adds the verdict label and removes the OPPOSITE one, so a PR never carries
-// both `agent-merge-approved` and `agent-request-changes` at once. "error" maps
+// both `merge-approved` and `request-changes` at once. "error" maps
 // to the request-changes label on purpose (a failed review must not auto-merge).
 // Honors MANAGE_LABELS (false → no-op). Non-fatal: any API error is caught and
 // reported; this never throws.
 import { errorMessage } from "@/errors.js";
 
-const APPROVED_LABEL = "agent-merge-approved";
-const CHANGES_LABEL = "agent-request-changes";
+const APPROVED_LABEL = "merge-approved";
+const CHANGES_LABEL = "request-changes";
 const APPROVED_COLOR = "0e8a16";
 const CHANGES_COLOR = "d93f0b";
 
