@@ -37925,7 +37925,7 @@ function getUserAgent() {
   return "<environment undetectable>";
 }
 
-// node_modules/@octokit/auth-app/node_modules/@octokit/endpoint/dist-bundle/index.js
+// node_modules/@octokit/auth-app/node_modules/@octokit/request/node_modules/@octokit/endpoint/dist-bundle/index.js
 var VERSION2 = "0.0.0-development";
 var userAgent = `octokit-endpoint.js/${VERSION2} ${getUserAgent()}`;
 var DEFAULTS = {
@@ -38454,7 +38454,7 @@ function withDefaults2(oldEndpoint, newDefaults) {
 }
 var request = withDefaults2(endpoint, defaults_default);
 
-// node_modules/@octokit/auth-oauth-app/node_modules/@octokit/endpoint/dist-bundle/index.js
+// node_modules/@octokit/auth-oauth-app/node_modules/@octokit/request/node_modules/@octokit/endpoint/dist-bundle/index.js
 var VERSION4 = "0.0.0-development";
 var userAgent2 = `octokit-endpoint.js/${VERSION4} ${getUserAgent()}`;
 var DEFAULTS2 = {
@@ -38770,7 +38770,7 @@ var endpoint2 = withDefaults3(null, DEFAULTS2);
 // node_modules/@octokit/auth-oauth-app/node_modules/@octokit/request/dist-bundle/index.js
 var import_fast_content_type_parse2 = __toESM(require_fast_content_type_parse(), 1);
 
-// node_modules/@octokit/auth-oauth-app/node_modules/@octokit/request-error/dist-src/index.js
+// node_modules/@octokit/auth-oauth-app/node_modules/@octokit/request/node_modules/@octokit/request-error/dist-src/index.js
 var RequestError2 = class extends Error {
   name;
   /**
@@ -38983,7 +38983,7 @@ function withDefaults4(oldEndpoint, newDefaults) {
 }
 var request2 = withDefaults4(endpoint2, defaults_default2);
 
-// node_modules/@octokit/auth-oauth-user/node_modules/@octokit/endpoint/dist-bundle/index.js
+// node_modules/@octokit/auth-oauth-user/node_modules/@octokit/request/node_modules/@octokit/endpoint/dist-bundle/index.js
 var VERSION6 = "0.0.0-development";
 var userAgent3 = `octokit-endpoint.js/${VERSION6} ${getUserAgent()}`;
 var DEFAULTS3 = {
@@ -39299,7 +39299,7 @@ var endpoint3 = withDefaults5(null, DEFAULTS3);
 // node_modules/@octokit/auth-oauth-user/node_modules/@octokit/request/dist-bundle/index.js
 var import_fast_content_type_parse3 = __toESM(require_fast_content_type_parse(), 1);
 
-// node_modules/@octokit/auth-oauth-user/node_modules/@octokit/request-error/dist-src/index.js
+// node_modules/@octokit/auth-oauth-user/node_modules/@octokit/request/node_modules/@octokit/request-error/dist-src/index.js
 var RequestError3 = class extends Error {
   name;
   /**
@@ -39512,7 +39512,7 @@ function withDefaults6(oldEndpoint, newDefaults) {
 }
 var request3 = withDefaults6(endpoint3, defaults_default3);
 
-// node_modules/@octokit/auth-oauth-device/node_modules/@octokit/endpoint/dist-bundle/index.js
+// node_modules/@octokit/auth-oauth-device/node_modules/@octokit/request/node_modules/@octokit/endpoint/dist-bundle/index.js
 var VERSION8 = "0.0.0-development";
 var userAgent4 = `octokit-endpoint.js/${VERSION8} ${getUserAgent()}`;
 var DEFAULTS4 = {
@@ -39828,7 +39828,7 @@ var endpoint4 = withDefaults7(null, DEFAULTS4);
 // node_modules/@octokit/auth-oauth-device/node_modules/@octokit/request/dist-bundle/index.js
 var import_fast_content_type_parse4 = __toESM(require_fast_content_type_parse(), 1);
 
-// node_modules/@octokit/auth-oauth-device/node_modules/@octokit/request-error/dist-src/index.js
+// node_modules/@octokit/auth-oauth-device/node_modules/@octokit/request/node_modules/@octokit/request-error/dist-src/index.js
 var RequestError4 = class extends Error {
   name;
   /**
@@ -40041,7 +40041,7 @@ function withDefaults8(oldEndpoint, newDefaults) {
 }
 var request4 = withDefaults8(endpoint4, defaults_default4);
 
-// node_modules/@octokit/oauth-methods/node_modules/@octokit/endpoint/dist-bundle/index.js
+// node_modules/@octokit/oauth-methods/node_modules/@octokit/request/node_modules/@octokit/endpoint/dist-bundle/index.js
 var VERSION10 = "0.0.0-development";
 var userAgent5 = `octokit-endpoint.js/${VERSION10} ${getUserAgent()}`;
 var DEFAULTS5 = {
