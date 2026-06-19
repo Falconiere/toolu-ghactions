@@ -75,8 +75,6 @@ export function noopBody(ctx: GithubContext): string {
 export function inProgressBody(ctx: GithubContext): string {
   return `**AI Code Review running** —— [View job](${jobUrl(ctx)})
 
-<p align="center"><img src="${LOADING_GIF_URL}" width="240" alt="Review in progress"></p>
-
 ---
 ### PR Review in Progress
 
