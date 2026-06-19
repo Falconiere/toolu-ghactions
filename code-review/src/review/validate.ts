@@ -48,10 +48,14 @@ export function validateFindings(
     if (!changedSet.has(f.line)) continue;
 
     // 1b. Quote-anchored (LLM findings only): if the finding quotes a line, it
-    // must match the real new-file text at the cited line. Catches diff misreads
-    // where the model cites a valid line number but quotes content from an
-    // adjacent removed (`L---:`) line — i.e. flags deleted code as if it were
-    // still present. Mechanical scanners anchor exactly, so they are exempt.
+    // must match the real new-file text at the cited line. The motivating case is
+    // a diff misread — the model cites a valid line number but quotes content from
+    // a removed (`L---:`) line, flagging deleted code as if still present. The gate
+    // is deliberately broader: ANY mismatch is dropped, because a quote that does
+    // not come from the cited line means the model is unsure what it is flagging
+    // (precision over recall, per the checklist). It only fires when the model
+    // supplied a quote AND we have the line's text; mechanical scanners (which
+    // anchor exactly) are exempt.
     const isLlm = f.source === undefined || f.source === "llm";
     if (isLlm && f.quoted_line !== undefined && lineTextByPath !== undefined) {
       const actual = lineTextByPath.get(f.path)?.get(f.line);
@@ -92,7 +96,8 @@ function quotesMatch(actual: string, quoted: string): boolean {
   const norm = (s: string): string => s.replace(/\s+/g, " ").trim();
   const a = norm(actual);
   const q = norm(quoted);
-  if (q === "") return true;
+  if (q === "") return true; // model quoted nothing — cannot disprove, keep.
+  if (a === "") return false; // cited line is blank but a quote was given — mismatch.
   return a.includes(q) || q.includes(a);
 }
 

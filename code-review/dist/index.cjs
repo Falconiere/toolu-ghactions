@@ -37205,6 +37205,7 @@ function quotesMatch(actual, quoted) {
   const a = norm(actual);
   const q = norm(quoted);
   if (q === "") return true;
+  if (a === "") return false;
   return a.includes(q) || q.includes(a);
 }
 function spanIsInDiff(f, changedSet) {

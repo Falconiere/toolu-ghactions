@@ -145,6 +145,21 @@ describe("validateFindings", () => {
     expect(validateFindings(findings, changed, "high")).toHaveLength(1);
   });
 
+  it("drops an LLM finding that quotes non-empty text on a blank cited line", () => {
+    const blank = new Map<string, Map<number, string>>([["src/a.ts", new Map([[12, "   "]])]]);
+    const findings: Finding[] = [
+      {
+        path: "src/a.ts",
+        line: 12,
+        severity: "medium",
+        confidence: "high",
+        quoted_line: "const secret = 'oops'",
+        text: "Hallucinated quote on an empty line.",
+      },
+    ];
+    expect(validateFindings(findings, changed, "high", blank)).toHaveLength(0);
+  });
+
   it("exempts mechanical-scanner findings from the quote check", () => {
     const findings: Finding[] = [
       {
