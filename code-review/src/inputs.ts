@@ -80,8 +80,10 @@ const ProviderEntrySchema = z.object({
 });
 type ProviderEntry = z.infer<typeof ProviderEntrySchema>;
 
-/** Default model — kept in sync with action.yml MODEL default and build_providers_list. */
-const DEFAULT_MODEL = "deepseek/deepseek-v4-flash";
+/** Default model — kept in sync with action.yml MODEL default. gemini-2.5-flash has
+ * constrained-decoding structured output (~99.7% schema match) vs deepseek json-mode's
+ * ~88-95%, which was the source of the empty-content/abstain errors. */
+const DEFAULT_MODEL = "google/gemini-2.5-flash";
 
 /** Default completion-token budget — kept in sync with action.yml MAX_TOKENS default. */
 const DEFAULT_MAX_TOKENS = 4096;

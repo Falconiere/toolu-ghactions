@@ -22,6 +22,8 @@ export interface ReviewBody {
   verdictLabel: string;
   /** Verdict badge text, e.g. "✅ Approved". */
   verdictBadge: string;
+  /** Provider error detail shown under the verdict when the review errored ("" → omit). */
+  errorDetail: string;
   /** The header line ("**AI Code Review finished …** —— [View job](url)"). */
   header: string;
   /** Branch name shown in the Code Review heading. */
@@ -67,6 +69,9 @@ export function renderBody(body: ReviewBody, findingsSection: string): string {
   main += "- [x] Post findings\n";
   main += `- [x] Set verdict label (${body.verdictLabel})\n\n`;
   main += `**Verdict:** ${body.verdictBadge}   ${buildSeveritySummary(body.findings)}`;
+  // Surface the real provider-error message (not just the generic badge) so a failed
+  // review is diagnosable from the comment alone.
+  if (body.errorDetail !== "") main += `\n\n> ⚠️ **Provider error:** ${body.errorDetail}`;
   parts.push(main);
 
   if (body.recap !== "") parts.push(`\n${body.recap}\n`);

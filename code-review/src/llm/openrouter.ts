@@ -108,7 +108,7 @@ export async function reviewWithModel(
       mode: "json",
       system: envelope.system,
       prompt: envelope.user,
-      temperature: 0.1,
+      temperature: 0,
       maxTokens: envelope.max_tokens,
       maxRetries: opts.maxRetries ?? 2,
       abortSignal: controller.signal,

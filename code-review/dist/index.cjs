@@ -28190,7 +28190,7 @@ var ProviderEntrySchema = external_exports.object({
   enforce_json_schema: external_exports.boolean().optional(),
   max_tokens: external_exports.number().optional()
 });
-var DEFAULT_MODEL = "deepseek/deepseek-v4-flash";
+var DEFAULT_MODEL = "google/gemini-2.5-flash";
 var DEFAULT_MAX_TOKENS = 4096;
 function intInput(name17, fallback) {
   const raw = core.getInput(name17).trim();
@@ -36670,7 +36670,7 @@ async function reviewWithModel(envelope, opts) {
       mode: "json",
       system: envelope.system,
       prompt: envelope.user,
-      temperature: 0.1,
+      temperature: 0,
       maxTokens: envelope.max_tokens,
       maxRetries: opts.maxRetries ?? 2,
       abortSignal: controller.signal
@@ -36728,6 +36728,9 @@ function renderBody(body, findingsSection) {
 
 `;
   main2 += `**Verdict:** ${body.verdictBadge}   ${buildSeveritySummary(body.findings)}`;
+  if (body.errorDetail !== "") main2 += `
+
+> \u26A0\uFE0F **Provider error:** ${body.errorDetail}`;
   parts.push(main2);
   if (body.recap !== "") parts.push(`
 ${body.recap}
@@ -36932,6 +36935,7 @@ function formatVerdict(result, opts) {
   const body = {
     verdictLabel: `\`${label}\``,
     verdictBadge: badge,
+    errorDetail: result.error ?? "",
     header,
     branch: opts.branch ?? "unknown",
     jobUrl: opts.jobUrl ?? "https://github.com",
