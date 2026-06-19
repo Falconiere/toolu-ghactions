@@ -56,6 +56,9 @@ export interface ReviewDeps {
   lookupBaseRef?: (prNumber: number) => Promise<string>;
   /** Clock for the state history timestamp + duration (default Date.now). */
   now?: () => number;
+  /** Dir of deterministic-scanner SARIF (TOOLU_SARIF_DIR from the composite steps);
+   * absent → no mechanical findings (the review runs LLM-only). */
+  sarifDir?: string;
 }
 
 /** The pipeline's result — exactly the three action outputs main.ts forwards. */

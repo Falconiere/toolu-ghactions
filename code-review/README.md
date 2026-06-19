@@ -32,6 +32,7 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
+  security-events: write # upload the gitleaks/opengrep SARIF to the Code Scanning tab
 
 concurrency:
   group: code-review-${{ github.ref }}
@@ -108,6 +109,26 @@ accepted (your workflow won't break), but ignored with a warning in the logs:
 
 Ensemble review may return later behind the same preserved inputs; for now a
 single model handles the review.
+
+## Deterministic checks
+
+The action is a **hybrid**: deterministic scanners run first, then the LLM triages
+their findings and adds its own judgment. This makes the objective findings
+reproducible and means a provider error never leaves the PR un-reviewed.
+
+- **Secrets** — [gitleaks](https://github.com/gitleaks/gitleaks) (`RUN_SECRET_SCAN`, default on).
+- **SAST** — [Opengrep](https://github.com/opengrep/opengrep) (`RUN_SAST`, default on; rules via `SAST_RULES`).
+
+Both run as steps of this composite action (pinned release binaries) and write SARIF.
+Their findings (1) **upload to the repo's Code Scanning tab** — which requires
+`security-events: write` in your workflow `permissions` — and (2) are passed to the LLM
+as TRUSTED context to assess; confirmed ones appear in the verdict comment tagged with
+their tool. A scanner that fails to install or run is non-fatal: the review degrades to
+LLM-only. On a **fork PR** (where `security-events: write` and the token are read-only) the
+SARIF upload is skipped and the review still posts as a comment.
+
+If the LLM call errors, the comment still shows the deterministic findings under a
+**Mechanical checks** section with an "LLM judgment unavailable" note — never a blank verdict.
 
 ## How it works
 
@@ -294,6 +315,7 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
+  security-events: write # upload the gitleaks/opengrep SARIF to the Code Scanning tab
 
 concurrency:
   group: code-review-${{ github.event.issue.number || github.event.pull_request.number }}
@@ -384,6 +406,9 @@ turn the recap and history off.
 | `BOT_NAME` | no | `Toolu — Code Review` | Display name shown in the comment body header. |
 | `BOT_LOGO_URL` | no | `…/code-review/assets/logo.png` | Logo image shown in the comment body header. |
 | `REVIEW_MEMORY` | no | `true` | Recap what changed since the last review (resolved / still-open / new) and keep a collapsed history, using a hidden state marker in the sticky comment. Set `false` to disable. See [Review memory](#review-memory). |
+| `RUN_SECRET_SCAN` | no | `true` | Run the deterministic secret scan (gitleaks) before the LLM review; its findings feed the LLM as triage context and upload to Code Scanning. See [Deterministic checks](#deterministic-checks). |
+| `RUN_SAST` | no | `true` | Run the deterministic SAST pass (Opengrep) before the LLM review; same flow as above. |
+| `SAST_RULES` | no | `p/typescript` | Opengrep rule config(s) for the SAST pass (comma-separated). |
 
 ### Deprecated inputs
 

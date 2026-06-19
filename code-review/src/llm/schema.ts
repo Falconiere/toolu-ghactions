@@ -20,6 +20,10 @@ export const Finding = z.object({
   confidence: z.enum(["high", "medium"]).optional(),
   quoted_line: z.string().optional(),
   suggestion: z.string().optional(),
+  // Provenance: which layer surfaced this finding. Absent → an LLM-discovered finding
+  // (rendered as "llm"); set to a tool name when the model confirms a deterministic
+  // (gitleaks/opengrep) finding it was asked to triage.
+  source: z.enum(["llm", "gitleaks", "opengrep", "eslint"]).optional(),
   text: z.string(),
 });
 

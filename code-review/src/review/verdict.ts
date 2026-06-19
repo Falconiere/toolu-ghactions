@@ -13,6 +13,7 @@
 // was a provider error, not a real request for changes.
 import type { ProviderResult } from "@/llm/openrouter.js";
 import type { Finding } from "@/llm/schema.js";
+import type { MechanicalFinding } from "@/mechanical/sarif.js";
 import {
   buildFindingsSection,
   buildTruncatedFindingsSection,
@@ -45,6 +46,8 @@ export interface VerdictOptions {
   history?: string;
   /** Pre-encoded state marker — appended as the LAST line; never dropped. */
   historyMarker?: string;
+  /** Deterministic findings (gitleaks/opengrep) for the Mechanical-checks summary. */
+  mechanical?: MechanicalFinding[];
 }
 
 /** Thrown when the body cannot fit under the size cap without dropping the marker. */
@@ -94,6 +97,7 @@ export function formatVerdict(
     recap: opts.recap ?? "",
     history: opts.history ?? "",
     marker,
+    mechanical: opts.mechanical ?? [],
   };
 
   const rendered = fitToSizeLimit(body, marker);

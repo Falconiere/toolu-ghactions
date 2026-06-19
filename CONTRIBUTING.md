@@ -41,6 +41,17 @@ bats cloudflare-tunnel/__tests__/*.bats scripts/__tests__/*.bats
 shellcheck --severity=warning cloudflare-tunnel/src/*.sh scripts/*.sh
 ```
 
+`code-review/` is a **composite** action: `action.yml` orchestrates pinned `gitleaks`
+(secrets) + `opengrep` (SAST) binaries → SARIF, then runs the node24 LLM reviewer
+(`dist/index.cjs`) which reads that SARIF (`TOOLU_SARIF_DIR`) and triages it. To exercise
+the deterministic layer locally, run the scanners and point the reviewer at their output:
+
+```bash
+gitleaks detect --source . --report-format sarif --report-path "$TMPDIR/gitleaks.sarif" --exit-code 0
+opengrep scan --sarif --output "$TMPDIR/opengrep.sarif" --config p/typescript .
+# the SARIF parser/gather are unit-tested against recorded fixtures in src/mechanical/__tests__/
+```
+
 ## Tests
 
 `code-review/` tests are [vitest](https://vitest.dev) specs colocated in `src/**/__tests__/`, run over **real recorded fixtures** — recorded OpenRouter responses and real git repos built in temp dirs. Do NOT add fabricated/mock finding data: the network is stubbed only at the `fetch` boundary by replaying real recorded responses; the data under test stays real. Imports use the `@/` alias (e.g. `@/llm/openrouter.js`).

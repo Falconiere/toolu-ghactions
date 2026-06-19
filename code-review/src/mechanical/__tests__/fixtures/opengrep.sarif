@@ -1,0 +1,74 @@
+{
+  "version": "2.1.0",
+  "runs": [
+    {
+      "invocations": [
+        {
+          "executionSuccessful": true,
+          "toolExecutionNotifications": []
+        }
+      ],
+      "results": [
+        {
+          "fingerprints": {
+            "matchBasedId/v1": "requires login"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "leak.ts",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endColumn": 25,
+                  "endLine": 4,
+                  "snippet": {
+                    "text": "  return eval(userInput);"
+                  },
+                  "startColumn": 10,
+                  "startLine": 4
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "Avoid eval — arbitrary code execution from untrusted input."
+          },
+          "properties": {},
+          "ruleId": "dangerous-eval-call"
+        }
+      ],
+      "tool": {
+        "driver": {
+          "name": "Semgrep OSS",
+          "rules": [
+            {
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "fullDescription": {
+                "text": "Avoid eval — arbitrary code execution from untrusted input."
+              },
+              "help": {
+                "markdown": "Avoid eval — arbitrary code execution from untrusted input.",
+                "text": "Avoid eval — arbitrary code execution from untrusted input."
+              },
+              "id": "dangerous-eval-call",
+              "name": "dangerous-eval-call",
+              "properties": {
+                "precision": "very-high",
+                "tags": []
+              },
+              "shortDescription": {
+                "text": "Semgrep Finding: dangerous-eval-call"
+              }
+            }
+          ],
+          "semanticVersion": "1.167.0"
+        }
+      }
+    }
+  ],
+  "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/schemas/sarif-schema-2.1.0.json"
+}

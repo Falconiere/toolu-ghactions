@@ -327,6 +327,35 @@ describe("runReview — end to end", () => {
     expect(lastBody).toContain("provider error");
   });
 
+  it("graceful degradation: LLM error WITH mechanical findings → comment keeps the deterministic findings + 'LLM judgment unavailable', job NOT failed", async () => {
+    const { dir, headSha } = track(featureRepoWithChange());
+    const { octokit, rec } = fakeOctokit();
+    // Real recorded gitleaks + opengrep SARIF — exactly what the composite steps write to TOOLU_SARIF_DIR.
+    const sarifDir = join(
+      dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "mechanical",
+      "__tests__",
+      "fixtures",
+    );
+
+    const result = await runReview({
+      inputs: baseInputs(),
+      octokit,
+      context: prContext(headSha),
+      fetch: replayFetch("empty-content"), // provider error → LLM abstains
+      cwd: dir,
+      sarifDir,
+      now: () => 1_700_000_000_000,
+    });
+
+    // The LLM failed, but the review is NOT empty: deterministic findings survive.
+    expect(result.verdict).toBe("error");
+    const lastBody = rec.updated.at(-1)?.body ?? rec.created.at(-1)?.body ?? "";
+    expect(lastBody).toContain("### Mechanical checks");
+    expect(lastBody).toContain("LLM judgment unavailable");
+  });
+
   it("empty diff (no changes vs base) → verdict skip with the approved no-op comment", async () => {
     // A feature branch with NO commits past main → zero changed files.
     const dir = setupGitRepo();

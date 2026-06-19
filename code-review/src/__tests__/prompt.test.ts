@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildPrompt, sanitizeInstruction, PromptError } from "@/prompt.js";
 import type { DiffData } from "@/git/diff.js";
+import type { MechanicalFinding } from "@/mechanical/sarif.js";
 
 // Security-focused: the REAL prompts/review-checklist.txt is read from disk, and
 // real DiffData is assembled — no mocks. The malicious instruction exercises the
@@ -174,5 +175,43 @@ describe("buildPrompt — envelope and inputs", () => {
     expect(env.user).toContain(
       "[Diff truncated at 8000 lines; some hunks omitted. Review what is shown.]",
     );
+  });
+});
+
+describe("buildPrompt — deterministic findings triage", () => {
+  const mechanical: MechanicalFinding[] = [
+    {
+      tool: "gitleaks",
+      ruleId: "github-pat",
+      path: "src/app.ts",
+      line: 5,
+      severity: "error",
+      message: "secret detected",
+    },
+    {
+      tool: "opengrep",
+      ruleId: "dangerous-eval",
+      path: "src/app.ts",
+      line: 9,
+      severity: "warning",
+      message: "avoid eval",
+    },
+  ];
+
+  it("injects mechanical findings as a TRUSTED triage block (tool + path:line + triage instruction)", () => {
+    const env = buildPrompt({
+      diff: sampleDiff(),
+      checklistPath: CHECKLIST_PATH,
+      mechanicalFindings: mechanical,
+    });
+    expect(env.user).toContain("Deterministic findings to assess");
+    expect(env.user).toContain("[gitleaks] github-pat at src/app.ts:5");
+    expect(env.user).toContain("[opengrep] dangerous-eval at src/app.ts:9");
+    expect(env.user).toContain("`source`"); // instructs the model to tag provenance
+  });
+
+  it("omits the block entirely when there are no mechanical findings", () => {
+    const env = buildPrompt({ diff: sampleDiff(), checklistPath: CHECKLIST_PATH });
+    expect(env.user).not.toContain("Deterministic findings to assess");
   });
 });

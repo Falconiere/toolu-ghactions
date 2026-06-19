@@ -15,6 +15,7 @@ import { execFileSync } from "node:child_process";
 import { fetchDiff } from "./git/diff.js";
 import { gatherRules } from "./rules.js";
 import { buildPrompt } from "./prompt.js";
+import { gatherMechanical } from "./mechanical/gather.js";
 import { reviewWithModel } from "./llm/openrouter.js";
 import type { ProviderResult } from "./llm/openrouter.js";
 import { validateFindings } from "./review/validate.js";
@@ -158,6 +159,10 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     cwd,
   });
 
+  // --- Deterministic findings (gitleaks/opengrep SARIF the composite steps wrote).
+  // Fed to the LLM as triage context AND summarized in the comment; absent dir → []. ---
+  const mechanical = gatherMechanical(deps.sarifDir);
+
   // --- Build the prompt envelope and run the single-model review. ---
   const envelope = buildPrompt({
     diff,
@@ -169,6 +174,7 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     reviewInstruction: event.instruction ?? "",
     projectRules,
     githubWorkspace: cwd,
+    mechanicalFindings: mechanical,
   });
 
   const result: ProviderResult = await reviewWithModel(envelope, {
@@ -221,6 +227,7 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     recap,
     history,
     historyMarker: marker,
+    mechanical,
   });
 
   // --- Post the verdict comment (a failure here IS an infra error → propagate). ---

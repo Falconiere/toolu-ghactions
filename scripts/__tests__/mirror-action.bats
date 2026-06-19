@@ -15,11 +15,11 @@ teardown() { common_teardown; }
     [ -d "$out/src" ]
     [ -d "$out/prompts" ]
     [ -f "$out/LICENSE" ]
-    # JS action: action.yml runs the committed dist/index.cjs bundle, which the
-    # mirror copies verbatim (no image rewrite).
+    # Composite action: action.yml orchestrates SAST steps + the committed dist/index.cjs
+    # node review, which the mirror copies verbatim (no image rewrite).
     [ -f "$out/dist/index.cjs" ]
-    grep -qF "using: 'node24'" "$out/action.yml"
-    grep -qF "main: 'dist/index.cjs'" "$out/action.yml"
+    grep -qF "using: 'composite'" "$out/action.yml"
+    grep -qF 'dist/index.cjs' "$out/action.yml"
 }
 
 @test "cloudflare-tunnel: root action.yml resolves scripts (../src dropped); subdirs kept" {

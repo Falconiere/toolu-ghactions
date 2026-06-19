@@ -121,6 +121,8 @@ async function main(): Promise<void> {
       context: buildContext(),
       lookupPermission: permissionLookup(octokit),
       lookupBaseRef: baseRefLookup(octokit),
+      // The composite SAST steps write gitleaks/opengrep SARIF here; the pipeline reads it.
+      ...(process.env["TOOLU_SARIF_DIR"] ? { sarifDir: process.env["TOOLU_SARIF_DIR"] } : {}),
     });
 
     core.setOutput("verdict", result.verdict);

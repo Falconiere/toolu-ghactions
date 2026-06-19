@@ -33,12 +33,15 @@ jobs:
         # checked-in bundle, not the TS sources. Fail if `bun run build` produced
         # any change.
         run: git diff --quiet -- dist
-      - name: action.yml is a node24 JS action
-        # Dependency-free assertion (no @action-validator — it rejects node24).
+      - name: action.yml is a composite action wrapping the node24 review + SAST steps
         run: |
-          grep -qF "using: 'node24'" action.yml
-          grep -qF "main: 'dist/index.cjs'" action.yml
+          grep -qF "using: 'composite'" action.yml
+          grep -qF 'dist/index.cjs' action.yml
+          grep -qF 'opengrep' action.yml
+          ! grep -qF "using: 'node24'" action.yml
           ! grep -qF '6 AI vendors' action.yml
+      - name: action.yml validates (composite is accepted by action-validator)
+        run: npx --yes @action-validator/cli action.yml
 
   scripts:
     name: scripts
