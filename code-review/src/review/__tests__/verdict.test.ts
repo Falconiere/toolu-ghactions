@@ -41,13 +41,19 @@ describe("formatVerdict", () => {
   });
 
   it("maps error → request-changes label + provider-error badge", () => {
-    const result: ProviderResult = { verdict: "error", findings: [], error: "boom" };
+    const result: ProviderResult = {
+      verdict: "error",
+      findings: [],
+      error: "boom",
+      finishReason: "length",
+    };
     const { body, label } = formatVerdict(result, {});
     // error is the do-not-approve fail-safe: request-changes label, error badge.
     expect(label).toBe("request-changes");
     expect(body).toContain("🚫 Review incomplete — provider error");
-    // The real provider-error message is surfaced (not just the generic badge).
+    // The real provider-error message + finish_reason are surfaced (not just the badge).
     expect(body).toContain("boom");
+    expect(body).toContain("finish_reason: length");
   });
 
   it("puts the state marker as the last line of the body", () => {

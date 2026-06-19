@@ -84,7 +84,12 @@ export function formatVerdict(
   const body: ReviewBody = {
     verdictLabel: `\`${label}\``,
     verdictBadge: badge,
-    errorDetail: result.error ?? "",
+    // Surface the real error + the model's finish_reason when present, so a parse
+    // failure ("could not parse") is distinguishable from output truncation ("length").
+    errorDetail:
+      result.error !== undefined && result.error !== ""
+        ? result.error + (result.finishReason ? ` [finish_reason: ${result.finishReason}]` : "")
+        : "",
     header,
     branch: opts.branch ?? "unknown",
     jobUrl: opts.jobUrl ?? "https://github.com",
