@@ -36764,7 +36764,9 @@ var Finding = external_exports.object({
   category: external_exports.string().optional(),
   confidence: external_exports.enum(["high", "medium"]).optional(),
   quoted_line: external_exports.string().optional(),
-  suggestion: external_exports.string().optional(),
+  suggestion: external_exports.string().optional().describe(
+    "Replacement CODE ONLY \u2014 the exact source text to substitute for lines [line..end_line]. GitHub renders it as a committable 'Suggested change', so it must be literal, directly-applicable code, never prose, commentary, or an instruction like 'remove this line'. Explanations go in `text`. Omit this field entirely when there is no clean code replacement."
+  ),
   // Provenance: which layer surfaced this finding. Absent → an LLM-discovered finding
   // (rendered as "llm"); set to a tool name when the model confirms a deterministic
   // (gitleaks/opengrep) finding it was asked to triage.
