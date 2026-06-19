@@ -1,0 +1,239 @@
+// inputs.ts — read and normalize every action.yml input into a typed
+// ActionInputs object. Port of the env-reading + provider-resolution logic that
+// build_providers_list() / build-prompt.sh / fetch-diff.sh split across the bash:
+// done ONCE here so the pipeline takes a plain typed object, never process.env.
+//
+// LEGACY → EFFECTIVE PROVIDER: the TS action runs a SINGLE OpenRouter model
+// (see llm/openrouter.ts). We collapse the legacy single-provider inputs
+// (OPENROUTER_API_KEY + MODEL) and the multi-provider PROVIDERS array down to one
+// effective {model, apiKey}. When PROVIDERS is given, the FIRST entry's
+// model/api_key wins; any extra entries are a no-op and warned. The other
+// multi-provider knobs (MERGE_STRATEGY, FALLBACK_MODEL, REVIEW_MODE) and
+// ENFORCE_JSON_SCHEMA=false are deprecated no-ops that emit a core.warning.
+import * as core from "@actions/core";
+
+/** Minimum confidence floor for the validate gate (high|medium). */
+export type MinConfidence = "high" | "medium";
+
+/** The fully-resolved, typed inputs the pipeline consumes (no env reads downstream). */
+export interface ActionInputs {
+  /** Effective OpenRouter model id (PROVIDERS[0].model | MODEL | default). */
+  model: string;
+  /** Effective OpenRouter API key (PROVIDERS[0].api_key | OPENROUTER_API_KEY | ""). */
+  apiKey: string;
+  /** Max completion tokens per request. */
+  maxTokens: number;
+  /** Confidence floor for keeping findings. */
+  minConfidence: MinConfidence;
+  /** When true, request response_format json_schema + require_parameters. */
+  enforceJsonSchema: boolean;
+  /** When true, post per-line inline review comments in addition to the summary. */
+  inlineComments: boolean;
+  /** When true, set/clear the verdict PR label chip. */
+  manageLabels: boolean;
+  /** Base branch for diff comparison (default "main"). */
+  baseBranch: string;
+  /** Custom system-prompt file path (relative to the workspace), or "". */
+  reviewPromptFile: string;
+  /** High-level codebase description injected into the prompt, or "". */
+  codebaseOverview: string;
+  /** When true, gather + inject project convention files from the base ref. */
+  checkProjectRules: boolean;
+  /** Extra path globs to include as project rules (newline/comma-separated), or "". */
+  rulesGlob: string;
+  /** Total byte cap on gathered project-rules text. */
+  rulesMaxBytes: number;
+  /** Max changed files before the action skips (0 = unlimited). */
+  maxFiles: number;
+  /** Max diff lines before truncation (0 = unlimited). */
+  maxDiffLines: number;
+  /** GitHub token for posting/editing comments. */
+  token: string;
+  /** GitHub App id (empty when no App identity configured). */
+  appId: string;
+  /** GitHub App private key, raw or base64 PEM (empty when unset). */
+  appPrivateKey: string;
+  /** @mention prefix that re-triggers a review from a PR comment. */
+  triggerPhrase: string;
+  /** Minimum repo permission a commenter needs to trigger via @mention. */
+  minTriggerPermission: "write" | "admin";
+  /** Display name in the comment header. */
+  botName: string;
+  /** Logo image URL in the comment header. */
+  botLogoUrl: string;
+  /** When true, recap changes since the last review via the hidden state marker. */
+  reviewMemory: boolean;
+}
+
+/** One PROVIDERS array entry; only the fields we read are typed (loose by design). */
+interface ProviderEntry {
+  model?: string;
+  api_key?: string;
+  enforce_json_schema?: boolean;
+  max_tokens?: number;
+}
+
+/** Default model — kept in sync with action.yml MODEL default and build_providers_list. */
+const DEFAULT_MODEL = "deepseek/deepseek-v4-flash";
+
+/**
+ * Parse a string input as a base-10 integer, falling back to `fallback` for an
+ * empty or non-numeric value (mirrors the bash `${VAR:-default}` + arithmetic).
+ */
+function intInput(name: string, fallback: number): number {
+  const raw = core.getInput(name).trim();
+  if (raw === "") return fallback;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/** Read MIN_CONFIDENCE, defaulting to "high"; only "medium" relaxes the floor. */
+function readMinConfidence(): MinConfidence {
+  return core.getInput("MIN_CONFIDENCE").trim().toLowerCase() === "medium" ? "medium" : "high";
+}
+
+/** Read MIN_TRIGGER_PERMISSION, defaulting to "write"; only "admin" tightens it. */
+function readMinTriggerPermission(): "write" | "admin" {
+  return core.getInput("MIN_TRIGGER_PERMISSION").trim().toLowerCase() === "admin" ? "admin" : "write";
+}
+
+/**
+ * Parse the PROVIDERS input as a JSON array. Returns the parsed entries, or null
+ * when PROVIDERS is empty/whitespace. Throws on a value that is set but is NOT a
+ * non-empty JSON array — matching build_providers_list()'s `return 1` (the bash
+ * `fail "No providers configured"` path).
+ */
+function parseProviders(raw: string): ProviderEntry[] | null {
+  if (raw.trim() === "") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("PROVIDERS is set but is not valid JSON.");
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw new Error("PROVIDERS is set but is not a non-empty JSON array.");
+  }
+  return parsed as ProviderEntry[];
+}
+
+/**
+ * Resolve the effective {model, apiKey, enforceJsonSchema, maxTokens} from the
+ * PROVIDERS array (first entry wins) or the legacy single-provider inputs.
+ * Emits the deprecation warnings build_providers_list() emits: extra PROVIDERS
+ * entries (>1), and the legacy/multi conflict.
+ */
+function resolveProvider(
+  providers: ProviderEntry[] | null,
+  legacyKey: string,
+  legacyModel: string,
+  legacyEnforce: boolean,
+  legacyMaxTokens: number,
+): { model: string; apiKey: string; enforceJsonSchema: boolean; maxTokens: number } {
+  if (providers !== null) {
+    if (legacyKey !== "") {
+      core.warning(
+        "OPENROUTER_API_KEY (and other legacy single-provider inputs) ignored; using PROVIDERS",
+      );
+    }
+    if (providers.length > 1) {
+      core.warning(
+        `PROVIDERS carries ${providers.length} entries, but this action reviews with a single model; ` +
+          "only the first entry is used. The remaining entries are a no-op.",
+      );
+    }
+    const first = providers[0] ?? {};
+    return {
+      model: first.model && first.model !== "" ? first.model : DEFAULT_MODEL,
+      apiKey: first.api_key ?? "",
+      enforceJsonSchema: first.enforce_json_schema ?? true,
+      maxTokens: typeof first.max_tokens === "number" ? first.max_tokens : legacyMaxTokens,
+    };
+  }
+
+  // Legacy single-provider path.
+  return {
+    model: legacyModel !== "" ? legacyModel : DEFAULT_MODEL,
+    apiKey: legacyKey,
+    enforceJsonSchema: legacyEnforce,
+    maxTokens: legacyMaxTokens,
+  };
+}
+
+/** Warn for each deprecated no-op input that the caller still set. */
+function warnDeprecated(legacyEnforce: boolean): void {
+  if (core.getInput("MERGE_STRATEGY").trim() !== "") {
+    core.warning("MERGE_STRATEGY is a no-op; this action reviews with a single model.");
+  }
+  if (core.getInput("FALLBACK_MODEL").trim() !== "") {
+    core.warning("FALLBACK_MODEL is dropped; configure the model via MODEL or PROVIDERS.");
+  }
+  const reviewMode = core.getInput("REVIEW_MODE").trim();
+  if (reviewMode !== "" && reviewMode !== "single") {
+    core.warning("REVIEW_MODE is a no-op; the single-model review replaces per-dimension fan-out.");
+  }
+  if (!legacyEnforce) {
+    core.warning(
+      "ENFORCE_JSON_SCHEMA=false is a no-op; the single-model path always enforces the JSON schema.",
+    );
+  }
+}
+
+/**
+ * Read every action.yml input and resolve it into a typed {@link ActionInputs}.
+ *
+ * Collapses the legacy single-provider inputs and the multi-provider PROVIDERS
+ * array into one effective model/api_key, and emits a `core.warning` for each
+ * deprecated no-op input that was set. Throws when PROVIDERS is present but not a
+ * non-empty JSON array (the bash "No providers configured" failure).
+ */
+export function readInputs(): ActionInputs {
+  const legacyKey =
+    core.getInput("OPENROUTER_API_KEY").trim() || (process.env["OPENROUTER_API_KEY"] ?? "").trim();
+  const legacyModel = core.getInput("MODEL").trim();
+  const legacyEnforce = readBool("ENFORCE_JSON_SCHEMA", true);
+  const legacyMaxTokens = intInput("MAX_TOKENS", 4096);
+
+  const providers = parseProviders(core.getInput("PROVIDERS"));
+  const effective = resolveProvider(providers, legacyKey, legacyModel, legacyEnforce, legacyMaxTokens);
+
+  warnDeprecated(legacyEnforce);
+
+  return {
+    model: effective.model,
+    apiKey: effective.apiKey,
+    maxTokens: effective.maxTokens,
+    enforceJsonSchema: effective.enforceJsonSchema,
+    minConfidence: readMinConfidence(),
+    inlineComments: readBool("INLINE_COMMENTS", true),
+    manageLabels: readBool("MANAGE_LABELS", true),
+    baseBranch: core.getInput("BASE_BRANCH").trim() || "main",
+    reviewPromptFile: core.getInput("REVIEW_PROMPT_FILE"),
+    codebaseOverview: core.getInput("CODEBASE_OVERVIEW"),
+    checkProjectRules: readBool("CHECK_PROJECT_RULES", true),
+    rulesGlob: core.getInput("RULES_GLOB"),
+    rulesMaxBytes: intInput("RULES_MAX_BYTES", 32768),
+    maxFiles: intInput("MAX_FILES", 0),
+    maxDiffLines: intInput("MAX_DIFF_LINES", 0),
+    token: core.getInput("TOKEN") || (process.env["GITHUB_TOKEN"] ?? ""),
+    appId: core.getInput("APP_ID").trim(),
+    appPrivateKey: core.getInput("APP_PRIVATE_KEY"),
+    triggerPhrase: core.getInput("TRIGGER_PHRASE").trim() || "@toolu",
+    minTriggerPermission: readMinTriggerPermission(),
+    botName: core.getInput("BOT_NAME") || "Toolu — Code Review",
+    botLogoUrl:
+      core.getInput("BOT_LOGO_URL") ||
+      "https://raw.githubusercontent.com/falconiere/toolu-ghactions/main/code-review/assets/logo.png",
+    reviewMemory: readBool("REVIEW_MEMORY", true),
+  };
+}
+
+/**
+ * Read a boolean input, defaulting to `fallback` when unset. `getBooleanInput`
+ * throws on a non-boolean/non-empty value, so we read the raw string first and
+ * fall back on empty (matching the bash `${VAR:-default}` default-when-unset).
+ */
+function readBool(name: string, fallback: boolean): boolean {
+  if (core.getInput(name).trim() === "") return fallback;
+  return core.getBooleanInput(name);
+}
