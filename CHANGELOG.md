@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.0](https://github.com/Falconiere/toolu-ghactions/compare/v3.2.0...v3.3.0) (2026-06-19)
+
+
+### Features
+
+* **code-review:** resize in-progress loading gif to 100px, bottom-left ([#50](https://github.com/Falconiere/toolu-ghactions/issues/50)) ([b137fa6](https://github.com/Falconiere/toolu-ghactions/commit/b137fa6e902da559b32a3322c7b312a58bb2b4bb))
+
 ## [3.2.0](https://github.com/Falconiere/toolu-ghactions/compare/v3.1.0...v3.2.0) (2026-06-19)
 
 
