@@ -17,9 +17,8 @@ inputs:
     description: 'JSON array of {provider, model, api_key, enforce_json_schema?, max_tokens?} entries. Providers: openrouter, openai, anthropic, deepseek, moonshot, minimax. Overrides legacy single-provider inputs.'
     required: false
   MERGE_STRATEGY:
-    description: 'Strategy to merge N provider verdicts: conservative (any changes wins), majority (ceil(N/2)+1 changes required), all_approve (all must approve). Default: conservative'
+    description: 'DEPRECATED: No-op. This action reviews with a single model; verdict merging no longer applies. Kept for backward compatibility.'
     required: false
-    default: 'conservative'
   OPENROUTER_API_KEY:
     description: 'OpenRouter API key. Prefer passing via step-level env: block for better secret hygiene. Legacy single-provider input; use PROVIDERS for multi-provider configurations.'
     required: false
@@ -30,7 +29,6 @@ inputs:
   FALLBACK_MODEL:
     description: 'DEPRECATED: Dropped in multi-provider mode. Use PROVIDERS array to configure multiple models.'
     required: false
-    default: 'anthropic/claude-sonnet-4-5'
   MAX_TOKENS:
     description: 'Max completion tokens per request. Always sent — omitting it makes OpenRouter reserve the model''s full output capacity against your credit budget'
     required: false
@@ -38,7 +36,6 @@ inputs:
   REVIEW_MODE:
     description: 'DEPRECATED: No-op. Previously parallel=single vs parallel=multi-dimension; multi-provider ensemble review replaces this. Kept for backward compatibility.'
     required: false
-    default: 'parallel'
   MIN_CONFIDENCE:
     description: 'Drop findings below this confidence unless severity is blocker/high. One of: high, medium'
     required: false
@@ -198,7 +195,7 @@ runs:
     - name: Upload SARIF to Code Scanning
       if: ${{ always() }}
       continue-on-error: true   # fork PRs / missing `security-events: write` → skip; the review still runs
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@v4
       with:
         sarif_file: ${{ runner.temp }}
     - name: AI review (LLM judgment — triages the deterministic findings)
