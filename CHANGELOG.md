@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.1.0](https://github.com/Falconiere/toolu-ghactions/compare/v3.0.0...v3.1.0) (2026-06-19)
+
+
+### Features
+
+* **code-review:** chunk large diffs so the LLM review survives big PRs ([91fe01b](https://github.com/Falconiere/toolu-ghactions/commit/91fe01b18e39c5eb3ffc400685fdc6c11239c7f1))
+
 ## [3.0.0](https://github.com/Falconiere/toolu-ghactions/compare/v2.3.3...v3.0.0) (2026-06-19)
 
 
