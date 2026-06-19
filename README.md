@@ -107,8 +107,8 @@ Each action is listed on the GitHub Marketplace from its own mirror repo — [`t
 ```
 .
 ├── code-review/            # AI code review action (TypeScript, node24 JS action)
-│   ├── action.yml          # runs: node24 · main: dist/index.js
-│   ├── dist/index.js       # Bundled entrypoint (committed; built by build.mjs)
+│   ├── action.yml          # runs: node24 · main: dist/index.cjs
+│   ├── dist/index.cjs       # Bundled entrypoint (committed; built by build.mjs)
 │   ├── src/                # main → inputs → git/ → rules → prompt → llm/ → review/ → github/
 │   ├── prompts/            # Default review checklist
 │   └── __tests__/          # vitest suite (real recorded fixtures, no mocks)
@@ -131,7 +131,7 @@ cd code-review
 npm ci
 npx tsc --noEmit        # type-check
 npx vitest run          # tests (real recorded fixtures, no mocks)
-node build.mjs          # bundle src/ → dist/index.js (commit the result)
+node build.mjs          # bundle src/ → dist/index.cjs (commit the result)
 ```
 
 `cloudflare-tunnel` (and the shared `scripts/`) is still bash — test and lint it with bats + shellcheck:
@@ -161,7 +161,7 @@ Pin `@v2` for the floating major (**recommended**), or `@v2.0.0` for exact semve
 
 > **v2 — `code-review` is now a TypeScript JS action.** The reviewer was rewritten
 > from a Dockerized bash action into a bundled node24 JavaScript action
-> (`runs: node24`, `main: dist/index.js`). This is a **breaking packaging change**
+> (`runs: node24`, `main: dist/index.cjs`). This is a **breaking packaging change**
 > with **no contract change** — every `action.yml` input and output name and
 > default is preserved, so existing `@v2` workflows keep working untouched. The
 > practical win: because consumers run the checked-out ref directly (no Docker

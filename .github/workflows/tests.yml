@@ -29,7 +29,7 @@ jobs:
       - name: Build dist
         run: bun run build
       - name: dist is in sync with src
-        # The committed dist/index.js must match a fresh build — consumers run the
+        # The committed dist/index.cjs must match a fresh build — consumers run the
         # checked-in bundle, not the TS sources. Fail if `bun run build` produced
         # any change.
         run: git diff --quiet -- dist
@@ -37,7 +37,7 @@ jobs:
         # Dependency-free assertion (no @action-validator — it rejects node24).
         run: |
           grep -qF "using: 'node24'" action.yml
-          grep -qF "main: 'dist/index.js'" action.yml
+          grep -qF "main: 'dist/index.cjs'" action.yml
           ! grep -qF '6 AI vendors' action.yml
 
   scripts:

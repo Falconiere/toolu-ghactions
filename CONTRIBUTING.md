@@ -15,7 +15,7 @@ Use the same convention in PR titles — the squash-merge commit drives the rele
 
 ## Development
 
-`code-review/` is a TypeScript [node24 JS action](https://docs.github.com/actions). The dev loop runs on [bun](https://bun.sh) (≥ 1.3.14); the shipped `dist/index.js` is bundled with esbuild and the tests run on vitest.
+`code-review/` is a TypeScript [node24 JS action](https://docs.github.com/actions). The dev loop runs on [bun](https://bun.sh) (≥ 1.3.14); the shipped `dist/index.cjs` is bundled with esbuild and the tests run on vitest.
 
 ```bash
 cd code-review
@@ -29,7 +29,7 @@ bun run lint:fix       # oxlint --fix (autofixable issues)
 bun run fmt            # oxfmt — format the tree
 bun run fmt:check      # oxfmt --check — verify formatting
 bun run test           # vitest run
-bun run build          # esbuild → dist/index.js (commit the result; CI fails if it drifts from src)
+bun run build          # esbuild → dist/index.cjs (commit the result; CI fails if it drifts from src)
 ```
 
 [lefthook](https://lefthook.dev) git hooks (installed by `bun install`): **pre-commit** runs `oxlint --fix` + `oxfmt` on staged `.ts`; **pre-push** runs the full type-aware lint, typecheck, and a dist-sync build check.

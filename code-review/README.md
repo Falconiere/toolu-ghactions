@@ -418,7 +418,7 @@ Use outputs in downstream workflow steps:
 
 ## Packaging (v2)
 
-v2 is a **TypeScript node24 JavaScript action** — `runs: node24`, `main: dist/index.js`,
+v2 is a **TypeScript node24 JavaScript action** — `runs: node24`, `main: dist/index.cjs`,
 a `dist/` bundle committed to the repo. It was rewritten from the previous
 Dockerized bash action; there is **no Docker image** anymore.
 
@@ -434,13 +434,13 @@ Dockerized bash action; there is **no Docker image** anymore.
 
 ## Development
 
-TypeScript bundled to `dist/index.js`; the dev loop runs on [bun](https://bun.sh). See [CONTRIBUTING](../CONTRIBUTING.md) for the full guide.
+TypeScript bundled to `dist/index.cjs`; the dev loop runs on [bun](https://bun.sh). See [CONTRIBUTING](../CONTRIBUTING.md) for the full guide.
 
 ```bash
 cd code-review
 bun install        # deps + git hooks (lefthook)
 bun run check      # typecheck + lint (oxlint, type-aware) + fmt:check (oxfmt) + test (vitest)
-bun run build      # esbuild → dist/index.js (commit it; CI fails if it drifts from src)
+bun run build      # esbuild → dist/index.cjs (commit it; CI fails if it drifts from src)
 ```
 
 ## License
