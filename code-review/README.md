@@ -432,6 +432,17 @@ Dockerized bash action; there is **no Docker image** anymore.
   of one model via OpenRouter + the Vercel AI SDK; `PROVIDERS`, `MERGE_STRATEGY`,
   and `ENFORCE_JSON_SCHEMA` are now [deprecated no-ops](#deprecated-inputs-no-ops-kept-for-back-compat).
 
+## Development
+
+TypeScript bundled to `dist/index.js`; the dev loop runs on [bun](https://bun.sh). See [CONTRIBUTING](../CONTRIBUTING.md) for the full guide.
+
+```bash
+cd code-review
+bun install        # deps + git hooks (lefthook)
+bun run check      # typecheck + lint (oxlint, type-aware) + fmt:check (oxfmt) + test (vitest)
+bun run build      # esbuild → dist/index.js (commit it; CI fails if it drifts from src)
+```
+
 ## License
 
 MIT — see [LICENSE](../LICENSE).
