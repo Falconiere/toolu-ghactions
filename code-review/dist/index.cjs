@@ -36768,7 +36768,8 @@ var Verdict = external_exports.object({
 });
 
 // src/llm/openrouter.ts
-var REQUEST_TIMEOUT_MS = 18e4;
+var REQUEST_TIMEOUT_MS = 6e4;
+var MAX_ATTEMPTS = 3;
 var EXTRA_BODY = {
   // Disable reasoning so the model spends max_tokens on the answer, not hidden
   // thinking. "none" is not in the SDK's typed reasoning effort union, so it
@@ -36784,37 +36785,49 @@ async function reviewWithModel(envelope, opts) {
     ...opts.fetch ? { fetch: opts.fetch } : {},
     extraBody: EXTRA_BODY
   });
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? REQUEST_TIMEOUT_MS);
-  timeout.unref?.();
-  try {
-    const { object: object2 } = await generateObject({
-      model: provider(opts.model),
-      schema: Verdict,
-      // JSON mode (not the SDK default "tool" mode): the bash reads the verdict
-      // from .choices[0].message.content via response_format, NOT from a tool
-      // call. "json" sends response_format and parses message.content, matching
-      // the deployed wire contract and the recorded fixtures.
-      mode: "json",
-      system: envelope.system,
-      prompt: envelope.user,
-      temperature: 0,
-      maxTokens: envelope.max_tokens,
-      maxRetries: opts.maxRetries ?? 2,
-      abortSignal: controller.signal
-    });
-    return {
-      verdict: object2.verdict,
-      findings: object2.findings,
-      review_plan: object2.review_plan,
-      other_checks: object2.other_checks,
-      top_must_fix: object2.top_must_fix
-    };
-  } catch (err) {
-    return abstain(err);
-  } finally {
-    clearTimeout(timeout);
+  const perAttemptMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const maxAttempts = opts.maxAttempts ?? MAX_ATTEMPTS;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), perAttemptMs);
+    timeout.unref?.();
+    try {
+      const { object: object2 } = await generateObject({
+        model: provider(opts.model),
+        schema: Verdict,
+        // JSON mode (not the SDK default "tool" mode): the bash reads the verdict
+        // from .choices[0].message.content via response_format, NOT from a tool
+        // call. "json" sends response_format and parses message.content, matching
+        // the deployed wire contract and the recorded fixtures.
+        mode: "json",
+        system: envelope.system,
+        prompt: envelope.user,
+        temperature: 0,
+        maxTokens: envelope.max_tokens,
+        maxRetries: opts.maxRetries ?? 2,
+        abortSignal: controller.signal
+      });
+      return {
+        verdict: object2.verdict,
+        findings: object2.findings,
+        review_plan: object2.review_plan,
+        other_checks: object2.other_checks,
+        top_must_fix: object2.top_must_fix
+      };
+    } catch (err) {
+      if (controller.signal.aborted && attempt < maxAttempts) {
+        await new Promise((resolve) => {
+          const backoff = setTimeout(resolve, 300 * attempt);
+          backoff.unref?.();
+        });
+        continue;
+      }
+      return abstain(err);
+    } finally {
+      clearTimeout(timeout);
+    }
   }
+  return abstain(new Error("OpenRouter request failed"));
 }
 function abstain(err) {
   const result = {
