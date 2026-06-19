@@ -28309,6 +28309,8 @@ function readInputs() {
     rulesMaxBytes: intInput("RULES_MAX_BYTES", 32768),
     maxFiles: intInput("MAX_FILES", 0),
     maxDiffLines: intInput("MAX_DIFF_LINES", 0),
+    maxChunkLines: intInput("MAX_CHUNK_LINES", 1500),
+    maxChunks: intInput("MAX_CHUNKS", 20),
     token: core.getInput("TOKEN") || (process.env["GITHUB_TOKEN"] ?? ""),
     appId: core.getInput("APP_ID").trim(),
     appPrivateKey: core.getInput("APP_PRIVATE_KEY"),
@@ -36826,6 +36828,189 @@ function abstain(err) {
   return result;
 }
 
+// src/git/chunk.ts
+function splitDiffByFile(shapedDiff) {
+  if (shapedDiff === "") return [];
+  const pieces = shapedDiff.split(/(?=^diff --git )/m).filter((p) => p.startsWith("diff --git "));
+  return pieces.map((diff) => ({ path: parsePath(diff), diff, lines: countLines(diff) }));
+}
+function packChunks(segments, maxLines, maxChunks) {
+  const sorted = [...segments].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  const chunks = [];
+  let current = [];
+  let currentLines = 0;
+  for (const seg of sorted) {
+    if (current.length > 0 && currentLines + seg.lines > maxLines) {
+      chunks.push(current);
+      current = [];
+      currentLines = 0;
+    }
+    current.push(seg);
+    currentLines += seg.lines;
+  }
+  if (current.length > 0) chunks.push(current);
+  if (maxChunks > 0 && chunks.length > maxChunks) {
+    return { chunks: chunks.slice(0, maxChunks), dropped: chunks.slice(maxChunks).flat() };
+  }
+  return { chunks, dropped: [] };
+}
+function parsePath(segment) {
+  const plus = headerPath(segment, /^\+\+\+ (.+)$/m);
+  if (plus !== void 0 && plus !== "/dev/null") return stripSide(plus);
+  const minus = headerPath(segment, /^--- (.+)$/m);
+  if (minus !== void 0 && minus !== "/dev/null") return stripSide(minus);
+  return "";
+}
+function headerPath(segment, re2) {
+  const raw = segment.match(re2)?.[1];
+  return raw === void 0 ? void 0 : raw.split("	")[0] ?? raw;
+}
+function stripSide(raw) {
+  const v = unquoteCPath(raw);
+  return v.startsWith("a/") || v.startsWith("b/") ? v.slice(2) : v;
+}
+var NAMED_ESCAPE = {
+  '"': 34,
+  "\\": 92,
+  t: 9,
+  n: 10,
+  r: 13,
+  b: 8,
+  f: 12,
+  a: 7,
+  v: 11
+};
+function unquoteCPath(path) {
+  if (!(path.length >= 2 && path.startsWith('"') && path.endsWith('"'))) return path;
+  const inner = path.slice(1, -1);
+  const bytes = [];
+  for (let i = 0; i < inner.length; i++) {
+    const code = inner.charCodeAt(i);
+    if (code !== 92) {
+      bytes.push(code);
+      continue;
+    }
+    const next = inner[i + 1];
+    if (next === void 0) break;
+    if (next >= "0" && next <= "7") {
+      bytes.push(parseInt(inner.slice(i + 1, i + 4), 8));
+      i += 3;
+      continue;
+    }
+    bytes.push(NAMED_ESCAPE[next] ?? next.charCodeAt(0));
+    i += 1;
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
+// src/concurrency.ts
+async function mapWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  const max = Math.max(1, Math.floor(limit));
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      const item = items[index];
+      if (item === void 0) continue;
+      results[index] = await fn(item, index);
+    }
+  };
+  const count = Math.min(max, items.length);
+  await Promise.all(Array.from({ length: count }, () => worker()));
+  return results;
+}
+
+// src/llm/merge.ts
+var TOP_MUST_FIX_CAP = 10;
+function mergeResults(results) {
+  if (results.length === 0) {
+    return { verdict: "error", findings: [], error: "no chunks reviewed" };
+  }
+  const errored = results.filter((r) => r.verdict === "error");
+  const succeeded = results.filter((r) => r.verdict !== "error");
+  const verdict = succeeded.length === 0 ? "error" : succeeded.some((r) => r.verdict === "changes") ? "changes" : "approved";
+  const merged = {
+    verdict,
+    findings: results.flatMap((r) => r.findings),
+    review_plan: joinNonEmpty(results.map((r) => r.review_plan)),
+    other_checks: joinNonEmpty(results.map((r) => r.other_checks)),
+    top_must_fix: capUnion(results.flatMap((r) => r.top_must_fix ?? []))
+  };
+  if (errored.length > 0) {
+    const first = errored[0];
+    merged.error = `${errored.length}/${results.length} chunks failed: ${first.error ?? "unknown error"}`;
+    if (first.finishReason !== void 0) merged.finishReason = first.finishReason;
+  }
+  return merged;
+}
+function joinNonEmpty(parts) {
+  return parts.filter((p) => p !== void 0 && p !== "").join("\n\n");
+}
+function capUnion(items) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const item of items) {
+    if (item === "" || seen.has(item)) continue;
+    seen.add(item);
+    out.push(item);
+    if (out.length >= TOP_MUST_FIX_CAP) break;
+  }
+  return out;
+}
+
+// src/review/chunked.ts
+var CHUNK_CONCURRENCY = 4;
+async function reviewChunked(opts) {
+  const { diff, maxChunkLines, maxChunks, mechanical, buildEnvelope, review } = opts;
+  if (maxChunkLines <= 0 || countLines(diff.diff) <= maxChunkLines) {
+    return review(buildEnvelope(diff, mechanical));
+  }
+  const { chunks, dropped } = packChunks(splitDiffByFile(diff.diff), maxChunkLines, maxChunks);
+  if (chunks.length === 0) return review(buildEnvelope(diff, mechanical));
+  const partitions = partitionMechanical(mechanical, chunks);
+  const results = await mapWithConcurrency(
+    chunks,
+    CHUNK_CONCURRENCY,
+    (chunk, i) => review(buildEnvelope(chunkDiffData(diff, chunk), partitions[i] ?? []))
+  );
+  const merged = mergeResults(results);
+  if (dropped.length > 0) {
+    merged.other_checks = appendDroppedNotice(merged.other_checks, dropped, maxChunks);
+  }
+  return merged;
+}
+function chunkDiffData(diff, chunk) {
+  return {
+    ...diff,
+    diff: chunk.map((s) => s.diff).join(""),
+    changed_files: chunk.map((s) => s.path),
+    total_lines: chunk.reduce((n, s) => n + s.lines, 0),
+    // total_files stays global so the model knows it is seeing a slice; binary_files,
+    // dropped_files, base_sha, and files are inherited (buildPrompt ignores files).
+    truncated: false
+  };
+}
+function partitionMechanical(mechanical, chunks) {
+  const chunkOf = /* @__PURE__ */ new Map();
+  chunks.forEach((chunk, i) => {
+    for (const seg of chunk) chunkOf.set(seg.path, i);
+  });
+  const partitions = chunks.map(() => []);
+  for (const finding of mechanical) {
+    partitions[chunkOf.get(finding.path) ?? 0]?.push(finding);
+  }
+  return partitions;
+}
+function appendDroppedNotice(otherChecks, dropped, maxChunks) {
+  const names = dropped.map((s) => s.path).filter((p) => p !== "");
+  const list = names.length > 0 ? `: ${names.join(", ")}` : "";
+  const notice = `\u26A0\uFE0F ${dropped.length} file(s) were not reviewed \u2014 chunk limit (MAX_CHUNKS=${maxChunks}) reached${list}.`;
+  return otherChecks !== void 0 && otherChecks !== "" ? `${otherChecks}
+
+${notice}` : notice;
+}
+
 // src/review/render.ts
 var SEVERITY_RANK = {
   blocker: 0,
@@ -37619,22 +37804,28 @@ async function runReview(deps) {
     cwd
   });
   const mechanical = gatherMechanical(deps.sarifDir);
-  const envelope = buildPrompt({
+  const result = await reviewChunked({
     diff,
-    checklistPath: resolveChecklistPath(),
-    maxTokens: inputs.maxTokens,
-    enforceJsonSchema: inputs.enforceJsonSchema,
-    reviewPromptFile: inputs.reviewPromptFile,
-    codebaseOverview: inputs.codebaseOverview,
-    reviewInstruction: event.instruction ?? "",
-    projectRules,
-    githubWorkspace: cwd,
-    mechanicalFindings: mechanical
-  });
-  const result = await reviewWithModel(envelope, {
-    model: inputs.model,
-    apiKey: inputs.apiKey,
-    ...deps.fetch ? { fetch: deps.fetch } : {}
+    maxChunkLines: inputs.maxChunkLines,
+    maxChunks: inputs.maxChunks,
+    mechanical,
+    buildEnvelope: (subDiff, chunkMechanical) => buildPrompt({
+      diff: subDiff,
+      checklistPath: resolveChecklistPath(),
+      maxTokens: inputs.maxTokens,
+      enforceJsonSchema: inputs.enforceJsonSchema,
+      reviewPromptFile: inputs.reviewPromptFile,
+      codebaseOverview: inputs.codebaseOverview,
+      reviewInstruction: event.instruction ?? "",
+      projectRules,
+      githubWorkspace: cwd,
+      mechanicalFindings: chunkMechanical
+    }),
+    review: (envelope) => reviewWithModel(envelope, {
+      model: inputs.model,
+      apiKey: inputs.apiKey,
+      ...deps.fetch ? { fetch: deps.fetch } : {}
+    })
   });
   const changedLinesByPath = new Map(
     diff.files.map((f) => [f.path, f.changed_lines])
