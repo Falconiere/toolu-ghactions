@@ -5,35 +5,48 @@ on:
   pull_request:
 
 jobs:
-  test:
-    name: bats
+  code-review:
+    name: code-review
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: code-review
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Unit tests
+        run: npx vitest run
+      - name: Build dist
+        run: node build.mjs
+      - name: dist is in sync with src
+        # The committed dist/index.js must match a fresh build — consumers run the
+        # checked-in bundle, not the TS sources. Fail if `node build.mjs` produced
+        # any change.
+        run: git diff --quiet -- dist
+      - name: action.yml is a node24 JS action
+        # Dependency-free assertion (no @action-validator — it rejects node24).
+        run: |
+          grep -qF "using: 'node24'" action.yml
+          grep -qF "main: 'dist/index.js'" action.yml
+          ! grep -qF '6 AI vendors' action.yml
+
+  scripts:
+    name: scripts
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install bats + jq
         run: sudo apt-get update && sudo apt-get install -y bats jq
-      - name: Run test suite
-        run: bats code-review/__tests__/*.bats scripts/__tests__/*.bats
-
-  lint:
-    name: shellcheck + action-validator
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+      - name: bats
+        run: bats scripts/__tests__/*.bats
       - name: shellcheck
-        run: shellcheck --severity=warning code-review/src/*.sh scripts/*.sh
-      - name: action-validator
-        run: npx --yes @action-validator/cli code-review/action.yml
-
-  build:
-    name: docker build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build the action image
-        # Build context is code-review/ — the Dockerfile COPYs src/ and prompts/
-        # relative to it (this is also how GitHub builds the action).
-        run: docker build -t code-review-action:test code-review/
+        run: shellcheck --severity=warning scripts/*.sh
 
   tunnel-test:
     name: tunnel bats (${{ matrix.os }})

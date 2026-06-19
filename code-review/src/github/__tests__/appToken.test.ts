@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 // REAL RSA key (generated per run, never committed) + the REAL recorded
 // installation payload — no fabricated GitHub data, no network. The auth/octokit
 // factories are injected and assert the args the mint issues them with.
-const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "__tests__", "fixtures", "app");
+const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "app");
 
 /** A real PEM, freshly generated so we exercise the actual PKCS#8 parse path. */
 function realPem(): string {

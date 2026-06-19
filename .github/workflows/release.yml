@@ -74,63 +74,6 @@ jobs:
           echo "tag=$tag"     >> "$GITHUB_OUTPUT"
           echo "major=$major" >> "$GITHUB_OUTPUT"
 
-  publish-image:
-    name: Build & push ${{ matrix.action }} image to GHCR
-    needs: [version]
-    # !cancelled() is required: `version` transitively depends on the
-    # release-please job, which is SKIPPED on the release event. Without
-    # !cancelled(), GitHub propagates that skip and skips this job too, even
-    # though `version` itself succeeded. !cancelled() forces the if to evaluate;
-    # the result check then gates on version actually having succeeded.
-    if: ${{ !cancelled() && needs.version.result == 'success' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    strategy:
-      # Only code-review ships a Docker image. cloudflare-tunnel is a composite
-      # action (runs cloudflared on the runner host) — there is no image to
-      # publish for it.
-      fail-fast: false
-      matrix:
-        action: [code-review]
-    env:
-      REGISTRY: ghcr.io
-      IMAGE: ghcr.io/${{ github.repository_owner }}/toolu-ghactions/${{ matrix.action }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE }}
-          tags: |
-            type=raw,value=${{ needs.version.outputs.tag }}
-            type=raw,value=v${{ needs.version.outputs.major }}
-            type=raw,value=latest
-
-      - name: Build & push
-        uses: docker/build-push-action@v6
-        with:
-          context: ./${{ matrix.action }}
-          file: ./${{ matrix.action }}/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
   move-major-alias:
     name: Move v<major> alias
     needs: [version]
@@ -165,12 +108,11 @@ jobs:
 
   mirror:
     name: Mirror ${{ matrix.action }} to publish repo
-    needs: [version, publish-image]
-    # Wait on publish-image so a mirror tag never references a :v<major> image
-    # that has not been pushed yet. !cancelled() forces the if to evaluate even
-    # though `version`'s ancestor release-please is skipped on the release event;
-    # the result checks then gate on both jobs actually succeeding.
-    if: ${{ !cancelled() && needs.version.result == 'success' && needs.publish-image.result == 'success' }}
+    needs: [version]
+    # !cancelled() forces the if to evaluate even though `version`'s ancestor
+    # release-please is SKIPPED on the release event; the result check then gates
+    # on `version` actually having succeeded.
+    if: ${{ !cancelled() && needs.version.result == 'success' }}
     runs-on: ubuntu-latest
     # Job-level env can read `secrets`; a step `if:` cannot. This lets the job
     # skip cleanly until RELEASE_TOOLU_ACTIONS_TOKEN + the mirror repos exist, instead
@@ -205,7 +147,3 @@ jobs:
           MIRROR_TOKEN: ${{ secrets.RELEASE_TOOLU_ACTIONS_TOKEN }}
           SOURCE_REPO: ${{ github.repository }}
           SOURCE_SHA: ${{ github.sha }}
-          # Lowercase owner: GHCR image refs must be lowercase, but
-          # github.repository_owner preserves case (Falconiere) and a
-          # `docker://` ref with uppercase fails `docker pull`.
-          IMAGE_BASE: ghcr.io/falconiere/toolu-ghactions/code-review

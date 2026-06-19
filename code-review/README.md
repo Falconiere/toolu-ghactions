@@ -2,15 +2,15 @@
 
 # 🔍 code-review
 
-### Multi-vendor AI code review for every pull request
+### AI code review for every pull request
 
-Audits the diff against an 8-dimension checklist — correctness, security, performance, test coverage, doc accuracy, tight assertions, migration warnings, and adherence to the project's own convention files — using **one model or an ensemble of up to 6 vendors** (OpenRouter, OpenAI, Anthropic, DeepSeek, Moonshot, MiniMax) voting in parallel. Merges the verdicts and posts a structured, machine-readable comment with inline, committable suggestions.
+Audits the diff against an 8-dimension checklist — correctness, security, performance, test coverage, doc accuracy, tight assertions, migration warnings, and adherence to the project's own convention files — by running **one model through [OpenRouter](https://openrouter.ai)** (any OpenAI-compatible model id) via the **[Vercel AI SDK](https://sdk.vercel.ai)** (`generateObject` + Zod: structured output with retries, reasoning disabled). Posts a structured, machine-readable comment with inline, committable suggestions.
 
 [![Release](https://img.shields.io/github/v/release/Falconiere/toolu-ghactions?sort=semver&color=d97757)](https://github.com/Falconiere/toolu-ghactions/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](../LICENSE)
-[![Tests](https://img.shields.io/badge/tests-119%20passing-3fb950)](https://github.com/Falconiere/toolu-ghactions/actions/workflows/tests.yml)
+[![Tests](https://img.shields.io/badge/tests-vitest-3fb950)](https://github.com/Falconiere/toolu-ghactions/actions/workflows/tests.yml)
 
-[Quick start](#quick-start) · [Multiple providers](#multiple-providers) · [How it works](#how-it-works) · [Example verdict](#example-verdict) · [Custom identity](#custom-identity-github-app) · [@mention re-trigger](#mention-re-trigger) · [Review memory](#review-memory) · [Inputs](#inputs) · [Outputs](#outputs)
+[Quick start](#quick-start) · [Choosing a model](#choosing-a-model) · [How it works](#how-it-works) · [Example verdict](#example-verdict) · [Custom identity](#custom-identity-github-app) · [@mention re-trigger](#mention-re-trigger) · [Review memory](#review-memory) · [Inputs](#inputs) · [Outputs](#outputs)
 
 </div>
 
@@ -62,96 +62,82 @@ Use `MODEL` to switch models and `REVIEW_PROMPT_FILE` for a custom checklist:
           REVIEW_PROMPT_FILE: '.github/review-prompt.md'
 ```
 
-On every PR push, the action fetches the diff, sends it to the configured model(s), and posts a verdict comment directly on the PR.
+On every PR push, the action shapes the diff, sends it to the configured model, and posts a verdict comment directly on the PR.
 
-## Multiple providers
+## Choosing a model
 
-Use the `PROVIDERS` input to run multiple AI vendors in parallel — an ensemble
-review that merges N independent verdicts into one. Each provider gets its own
-model + API key:
-
-```yaml
-- uses: falconiere/toolu-ghactions/code-review@v2
-  with:
-    PROVIDERS: |
-      [
-        {"provider": "openrouter", "model": "deepseek/deepseek-v4-flash", "api_key": "${{ secrets.OPENROUTER_API_KEY }}"},
-        {"provider": "anthropic",  "model": "claude-sonnet-4-5", "api_key": "${{ secrets.ANTHROPIC_API_KEY }}"},
-        {"provider": "openai",     "model": "gpt-4o",             "api_key": "${{ secrets.OPENAI_API_KEY }}"}
-      ]
-    MERGE_STRATEGY: conservative
-```
-
-`providers` is a JSON array. Each entry:
-- `provider` (required): `openrouter | openai | anthropic | deepseek | moonshot | minimax`
-- `model` (required): vendor model id
-- `api_key` (required): API key (use `${{ secrets.X }}` — masked in CI logs)
-- `enforce_json_schema` (optional, default `true`): request strict JSON output
-- `max_tokens` (optional, default `4096`): per-provider response budget
-
-### Merge strategies
-
-`merge_strategy` controls how N verdicts become one:
-
-| Strategy | Rule |
-|---|---|
-| `conservative` (default) | Any provider says `changes` → overall `changes`. Safest for CI. |
-| `majority` | More than half of the `D` deciding providers (`floor(D/2)+1`) must say `changes`. |
-| `all_approve` | All deciding providers must say `approved`. |
-
-Errored providers (crash, rate-limit, bad response) **abstain** — the verdict is
-computed only over providers that returned a real opinion, so one flaky provider
-never forces a `changes` verdict on its own. If **every** provider errors (or
-none is configured), the verdict is `error`, rendered as "🚫 Review incomplete —
-provider error" and carrying the `agent-request-changes` label so a failed
-review never auto-merges.
-
-Provider findings are deduplicated across providers by
-`(path, line, end_line, text-fingerprint)` and the highest severity wins.
-
-### Legacy single-provider (back-compat)
-
-The legacy `OPENROUTER_API_KEY` + `MODEL` inputs still work — they're
-auto-translated to a single-provider `PROVIDERS` list:
+The action runs **one model**, resolved through OpenRouter. Set the key and
+(optionally) the model id; anything OpenRouter serves works as long as it's
+OpenAI-compatible:
 
 ```yaml
 - uses: falconiere/toolu-ghactions/code-review@v2
   with:
     OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-    MODEL: 'deepseek/deepseek-v4-flash'
+    MODEL: 'anthropic/claude-sonnet-4-5'   # default: deepseek/deepseek-v4-flash
+    MAX_TOKENS: '8192'                      # per-request completion budget (default 4096)
 ```
 
-This is identical to the v1.2 behavior and requires no migration.
-`FALLBACK_MODEL` is dropped (multi-provider IS the fallback). `REVIEW_MODE` is
-a no-op (the per-dimension sub-reviewer is replaced by multi-provider dispatch).
+`MODEL` is an OpenRouter model id — `openai/gpt-4o`, `anthropic/claude-sonnet-4-5`,
+`deepseek/deepseek-v4-flash`, `moonshotai/kimi-k2`, and so on. One key, one
+endpoint: OpenRouter fronts every vendor, so switching models is a string change,
+not a new integration.
+
+Under the hood the action calls the model with the [Vercel AI SDK](https://sdk.vercel.ai)'s
+`generateObject` against a Zod verdict schema, so the response is **structured by
+construction** (with automatic retries and schema repair) rather than parsed out
+of free text. Reasoning is disabled to keep the run fast and the token budget on
+the review itself. If the model returns empty or unparseable output after retries,
+the action surfaces an `error` verdict carrying the finish reason — rendered as
+"🚫 Review incomplete" and labeled `agent-request-changes`, so a failed review
+never auto-merges. It never emits a silent null verdict.
+
+### Deprecated inputs (no-ops, kept for back-compat)
+
+Earlier versions ran a parallel multi-vendor ensemble. v2 consolidates on a
+single OpenRouter model, so these inputs are **deprecated no-ops** — still
+accepted (your workflow won't break), but ignored with a warning in the logs:
+
+| Input | Old behavior | Now |
+|---|---|---|
+| `PROVIDERS` | JSON array of `{provider, model, api_key}` for an N-vendor ensemble | Only the **first** entry's `model` (and optional `api_key`/`max_tokens`) is used; the `provider` field is accepted-but-ignored. Extra entries are dropped with a warning. Prefer `OPENROUTER_API_KEY` + `MODEL`. |
+| `MERGE_STRATEGY` | How to merge N verdicts (`conservative` / `majority` / `all_approve`) | No-op — there is one verdict from one model. |
+| `ENFORCE_JSON_SCHEMA` | Toggle strict JSON vs free-text + regex fallback | No-op — `generateObject` is always structured; there is no free-text path. |
+| `FALLBACK_MODEL` | Extra model in the OpenRouter fallback array | No-op. |
+| `REVIEW_MODE` | Per-dimension sub-reviewer toggle | No-op. |
+
+Ensemble review may return later behind the same preserved inputs; for now a
+single model handles the review.
 
 ## How it works
 
-The action runs a fan-out → merge → post pipeline:
+The action runs a shape → review → post pipeline:
 
-**1 — Fetch & shape the diff.** Resolves the merge-base, strips noise (lockfiles,
-minified, generated, source maps, `dist/`/`build/` output, plus anything detected
-as generated by content — a line over 5000 chars or a blob over 1MB), drops
-binaries, and line-primes every diff line with its real source line number so
-findings anchor to actual lines.
-Then gathers the repo's own convention files from the base ref (see
-[Project conventions](#project-conventions)).
+**1 — Shape the diff.** Resolves the merge-base (deepening a shallow checkout if
+needed), strips noise (lockfiles, minified, generated, source maps,
+`dist/`/`build/` output, plus anything detected as generated by content — a line
+over 5000 chars or a blob over 1MB), drops binaries, and line-primes every diff
+line with its real source line number so findings anchor to actual lines.
 
-**2 — Parallel provider reviews.** One review runs per provider in the `providers`
-list. Each provider gets the full 8-dimension checklist (the 8th, convention
-adherence, applies only when project rules were found). Findings are validated
-against the diff per-provider (hallucinated line numbers and low-confidence
-findings are dropped before the cross-provider merge).
+**2 — Gather rules.** Reads the repo's own convention files from the base ref and
+folds them into the prompt (see [Project conventions](#project-conventions)).
 
-**3 — Multi-provider merge.** A deterministic merger combines N verdicts using
-`merge_strategy`. No LLM call — the merger deduplicates findings by
-`(path, line, end_line, text-fingerprint)` and sets the final verdict per the
-configured strategy.
+**3 — Review.** Builds the system + user prompt and calls one OpenRouter model via
+the Vercel AI SDK (`generateObject` + a Zod verdict schema) against the full
+8-dimension checklist (the 8th, convention adherence, applies only when project
+rules were found). Output is structured with automatic retries; reasoning is off.
+An empty or unparseable response after retries surfaces an `error` verdict
+carrying the finish reason — never a silent null.
 
-**4 — Post.** A summary verdict comment (machine-readable label for `pr-babysit`),
-plus — when `INLINE_COMMENTS` is on — per-line review comments derived from the
-merged findings, with committable ` ```suggestion ` blocks via the GitHub Reviews
-API (advisory `COMMENT` event; it never hard-blocks merge).
+**4 — Validate & anchor.** Findings are checked against the diff — hallucinated
+line numbers and low-confidence findings are dropped, findings are deduplicated by
+`(path, line, end_line, text-fingerprint)` keeping the highest severity, and each
+is anchored to a real changed line.
+
+**5 — Post.** A summary verdict comment (machine-readable label for `pr-babysit`),
+plus — when `INLINE_COMMENTS` is on — per-line review comments with committable
+` ```suggestion ` blocks via the GitHub Reviews API (advisory `COMMENT` event; it
+never hard-blocks merge).
 
 ### Project conventions
 
@@ -376,15 +362,10 @@ turn the recap and history off.
 
 | Input | Required | Default | Description |
 |---|---|---|---|
-| `PROVIDERS` | no | — | JSON array of `{provider, model, api_key}` entries. When set, runs one review per provider in parallel. Preferred over the legacy single-provider inputs. |
-| `MERGE_STRATEGY` | no | `conservative` | How to merge N verdicts: `conservative` (any changes wins), `majority`, `all_approve` |
-| `OPENROUTER_API_KEY` | no | — | **Legacy.** OpenRouter API key. Used only when `PROVIDERS` is unset. Auto-translated to a single-provider `PROVIDERS` list. |
-| `MODEL` | no | `deepseek/deepseek-v4-flash` | **Legacy.** OpenRouter model identifier. Used only when `PROVIDERS` is unset and `OPENROUTER_API_KEY` is set. |
-| `FALLBACK_MODEL` | no | *(dropped)* | **Legacy — dropped.** Extra model in the OpenRouter `models[]` fallback array. Multi-provider replaces this. Logs a deprecation hint if set. |
-| `MAX_TOKENS` | no | `4096` | Max completion tokens per request. Default for per-entry `max_tokens` when the entry omits it. |
-| `REVIEW_MODE` | no | *(no-op)* | **Legacy — no-op.** Per-dimension sub-reviewer is removed; multi-provider replaces it. |
+| `OPENROUTER_API_KEY` | no | — | OpenRouter API key. The model runs through OpenRouter. Prefer passing via a step-level `env:` block for secret hygiene. |
+| `MODEL` | no | `deepseek/deepseek-v4-flash` | OpenRouter model id (any OpenAI-compatible model, e.g. `anthropic/claude-sonnet-4-5`, `openai/gpt-4o`). |
+| `MAX_TOKENS` | no | `4096` | Max completion tokens per request. |
 | `MIN_CONFIDENCE` | no | `high` | Drop findings below this confidence unless severity is blocker/high (`high` or `medium`) |
-| `ENFORCE_JSON_SCHEMA` | no | `true` | Use `response_format` json_schema + provider routing; set `false` for free-text + regex fallback |
 | `INLINE_COMMENTS` | no | `true` | Post per-line review comments with committable code suggestions (Reviews API), in addition to the summary comment |
 | `MANAGE_LABELS` | no | `true` | Set a real PR label chip matching the verdict (`agent-merge-approved` / `agent-request-changes`) and remove the opposite one. Requires `issues: write`. |
 | `BASE_BRANCH` | no | `main` | Base branch for diff comparison. Falls back to `GITHUB_BASE_REF` if unset. |
@@ -404,6 +385,18 @@ turn the recap and history off.
 | `BOT_LOGO_URL` | no | `…/code-review/assets/logo.png` | Logo image shown in the comment body header. |
 | `REVIEW_MEMORY` | no | `true` | Recap what changed since the last review (resolved / still-open / new) and keep a collapsed history, using a hidden state marker in the sticky comment. Set `false` to disable. See [Review memory](#review-memory). |
 
+### Deprecated inputs
+
+Still accepted so existing workflows don't break, but ignored (warned in logs). See [Deprecated inputs](#deprecated-inputs-no-ops-kept-for-back-compat).
+
+| Input | Default | Status |
+|---|---|---|
+| `PROVIDERS` | — | **Deprecated.** Only the first entry's `model` (+ optional `api_key` / `max_tokens`) is used; `provider` is accepted-but-ignored; extra entries dropped. Use `OPENROUTER_API_KEY` + `MODEL`. |
+| `MERGE_STRATEGY` | `conservative` | **Deprecated — no-op.** One model means one verdict; nothing to merge. |
+| `ENFORCE_JSON_SCHEMA` | `true` | **Deprecated — no-op.** `generateObject` is always structured; there is no free-text/regex path. |
+| `FALLBACK_MODEL` | `anthropic/claude-sonnet-4-5` | **Deprecated — no-op.** No fallback array; set `MODEL` instead. |
+| `REVIEW_MODE` | `parallel` | **Deprecated — no-op.** The per-dimension sub-reviewer was removed. |
+
 ## Outputs
 
 | Output | Description |
@@ -422,6 +415,22 @@ Use outputs in downstream workflow steps:
 - if: steps.review.outputs.verdict == 'changes'
   run: echo "PR needs work — ${{ steps.review.outputs.findings-count }} findings"
 ```
+
+## Packaging (v2)
+
+v2 is a **TypeScript node24 JavaScript action** — `runs: node24`, `main: dist/index.js`,
+a `dist/` bundle committed to the repo. It was rewritten from the previous
+Dockerized bash action; there is **no Docker image** anymore.
+
+- **Breaking packaging change, no contract change.** Every `action.yml` input and
+  output name and default is preserved, so an existing `@v2` workflow keeps
+  working untouched — only the way the action runs changed.
+- **Fixes land on merge.** Because consumers run the checked-out ref directly
+  (no image to rebuild and re-push to a registry), a fix reaches `@v2` the moment
+  it merges — no release required.
+- **Single OpenRouter model.** The 6-vendor parallel ensemble was dropped in favor
+  of one model via OpenRouter + the Vercel AI SDK; `PROVIDERS`, `MERGE_STRATEGY`,
+  and `ENFORCE_JSON_SCHEMA` are now [deprecated no-ops](#deprecated-inputs-no-ops-kept-for-back-compat).
 
 ## License
 
