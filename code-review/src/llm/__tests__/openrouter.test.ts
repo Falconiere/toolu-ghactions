@@ -59,13 +59,16 @@ describe("reviewWithModel", () => {
     expect(result.finishReason).toBe("length");
   });
 
-  it("aborts a hung provider on the timeout and abstains (verdict error, no hang)", async () => {
-    // FIX 5: a fetch that never resolves on its own — it only settles when the
+  it("aborts every hung attempt and abstains after exhausting the ceiling (verdict error, no hang)", async () => {
+    // A fetch that never resolves on its own — it only settles when the per-attempt
     // AbortController fires (real fetch rejects with an AbortError on signal abort).
-    // A short timeoutMs proves the deadline cuts the hang instead of stalling to
-    // the 6h runner ceiling. No mocks: this is exactly how the real fetch behaves.
-    const hangingFetch: typeof fetch = (_url, init) =>
-      new Promise<Response>((_resolve, reject) => {
+    // EVERY attempt hangs, so with a short timeoutMs and maxAttempts 2 the loop
+    // exhausts its ceiling and still abstains — never throws, never hangs. No mocks:
+    // this is exactly how the real fetch behaves.
+    let calls = 0;
+    const hangingFetch: typeof fetch = (_url, init) => {
+      calls++;
+      return new Promise<Response>((_resolve, reject) => {
         const signal = init?.signal;
         if (signal) {
           signal.addEventListener("abort", () => {
@@ -73,6 +76,7 @@ describe("reviewWithModel", () => {
           });
         }
       });
+    };
 
     const start = Date.now();
     const result = await reviewWithModel(ENVELOPE, {
@@ -80,15 +84,69 @@ describe("reviewWithModel", () => {
       apiKey: "sk-test",
       fetch: hangingFetch,
       maxRetries: 0,
-      timeoutMs: 50,
+      timeoutMs: 20,
+      maxAttempts: 2,
     });
     const elapsed = Date.now() - start;
 
     expect(result.verdict).toBe("error");
     expect(result.findings).toEqual([]);
+    // After exhausting attempts it abstains with the abort message.
     expect(result.error).toBeTruthy();
-    // It returned promptly via the deadline — nowhere near a hang.
+    expect(result.error).toMatch(/abort/i);
+    // Both attempts ran against the hang.
+    expect(calls).toBe(2);
+    // It returned promptly via the per-attempt deadlines — nowhere near a hang.
     expect(elapsed).toBeLessThan(5_000);
+  });
+
+  it("retries a hung attempt and succeeds on the next", async () => {
+    // The first attempt hangs until its per-attempt AbortController fires (real fetch
+    // rejects with an AbortError on signal abort); the SDK never retries an abort, so
+    // the OUTER loop retries it. The second attempt replays a recorded success body.
+    // A tiny timeoutMs cuts the hang fast; maxAttempts 3 gives the retry room. Real
+    // fetch-seam injection only — no generateObject mocks.
+    const success = fixture("success");
+    let calls = 0;
+    const flakyFetch: typeof fetch = (_url, init) => {
+      calls++;
+      if (calls === 1) {
+        return new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (signal) {
+            signal.addEventListener("abort", () => {
+              reject(
+                Object.assign(new Error("The operation was aborted."), { name: "AbortError" }),
+              );
+            });
+          }
+        });
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify(success), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    };
+
+    const result = await reviewWithModel(ENVELOPE, {
+      model: "deepseek/deepseek-v4-flash",
+      apiKey: "sk-test",
+      fetch: flakyFetch,
+      maxRetries: 0,
+      timeoutMs: 20,
+      maxAttempts: 3,
+    });
+
+    // The success verdict from the second attempt comes through — no abstention.
+    expect(result.verdict).not.toBe("error");
+    expect(result.verdict).toBe("changes");
+    expect(result.error).toBeUndefined();
+    expect(Array.isArray(result.findings)).toBe(true);
+    expect(result.review_plan).toContain("Review Plan");
+    // Exactly one hung attempt + one successful retry.
+    expect(calls).toBe(2);
   });
 
   it("abstains on a non-JSON / error HTTP response instead of throwing", async () => {
