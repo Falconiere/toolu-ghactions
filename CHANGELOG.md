@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.3](https://github.com/Falconiere/toolu-ghactions/compare/v2.3.2...v2.3.3) (2026-06-19)
+
+
+### Bug Fixes
+
+* **code-review:** disable reasoning on OpenRouter so reviews don't error ([86cc68a](https://github.com/Falconiere/toolu-ghactions/commit/86cc68a93d4f140be3b2016c40e71d1e386b0e91))
+
 ## [2.3.2](https://github.com/Falconiere/toolu-ghactions/compare/v2.3.1...v2.3.2) (2026-06-18)
 
 
