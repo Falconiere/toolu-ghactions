@@ -28190,7 +28190,7 @@ var ProviderEntrySchema = external_exports.object({
   enforce_json_schema: external_exports.boolean().optional(),
   max_tokens: external_exports.number().optional()
 });
-var DEFAULT_MODEL = "google/gemini-2.5-flash";
+var DEFAULT_MODEL = "openai/gpt-4o-mini";
 var DEFAULT_MAX_TOKENS = 4096;
 function intInput(name17, fallback) {
   const raw = core.getInput(name17).trim();
@@ -37079,7 +37079,9 @@ function formatVerdict(result, opts) {
   const body = {
     verdictLabel: `\`${label}\``,
     verdictBadge: badge,
-    errorDetail: result.error ?? "",
+    // Surface the real error + the model's finish_reason when present, so a parse
+    // failure ("could not parse") is distinguishable from output truncation ("length").
+    errorDetail: result.error !== void 0 && result.error !== "" ? result.error + (result.finishReason ? ` [finish_reason: ${result.finishReason}]` : "") : "",
     header,
     branch: opts.branch ?? "unknown",
     jobUrl: opts.jobUrl ?? "https://github.com",

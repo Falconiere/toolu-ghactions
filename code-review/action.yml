@@ -26,7 +26,7 @@ inputs:
   MODEL:
     description: 'OpenRouter model identifier'
     required: false
-    default: 'google/gemini-2.5-flash'
+    default: 'openai/gpt-4o-mini'
   FALLBACK_MODEL:
     description: 'DEPRECATED: Dropped in multi-provider mode. Use PROVIDERS array to configure multiple models.'
     required: false
@@ -168,17 +168,24 @@ runs:
       if: ${{ inputs.RUN_SECRET_SCAN == 'true' }}
       shell: bash
       run: |
+        # --no-git: scan the checked-out tree, NOT the full history (which re-flags
+        # long-deleted files). --config: allowlist build output / deps (bundled dep
+        # test keys are not real secrets).
         command -v gitleaks >/dev/null \
-          && gitleaks detect --source . --no-banner --report-format sarif \
+          && gitleaks detect --source . --no-git --no-banner \
+               --config "$GITHUB_ACTION_PATH/gitleaks.toml" --report-format sarif \
                --report-path "$RUNNER_TEMP/gitleaks.sarif" --exit-code 0 \
           || true
     - name: SAST (opengrep → SARIF)
       if: ${{ inputs.RUN_SAST == 'true' }}
       shell: bash
       run: |
+        # Exclude build output / deps — they are generated, not reviewed (mirrors the
+        # review's own noise filter), and a bundled dist would otherwise dominate the scan.
         command -v opengrep >/dev/null \
           && opengrep scan --sarif --output "$RUNNER_TEMP/opengrep.sarif" \
-               --config "${{ inputs.SAST_RULES }}" . \
+               --config "${{ inputs.SAST_RULES }}" \
+               --exclude dist --exclude build --exclude node_modules . \
           || true
     - name: Upload SARIF to Code Scanning
       if: ${{ always() }}

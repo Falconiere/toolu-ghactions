@@ -75,7 +75,7 @@ OpenAI-compatible:
 - uses: falconiere/toolu-ghactions/code-review@v2
   with:
     OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-    MODEL: 'anthropic/claude-sonnet-4-5'   # default: deepseek/deepseek-v4-flash
+    MODEL: 'anthropic/claude-sonnet-4-5'   # default: openai/gpt-4o-mini
     MAX_TOKENS: '8192'                      # per-request completion budget (default 4096)
 ```
 
@@ -385,7 +385,7 @@ turn the recap and history off.
 | Input | Required | Default | Description |
 |---|---|---|---|
 | `OPENROUTER_API_KEY` | no | — | OpenRouter API key. The model runs through OpenRouter. Prefer passing via a step-level `env:` block for secret hygiene. |
-| `MODEL` | no | `deepseek/deepseek-v4-flash` | OpenRouter model id (any OpenAI-compatible model, e.g. `anthropic/claude-sonnet-4-5`, `openai/gpt-4o`). |
+| `MODEL` | no | `openai/gpt-4o-mini` | OpenRouter model id (any OpenAI-compatible model, e.g. `anthropic/claude-sonnet-4-5`, `google/gemini-2.5-flash`). Pick one with reliable JSON-schema structured output. |
 | `MAX_TOKENS` | no | `4096` | Max completion tokens per request. |
 | `MIN_CONFIDENCE` | no | `high` | Drop findings below this confidence unless severity is blocker/high (`high` or `medium`) |
 | `INLINE_COMMENTS` | no | `true` | Post per-line review comments with committable code suggestions (Reviews API), in addition to the summary comment |
