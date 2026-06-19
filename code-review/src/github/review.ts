@@ -6,6 +6,7 @@
 // ANY failure (no PR context, unset token, an unanchorable-line 422, etc.) is
 // caught and reported, never thrown. Only findings anchored by a real `line`
 // are posted; a multi-line span uses start_line..line.
+import { errorMessage } from "../errors.js";
 import type { Finding } from "../llm/schema.js";
 
 /** One inline review comment in the Reviews-API request body. */
@@ -112,13 +113,6 @@ export async function postInlineReview(
     });
     return { posted: true, count: comments.length, url: data.html_url };
   } catch (err) {
-    return { posted: false, count: 0, reason: errorMessage(err) };
+    return { posted: false, count: 0, reason: errorMessage(err, "reviews API request failed") };
   }
-}
-
-/** Best-effort error message — never empty, so the caller's log always says something. */
-function errorMessage(err: unknown): string {
-  if (err instanceof Error && err.message) return err.message;
-  const s = String(err);
-  return s && s !== "[object Object]" ? s : "reviews API request failed";
 }

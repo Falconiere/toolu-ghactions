@@ -15,18 +15,12 @@
 // Then dedup by (path|line|end_line|normalized-text) fingerprint, keeping the
 // max severity within each group.
 import type { Finding } from "../llm/schema.js";
+// SEVERITY_RANK is owned by render.ts (single source of truth) — imported here so
+// the dedup's max-severity comparison can never drift from the render ordering.
+import { SEVERITY_RANK } from "./render.js";
 
 /** Confidence floor: "high" keeps high only; "medium" keeps high or medium. */
 export type MinConfidence = "high" | "medium";
-
-/** Severity rank, blocker (worst) → nit (least). Lower number = higher severity. */
-const SEVERITY_RANK: Record<Finding["severity"], number> = {
-  blocker: 0,
-  high: 1,
-  medium: 2,
-  low: 3,
-  nit: 4,
-};
 
 /**
  * Filter and dedup model findings against the diff's changed lines.

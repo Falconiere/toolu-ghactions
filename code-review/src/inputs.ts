@@ -76,6 +76,9 @@ interface ProviderEntry {
 /** Default model — kept in sync with action.yml MODEL default and build_providers_list. */
 const DEFAULT_MODEL = "deepseek/deepseek-v4-flash";
 
+/** Default completion-token budget — kept in sync with action.yml MAX_TOKENS default. */
+const DEFAULT_MAX_TOKENS = 4096;
+
 /**
  * Parse a string input as a base-10 integer, falling back to `fallback` for an
  * empty or non-numeric value (mirrors the bash `${VAR:-default}` + arithmetic).
@@ -85,6 +88,21 @@ function intInput(name: string, fallback: number): number {
   if (raw === "") return fallback;
   const n = Number.parseInt(raw, 10);
   return Number.isFinite(n) ? n : fallback;
+}
+
+/**
+ * Validate a completion-token budget: a non-positive value (≤0) is a config typo
+ * that would force an OpenRouter 400 → silent abstain, so it falls back to
+ * {@link DEFAULT_MAX_TOKENS} with a `core.warning` instead of being forwarded.
+ * Unlike MAX_FILES/MAX_DIFF_LINES, 0 is NOT "unlimited" here — the budget must be
+ * positive. `source` names where the bad value came from for the warning text.
+ */
+function validateTokenBudget(value: number, source: string): number {
+  if (Number.isFinite(value) && value > 0) return value;
+  core.warning(
+    `${source}=${value} is not a positive token budget; falling back to ${DEFAULT_MAX_TOKENS}.`,
+  );
+  return DEFAULT_MAX_TOKENS;
 }
 
 /** Read MIN_CONFIDENCE, defaulting to "high"; only "medium" relaxes the floor. */
@@ -143,11 +161,17 @@ function resolveProvider(
       );
     }
     const first = providers[0] ?? {};
+    // A non-positive PROVIDERS[0].max_tokens (e.g. a `max_tokens: 0` typo) would
+    // 400 the request → silent abstain; clamp it to the default with a warning.
+    const providerMaxTokens =
+      typeof first.max_tokens === "number"
+        ? validateTokenBudget(first.max_tokens, "PROVIDERS[0].max_tokens")
+        : legacyMaxTokens;
     return {
       model: first.model && first.model !== "" ? first.model : DEFAULT_MODEL,
       apiKey: first.api_key ?? "",
       enforceJsonSchema: first.enforce_json_schema ?? true,
-      maxTokens: typeof first.max_tokens === "number" ? first.max_tokens : legacyMaxTokens,
+      maxTokens: providerMaxTokens,
     };
   }
 
@@ -192,7 +216,9 @@ export function readInputs(): ActionInputs {
     core.getInput("OPENROUTER_API_KEY").trim() || (process.env["OPENROUTER_API_KEY"] ?? "").trim();
   const legacyModel = core.getInput("MODEL").trim();
   const legacyEnforce = readBool("ENFORCE_JSON_SCHEMA", true);
-  const legacyMaxTokens = intInput("MAX_TOKENS", 4096);
+  // MAX_TOKENS must be a positive budget; MAX_TOKENS="0"/"-1" is a typo that would
+  // 400 → silent abstain, so clamp it to the default with a warning (FIX 8).
+  const legacyMaxTokens = validateTokenBudget(intInput("MAX_TOKENS", DEFAULT_MAX_TOKENS), "MAX_TOKENS");
 
   const providers = parseProviders(core.getInput("PROVIDERS"));
   const effective = resolveProvider(providers, legacyKey, legacyModel, legacyEnforce, legacyMaxTokens);
@@ -208,8 +234,11 @@ export function readInputs(): ActionInputs {
     inlineComments: readBool("INLINE_COMMENTS", true),
     manageLabels: readBool("MANAGE_LABELS", true),
     baseBranch: core.getInput("BASE_BRANCH").trim() || "main",
-    reviewPromptFile: core.getInput("REVIEW_PROMPT_FILE"),
-    codebaseOverview: core.getInput("CODEBASE_OVERVIEW"),
+    // Trim both: prompt.ts treats only "" as "use default", so an untrimmed
+    // whitespace/newline value (a YAML block scalar) would become a bogus prompt
+    // path → readFileSync ENOENT crash. Every other string input here is trimmed.
+    reviewPromptFile: core.getInput("REVIEW_PROMPT_FILE").trim(),
+    codebaseOverview: core.getInput("CODEBASE_OVERVIEW").trim(),
     checkProjectRules: readBool("CHECK_PROJECT_RULES", true),
     rulesGlob: core.getInput("RULES_GLOB"),
     rulesMaxBytes: intInput("RULES_MAX_BYTES", 32768),

@@ -11,7 +11,6 @@
 // ERROR ABSTAIN: a verdict:"error" ProviderResult is NOT an infra failure — we
 // format it (request-changes label, "provider error" badge), post it, return
 // normally. The job stays green; main.ts decides the exit code.
-import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { fetchDiff } from "./git/diff.js";
 import { gatherRules } from "./rules.js";
@@ -20,7 +19,7 @@ import { reviewWithModel } from "./llm/openrouter.js";
 import type { ProviderResult } from "./llm/openrouter.js";
 import { validateFindings } from "./review/validate.js";
 import { renderRecapSection, renderHistorySection } from "./review/recap.js";
-import { formatVerdict } from "./review/verdict.js";
+import { formatVerdict, resolveVerdict } from "./review/verdict.js";
 import { decodeMarker, diffState, encodeMarker } from "./state.js";
 import type { ReviewState } from "./state.js";
 import { resolveEvent } from "./github/event.js";
@@ -31,7 +30,14 @@ import { postInlineReview } from "./github/review.js";
 import type { ReviewTarget } from "./github/review.js";
 import { setVerdictLabel } from "./github/label.js";
 import type { LabelTarget } from "./github/label.js";
-import { jobUrl, skipBody, noopBody, inProgressBody } from "./pipeline/bodies.js";
+import {
+  jobUrl,
+  skipBody,
+  noopBody,
+  inProgressBody,
+  resolveChecklistPath,
+  formatDuration,
+} from "./pipeline/bodies.js";
 import type {
   GithubContext,
   PipelineOctokit,
@@ -49,28 +55,6 @@ function gitOrNull(args: string[], cwd: string): string | null {
   } catch {
     return null;
   }
-}
-
-/**
- * Locate the shipped review-checklist.txt, mirroring build-prompt.sh's prompt_path.
- * The Docker image ships it at the fixed absolute /action/prompts (the prod path,
- * checked first — the action's CWD is the consumer repo, so CWD-relative would
- * miss there); dev/test/CI run from the package root, where the repo-relative
- * paths resolve. Returns the first that exists, else the Docker path so buildPrompt
- * raises its own clear PromptError. Format-agnostic (no import.meta) so the esbuild
- * CJS bundle resolves it identically to the ESM dev/test runtime.
- */
-function resolveChecklistPath(): string {
-  const fallback = "/action/prompts/review-checklist.txt";
-  const candidates = [fallback, "prompts/review-checklist.txt", "code-review/prompts/review-checklist.txt"];
-  return candidates.find((p) => existsSync(p)) ?? fallback;
-}
-
-/** Format a finished-in duration ("Xm Ys" / "Ys") from elapsed milliseconds. */
-function formatDuration(ms: number): string {
-  const secs = Math.max(0, Math.round(ms / 1000));
-  const m = Math.floor(secs / 60);
-  return m > 0 ? `${m}m ${secs % 60}s` : `${secs}s`;
 }
 
 /**
@@ -143,16 +127,15 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     return { verdict: "skip", findingsCount: 0, commentUrl: url };
   }
 
-  // --- Review memory: read the PRIOR sticky state BEFORE the in-progress
-  // update overwrites the marker. Best-effort: any failure leaves an empty prior. ---
+  // --- Locate the prior sticky ALWAYS (independent of memory): its id drives the
+  // upsert dedup, so a pre-existing sticky is updated in place, not duplicated each
+  // run. DECODE its marker into `prior` only when memory is on. Best-effort. ---
   let prior: ReviewState | null = null;
   let stickyId: number | undefined;
-  if (inputs.reviewMemory) {
-    const sticky = await findSticky(octokit, target).catch(() => null);
-    if (sticky) {
-      stickyId = sticky.id;
-      prior = asReviewState(decodeMarker(sticky.body));
-    }
+  const sticky = await findSticky(octokit, target).catch(() => null);
+  if (sticky) {
+    stickyId = sticky.id;
+    if (inputs.reviewMemory) prior = asReviewState(decodeMarker(sticky.body));
   }
 
   // --- In-progress comment (best-effort: a failure must not abort the review). ---
@@ -216,8 +199,11 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
       scope: { in_scope_paths: diff.changed_files, full_review: fullReview },
       head_sha: headSha,
       verdict,
+      now, // injected clock → deterministic marker history ts under a pinned clock.
     });
-    const hadPrior = (prior?.findings.length ?? 0) > 0 || (prior?.history.length ?? 0) > 0;
+    // Optional-chain the arrays: a decoded marker missing findings/history must
+    // not throw (asReviewState only guarantees the "findings" key is present).
+    const hadPrior = (prior?.findings?.length ?? 0) > 0 || (prior?.history?.length ?? 0) > 0;
     if (hadPrior) {
       recap = renderRecapSection(state, { history: [], fullReview, hasPrior: true });
     }
@@ -229,7 +215,8 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
   const { body, label } = formatVerdict(validated, {
     botName: inputs.botName,
     botLogoUrl: inputs.botLogoUrl,
-    branch: reviewHead === "HEAD" ? baseBranch : reviewHead,
+    // Heading shows the PR SOURCE branch (bash used GITHUB_HEAD_REF); prefer it.
+    branch: context.headRef ?? (reviewHead === "HEAD" ? baseBranch : reviewHead),
     jobUrl: jobUrl(context),
     duration: formatDuration(now() - startMs),
     recap,
@@ -245,7 +232,10 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
 
   // --- Inline review comments (non-fatal). ---
   if (inputs.inlineComments) {
-    const r = await postInlineReview(octokit, findings, target);
+    // The Reviews API needs a commit_id that is IN the PR; the merge sha is not (it
+    // 422s and the comments vanish), so anchor to the PR head sha when present.
+    const reviewTarget: typeof target = { ...target, headSha: context.headSha ?? headSha };
+    const r = await postInlineReview(octokit, findings, reviewTarget);
     if (!r.posted && r.reason !== "no anchored findings") {
       process.stderr.write(`  Warning: inline review step failed: ${r.reason ?? "unknown"}\n`);
     }
@@ -257,15 +247,6 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
 /** Narrow a decoded marker to a usable ReviewState, or null when it was the empty `{}`. */
 function asReviewState(decoded: ReviewState | Record<string, never>): ReviewState | null {
   return "findings" in decoded ? (decoded as ReviewState) : null;
-}
-
-/** Default an empty verdict to approved (no findings) / changes; pass error through. */
-function resolveVerdict(
-  v: ProviderResult["verdict"],
-  findingsCount: number,
-): "approved" | "changes" | "error" {
-  if (v === "approved" || v === "changes" || v === "error") return v;
-  return findingsCount === 0 ? "approved" : "changes";
 }
 
 /**

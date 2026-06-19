@@ -1,0 +1,46 @@
+{
+  "id": "gen-findings-fixture",
+  "object": "chat.completion",
+  "created": 1781827528,
+  "model": "deepseek/deepseek-v4-flash-20260423",
+  "provider": "WandB",
+  "system_fingerprint": "vllm-0.22.1.dev0+g0b3ba88f1.d20260529-dp4-ep-a8f65562",
+  "service_tier": null,
+  "choices": [
+    {
+      "index": 0,
+      "logprobs": null,
+      "finish_reason": "stop",
+      "native_finish_reason": "stop",
+      "message": {
+        "role": "assistant",
+        "content": "{\n  \"review_plan\": \"## Review Plan\\n\\nReviewing 1 file: 1 correctness-critical\\n\\n- **src/util.ts**: CORRECTNESS — add() subtracts.\",\n  \"verdict\": \"changes\",\n  \"findings\": [\n    {\n      \"path\": \"src/util.ts\",\n      \"line\": 2,\n      \"severity\": \"high\",\n      \"category\": \"correctness\",\n      \"confidence\": \"high\",\n      \"text\": \"Function add performs subtraction (a - b); it should return a + b.\"\n    }\n  ],\n  \"other_checks\": \"\",\n  \"top_must_fix\": [\n    \"src/util.ts:2 — add() subtracts instead of adds\"\n  ]\n}",
+        "refusal": null,
+        "reasoning": null
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 974,
+    "completion_tokens": 98,
+    "total_tokens": 1072,
+    "cost": 0.000162162,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 0,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0.0001638,
+      "upstream_inference_prompt_cost": 0.00013636,
+      "upstream_inference_completions_cost": 0.00002744
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  }
+}

@@ -7,6 +7,7 @@
 // to the request-changes label on purpose (a failed review must not auto-merge).
 // Honors MANAGE_LABELS (false → no-op). Non-fatal: any API error is caught and
 // reported; this never throws.
+import { errorMessage } from "../errors.js";
 
 const APPROVED_LABEL = "agent-merge-approved";
 const CHANGES_LABEL = "agent-request-changes";
@@ -140,13 +141,6 @@ export async function setVerdictLabel(
     });
     return { changed: true, added: mapping.add };
   } catch (err) {
-    return { changed: false, reason: errorMessage(err) };
+    return { changed: false, reason: errorMessage(err, "labels API request failed") };
   }
-}
-
-/** Best-effort error message — never empty. */
-function errorMessage(err: unknown): string {
-  if (err instanceof Error && err.message) return err.message;
-  const s = String(err);
-  return s && s !== "[object Object]" ? s : "labels API request failed";
 }

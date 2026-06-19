@@ -118,6 +118,32 @@ describe("fetchDiff", () => {
     expect(r.diff).toMatch(/^L[0-9]+: \+export const reviewed = true$/m);
   });
 
+  it("treats a renamed file as delete+add (new path, not an arrow), with content in the diff", () => {
+    // FIX 6: --no-renames so a rename never collapses to "old => new" (which would
+    // both drop the file from the pathspec'd diff and emit a bogus arrow path).
+    const dir = setupGitRepo();
+    repos.push(dir);
+    // Commit a file on main, then rename it on the feature branch (content kept,
+    // so git's default rename detection WOULD pair them into a single arrow path).
+    writeFile(dir, "src/old-name.ts", "export const renamed = true\nexport const stable = 1\n");
+    git(dir, "add", "src/old-name.ts");
+    git(dir, "commit", "-m", "add old-name", "--quiet");
+    git(dir, "checkout", "-b", "feature", "--quiet");
+    git(dir, "mv", "src/old-name.ts", "src/new-name.ts");
+    git(dir, "commit", "-m", "rename old-name to new-name", "--quiet");
+
+    const r = fetchDiff({ ...BASE, cwd: dir, maxFiles: 100, maxDiffLines: 8000 });
+
+    // The new path shows up verbatim — no "=>" arrow anywhere in changed_files.
+    expect(r.changed_files).toContain("src/new-name.ts");
+    expect(r.changed_files.some((p) => p.includes("=>"))).toBe(false);
+    // delete+add: the old path is reviewed too (as a removal).
+    expect(r.changed_files).toContain("src/old-name.ts");
+    // The new file's content (the add side) reaches the diff sent to the model.
+    expect(r.diff).toMatch(/^L[0-9]+: \+export const renamed = true$/m);
+    expect(r.diff).toContain("src/new-name.ts");
+  });
+
   it("returns total_files=0 for a repo with no changes", () => {
     const dir = setupGitRepo();
     repos.push(dir);

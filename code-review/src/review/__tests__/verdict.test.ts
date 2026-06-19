@@ -57,6 +57,44 @@ describe("formatVerdict", () => {
     expect(lastLine(body)).toBe(MARKER);
   });
 
+  it("dedupes top_must_fix and caps it at 3 (FIX 11 — coordinate-findings parity)", () => {
+    // 10 items with duplicates: the rendered Top-N must-fix section keeps the first
+    // 3 UNIQUE items in order, matching the bash `unique | .[0:3]` cap.
+    const topMustFix = [
+      "Fix the auth bypass in login.ts",
+      "Fix the auth bypass in login.ts", // dup of #1
+      "Close the SQL injection in query.ts",
+      "Fix the auth bypass in login.ts", // dup of #1
+      "Handle the null deref in parse.ts",
+      "Close the SQL injection in query.ts", // dup of #3
+      "A fifth distinct must-fix",
+      "A sixth distinct must-fix",
+      "A seventh distinct must-fix",
+      "Handle the null deref in parse.ts", // dup of #5
+    ];
+    const result: ProviderResult = {
+      verdict: "changes",
+      findings: [],
+      review_plan: "",
+      other_checks: "",
+      top_must_fix: topMustFix,
+    };
+    const { body } = formatVerdict(result, {});
+
+    // Exactly the 3 first-seen unique items render; the 4th+ unique ones do not.
+    expect(body).toContain("Fix the auth bypass in login.ts");
+    expect(body).toContain("Close the SQL injection in query.ts");
+    expect(body).toContain("Handle the null deref in parse.ts");
+    expect(body).not.toContain("A fifth distinct must-fix");
+    expect(body).not.toContain("A sixth distinct must-fix");
+
+    // The Top-N section body has exactly 3 lines (no duplicate of #1).
+    const section = body.split("### Top-N must-fix\n")[1] ?? "";
+    const firstItem = "Fix the auth bypass in login.ts";
+    const occurrences = section.split(firstItem).length - 1;
+    expect(occurrences).toBe(1);
+  });
+
   it("enforces the 65000-char cap, dropping lowest-severity findings first while recap + marker survive", () => {
     // 400 findings, padded so the full body blows past the 65000 ceiling.
     const pad = "x".repeat(200);

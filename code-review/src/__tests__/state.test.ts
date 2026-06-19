@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { gzipSync } from "node:zlib";
 import {
   fingerprint,
   attachFps,
@@ -35,6 +36,21 @@ describe("encode/decode marker", () => {
   it("fail-safe to {} on valid base64 that is not gzip", () => {
     const notGzip = `<!-- toolu-review-state:v1 ${Buffer.from("hello").toString("base64")} -->`;
     expect(decodeMarker(notGzip)).toEqual({});
+  });
+
+  it("fail-safe to {} on a gzip bomb that inflates past the 5MB cap (FIX 4)", () => {
+    // A real, valid gzip stream whose decompressed size (>5MB of repeated bytes)
+    // exceeds the decode cap. gunzipSync throws RangeError past maxOutputLength;
+    // the try/catch turns that into {}, so a hostile PR-comment marker can't OOM.
+    const bomb = gzipSync(Buffer.alloc(6_000_000, 0x61)); // 6MB of 'a' → tiny gzip
+    expect(bomb.length).toBeLessThan(100_000); // genuinely small on the wire
+    const marker = `<!-- toolu-review-state:v1 ${bomb.toString("base64")} -->`;
+    expect(decodeMarker(marker)).toEqual({});
+  });
+
+  it("still decodes a real (sub-cap) marker after adding the bomb guard", () => {
+    // Guard against an over-tight cap: a normal state marker must still round-trip.
+    expect(decodeMarker(encodeMarker(sampleState))).toEqual(sampleState);
   });
 });
 
@@ -87,6 +103,38 @@ describe("diffState", () => {
 
     const outOfScope = diffState({ prior, current_findings: [], scope: { in_scope_paths: ["other.ts"], full_review: true }, head_sha: "deadbeef", verdict: "approved" });
     expect(outOfScope.resolved).toEqual([]);
+  });
+
+  it("stamps the history-entry ts from the injected ms clock (deterministic marker)", () => {
+    // FIX 13: a pinned `now` (epoch MS) reaches the history entry, so the marker
+    // is reproducible. The entry's ts is epoch SECONDS (floor of ms/1000).
+    const pinnedMs = 1_700_000_123_456;
+    const r = diffState({
+      prior,
+      current_findings: [],
+      scope: { in_scope_paths: ["src/a.ts"], full_review: true },
+      head_sha: "deadbeefcafe",
+      verdict: "approved",
+      now: () => pinnedMs,
+    });
+    expect(r.history_entry.ts).toBe(Math.floor(pinnedMs / 1000));
+    expect(r.next_state.history.at(-1)?.ts).toBe(1_700_000_123);
+    // The full marker is byte-stable under the pinned clock (no wall-clock leak).
+    expect(encodeMarker(r.next_state)).toBe(encodeMarker(r.next_state));
+  });
+
+  it("defaults the clock to Date.now when `now` is omitted (back-compat)", () => {
+    const before = Math.floor(Date.now() / 1000);
+    const r = diffState({
+      prior,
+      current_findings: [],
+      scope: { in_scope_paths: ["src/a.ts"], full_review: true },
+      head_sha: "deadbeef",
+      verdict: "approved",
+    });
+    const after = Math.floor(Date.now() / 1000);
+    expect(r.history_entry.ts).toBeGreaterThanOrEqual(before);
+    expect(r.history_entry.ts).toBeLessThanOrEqual(after);
   });
 
   it("caps history at the last 10 entries", () => {

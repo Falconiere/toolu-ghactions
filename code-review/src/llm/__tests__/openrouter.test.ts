@@ -59,6 +59,38 @@ describe("reviewWithModel", () => {
     expect(result.finishReason).toBe("length");
   });
 
+  it("aborts a hung provider on the timeout and abstains (verdict error, no hang)", async () => {
+    // FIX 5: a fetch that never resolves on its own — it only settles when the
+    // AbortController fires (real fetch rejects with an AbortError on signal abort).
+    // A short timeoutMs proves the deadline cuts the hang instead of stalling to
+    // the 6h runner ceiling. No mocks: this is exactly how the real fetch behaves.
+    const hangingFetch = ((_url: string | URL | Request, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (signal) {
+          signal.addEventListener("abort", () => {
+            reject(Object.assign(new Error("The operation was aborted."), { name: "AbortError" }));
+          });
+        }
+      })) as typeof fetch;
+
+    const start = Date.now();
+    const result = await reviewWithModel(ENVELOPE, {
+      model: "deepseek/deepseek-v4-flash",
+      apiKey: "sk-test",
+      fetch: hangingFetch,
+      maxRetries: 0,
+      timeoutMs: 50,
+    });
+    const elapsed = Date.now() - start;
+
+    expect(result.verdict).toBe("error");
+    expect(result.findings).toEqual([]);
+    expect(result.error).toBeTruthy();
+    // It returned promptly via the deadline — nowhere near a hang.
+    expect(elapsed).toBeLessThan(5_000);
+  });
+
   it("abstains on a non-JSON / error HTTP response instead of throwing", async () => {
     const errorFetch = (async () =>
       new Response("upstream exploded", {

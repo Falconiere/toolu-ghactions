@@ -19,11 +19,17 @@ import type { EventPayload } from "./github/event.js";
 
 /** Build the GithubContext slice the pipeline reads from the @actions/github context. */
 function buildContext(): GithubContext {
+  const payload = (github.context.payload as EventPayload | undefined) ?? null;
+  const head = payload?.pull_request?.head;
   return {
     eventName: github.context.eventName,
-    payload: (github.context.payload as EventPayload | undefined) ?? null,
+    payload,
     repo: github.context.repo,
     sha: github.context.sha,
+    // The PR head sha/ref (when this is a pull_request event): the inline-review
+    // commit_id must be a commit IN the PR, and the heading shows the source branch.
+    ...(head?.sha ? { headSha: head.sha } : {}),
+    ...(head?.ref ? { headRef: head.ref } : {}),
     serverUrl: github.context.serverUrl,
     runId: github.context.runId,
   };

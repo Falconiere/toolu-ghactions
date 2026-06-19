@@ -18,7 +18,7 @@ export interface EventContext {
 
 /** Loose payload shape — only the fields the resolver touches are typed. */
 export interface EventPayload {
-  pull_request?: { number?: number; base?: { ref?: string } };
+  pull_request?: { number?: number; base?: { ref?: string }; head?: { sha?: string; ref?: string } };
   issue?: { number?: number; pull_request?: unknown };
   comment?: { id?: number; body?: string; user?: { login?: string; type?: string } };
 }

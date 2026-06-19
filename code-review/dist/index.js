@@ -24142,11 +24142,19 @@ var github = __toESM(require_github(), 1);
 // src/inputs.ts
 var core = __toESM(require_core(), 1);
 var DEFAULT_MODEL = "deepseek/deepseek-v4-flash";
+var DEFAULT_MAX_TOKENS = 4096;
 function intInput(name17, fallback) {
   const raw = core.getInput(name17).trim();
   if (raw === "") return fallback;
   const n = Number.parseInt(raw, 10);
   return Number.isFinite(n) ? n : fallback;
+}
+function validateTokenBudget(value, source) {
+  if (Number.isFinite(value) && value > 0) return value;
+  core.warning(
+    `${source}=${value} is not a positive token budget; falling back to ${DEFAULT_MAX_TOKENS}.`
+  );
+  return DEFAULT_MAX_TOKENS;
 }
 function readMinConfidence() {
   return core.getInput("MIN_CONFIDENCE").trim().toLowerCase() === "medium" ? "medium" : "high";
@@ -24180,11 +24188,12 @@ function resolveProvider(providers, legacyKey, legacyModel, legacyEnforce, legac
       );
     }
     const first = providers[0] ?? {};
+    const providerMaxTokens = typeof first.max_tokens === "number" ? validateTokenBudget(first.max_tokens, "PROVIDERS[0].max_tokens") : legacyMaxTokens;
     return {
       model: first.model && first.model !== "" ? first.model : DEFAULT_MODEL,
       apiKey: first.api_key ?? "",
       enforceJsonSchema: first.enforce_json_schema ?? true,
-      maxTokens: typeof first.max_tokens === "number" ? first.max_tokens : legacyMaxTokens
+      maxTokens: providerMaxTokens
     };
   }
   return {
@@ -24215,7 +24224,7 @@ function readInputs() {
   const legacyKey = core.getInput("OPENROUTER_API_KEY").trim() || (process.env["OPENROUTER_API_KEY"] ?? "").trim();
   const legacyModel = core.getInput("MODEL").trim();
   const legacyEnforce = readBool("ENFORCE_JSON_SCHEMA", true);
-  const legacyMaxTokens = intInput("MAX_TOKENS", 4096);
+  const legacyMaxTokens = validateTokenBudget(intInput("MAX_TOKENS", DEFAULT_MAX_TOKENS), "MAX_TOKENS");
   const providers = parseProviders(core.getInput("PROVIDERS"));
   const effective = resolveProvider(providers, legacyKey, legacyModel, legacyEnforce, legacyMaxTokens);
   warnDeprecated(legacyEnforce);
@@ -24228,8 +24237,11 @@ function readInputs() {
     inlineComments: readBool("INLINE_COMMENTS", true),
     manageLabels: readBool("MANAGE_LABELS", true),
     baseBranch: core.getInput("BASE_BRANCH").trim() || "main",
-    reviewPromptFile: core.getInput("REVIEW_PROMPT_FILE"),
-    codebaseOverview: core.getInput("CODEBASE_OVERVIEW"),
+    // Trim both: prompt.ts treats only "" as "use default", so an untrimmed
+    // whitespace/newline value (a YAML block scalar) would become a bogus prompt
+    // path → readFileSync ENOENT crash. Every other string input here is trimmed.
+    reviewPromptFile: core.getInput("REVIEW_PROMPT_FILE").trim(),
+    codebaseOverview: core.getInput("CODEBASE_OVERVIEW").trim(),
     checkProjectRules: readBool("CHECK_PROJECT_RULES", true),
     rulesGlob: core.getInput("RULES_GLOB"),
     rulesMaxBytes: intInput("RULES_MAX_BYTES", 32768),
@@ -24251,7 +24263,6 @@ function readBool(name17, fallback) {
 }
 
 // src/pipeline.ts
-var import_node_fs2 = require("node:fs");
 var import_node_child_process3 = require("node:child_process");
 
 // src/git/diff.ts
@@ -24319,7 +24330,7 @@ function record(byPath, path, line) {
 // src/git/noise.ts
 var GENERATED_HEAD_LINES = 20;
 var LARGE_FILE_BYTES = 1e6;
-var MINIFIED_LINE_CHARS = 5e3;
+var MINIFIED_LINE_BYTES = 5e3;
 function noiseReason(path, readBlob, blobSize) {
   if (/\.lock$/.test(path) || /-lock\.json$/.test(path) || path.endsWith("/pnpm-lock.yaml") || path === "pnpm-lock.yaml" || path.endsWith("/bun.lockb") || path === "bun.lockb") {
     return "lockfile";
@@ -24343,7 +24354,7 @@ function noiseReason(path, readBlob, blobSize) {
   if (blobSize(path) > LARGE_FILE_BYTES) {
     return "large-file";
   }
-  if (blob !== null && blob.split("\n").some((line) => line.length > MINIFIED_LINE_CHARS)) {
+  if (blob !== null && blob.split("\n").some((line) => Buffer.byteLength(line, "utf8") > MINIFIED_LINE_BYTES)) {
     return "minified";
   }
   return null;
@@ -24474,7 +24485,7 @@ function fetchDiff(opts) {
   const remoteBase = resolveRemoteBase(baseBranch, cwd);
   const mergeBase = resolveMergeBase(reviewHead, remoteBase, baseBranch, cwd);
   const baseSha = gitOrNull(["rev-parse", remoteBase], cwd)?.trim() ?? "";
-  const changedFiles = gitOrNull(["diff", "--name-only", mergeBase, reviewHead], cwd) ?? "";
+  const changedFiles = gitOrNull(["diff", "--no-renames", "--name-only", mergeBase, reviewHead], cwd) ?? "";
   const totalFiles = changedFiles.split("\n").filter((l) => l.trim() !== "").length;
   if (totalFiles === 0) {
     return emptyResult(baseSha);
@@ -24487,12 +24498,12 @@ function fetchDiff(opts) {
       error: `PR exceeds file limit (${totalFiles} changed files > ${maxFiles} max). Raise MAX_FILES to review it.`
     };
   }
-  const numstat = gitOrNull(["diff", "--numstat", mergeBase, reviewHead], cwd) ?? "";
+  const numstat = gitOrNull(["diff", "--no-renames", "--numstat", mergeBase, reviewHead], cwd) ?? "";
   const { binary, text: text2, dropped } = classifyFiles(numstat, reviewHead, cwd);
   let diff = "";
   let files = [];
   if (text2.length > 0) {
-    const rawDiff = gitOrNull(["diff", mergeBase, reviewHead, "--", ...text2], cwd) ?? "";
+    const rawDiff = gitOrNull(["diff", "--no-renames", mergeBase, reviewHead, "--", ...text2], cwd) ?? "";
     const shaped = shapeDiff(rawDiff);
     diff = stripTrailingNewlines(shaped.diff);
     files = shaped.files;
@@ -26100,15 +26111,15 @@ var makeIssue = (params) => {
       message: issueData.message
     };
   }
-  let errorMessage5 = "";
+  let errorMessage2 = "";
   const maps = errorMaps.filter((m) => !!m).slice().reverse();
   for (const map of maps) {
-    errorMessage5 = map(fullIssue, { data, defaultError: errorMessage5 }).message;
+    errorMessage2 = map(fullIssue, { data, defaultError: errorMessage2 }).message;
   }
   return {
     ...issueData,
     path: fullPath,
-    message: errorMessage5
+    message: errorMessage2
   };
 };
 var EMPTY_PATH = [];
@@ -31012,19 +31023,19 @@ var getRefs = (options) => {
 };
 
 // node_modules/zod-to-json-schema/dist/esm/errorMessages.js
-function addErrorMessage(res, key, errorMessage5, refs) {
+function addErrorMessage(res, key, errorMessage2, refs) {
   if (!refs?.errorMessages)
     return;
-  if (errorMessage5) {
+  if (errorMessage2) {
     res.errorMessage = {
       ...res.errorMessage,
-      [key]: errorMessage5
+      [key]: errorMessage2
     };
   }
 }
-function setResponseValueAndErrors(res, key, value, errorMessage5, refs) {
+function setResponseValueAndErrors(res, key, value, errorMessage2, refs) {
   res[key] = value;
-  addErrorMessage(res, key, errorMessage5, refs);
+  addErrorMessage(res, key, errorMessage2, refs);
 }
 
 // node_modules/zod-to-json-schema/dist/esm/getRelativePath.js
@@ -33814,12 +33825,12 @@ async function _retryWithExponentialBackoff(f, {
     if (maxRetries === 0) {
       throw error;
     }
-    const errorMessage5 = getErrorMessage2(error);
+    const errorMessage2 = getErrorMessage2(error);
     const newErrors = [...errors, error];
     const tryNumber = newErrors.length;
     if (tryNumber > maxRetries) {
       throw new RetryError({
-        message: `Failed after ${tryNumber} attempts. Last error: ${errorMessage5}`,
+        message: `Failed after ${tryNumber} attempts. Last error: ${errorMessage2}`,
         reason: "maxRetriesExceeded",
         errors: newErrors
       });
@@ -33836,7 +33847,7 @@ async function _retryWithExponentialBackoff(f, {
       throw error;
     }
     throw new RetryError({
-      message: `Failed after ${tryNumber} attempts with non-retryable error: '${errorMessage5}'`,
+      message: `Failed after ${tryNumber} attempts with non-retryable error: '${errorMessage2}'`,
       reason: "errorNotRetryable",
       errors: newErrors
     });
@@ -36555,6 +36566,18 @@ function trimStartOfStream() {
 }
 var HANGING_STREAM_WARNING_TIME_MS = 15 * 1e3;
 
+// src/errors.ts
+function errorMessage(err, fallback = "unknown error") {
+  if (err instanceof Error) {
+    if (err.message) return err.message;
+    const cause = err.cause;
+    if (cause instanceof Error && cause.message) return `${err.name}: ${cause.message}`;
+    if (err.name) return err.name;
+  }
+  const s = String(err);
+  return s && s !== "[object Object]" ? s : fallback;
+}
+
 // src/llm/schema.ts
 var Finding = external_exports.object({
   path: external_exports.string(),
@@ -36576,6 +36599,7 @@ var Verdict = external_exports.object({
 });
 
 // src/llm/openrouter.ts
+var REQUEST_TIMEOUT_MS = 18e4;
 var EXTRA_BODY = {
   // Disable reasoning so the model spends max_tokens on the answer, not hidden
   // thinking. "none" is not in the SDK's typed reasoning effort union, so it
@@ -36591,6 +36615,9 @@ async function reviewWithModel(envelope, opts) {
     ...opts.fetch ? { fetch: opts.fetch } : {},
     extraBody: EXTRA_BODY
   });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? REQUEST_TIMEOUT_MS);
+  timeout.unref?.();
   try {
     const { object: object2 } = await generateObject({
       model: provider(opts.model),
@@ -36604,7 +36631,8 @@ async function reviewWithModel(envelope, opts) {
       prompt: envelope.user,
       temperature: 0.1,
       maxTokens: envelope.max_tokens,
-      maxRetries: opts.maxRetries ?? 2
+      maxRetries: opts.maxRetries ?? 2,
+      abortSignal: controller.signal
     });
     return {
       verdict: object2.verdict,
@@ -36615,31 +36643,23 @@ async function reviewWithModel(envelope, opts) {
     };
   } catch (err) {
     return abstain(err);
+  } finally {
+    clearTimeout(timeout);
   }
 }
 function abstain(err) {
   const result = {
     verdict: "error",
     findings: [],
-    error: errorMessage(err)
+    error: errorMessage(err, "OpenRouter request failed")
   };
   if (NoObjectGeneratedError.isInstance(err) && err.finishReason !== void 0) {
     result.finishReason = err.finishReason;
   }
   return result;
 }
-function errorMessage(err) {
-  if (err instanceof Error) {
-    if (err.message) return err.message;
-    const cause = err.cause;
-    if (cause instanceof Error && cause.message) return `${err.name}: ${cause.message}`;
-    if (err.name) return err.name;
-  }
-  const s = String(err);
-  return s && s !== "[object Object]" ? s : "OpenRouter request failed";
-}
 
-// src/review/validate.ts
+// src/review/render.ts
 var SEVERITY_RANK = {
   blocker: 0,
   high: 1,
@@ -36647,6 +36667,113 @@ var SEVERITY_RANK = {
   low: 3,
   nit: 4
 };
+var TOP_MUST_FIX_MAX = 3;
+function renderBody(body, findingsSection) {
+  const parts = [];
+  parts.push(`<img src="${body.botLogoUrl}" width="20" align="left"> **${body.botName}**
+`);
+  let main2 = `${body.header}
+
+`;
+  main2 += "---\n";
+  main2 += `### Code Review \u2014 \`${body.branch}\`
+
+`;
+  main2 += "- [x] Read repository context and PR diff\n";
+  main2 += "- [x] Review changed files\n";
+  main2 += "- [x] Analyze correctness, security, performance\n";
+  main2 += "- [x] Post findings\n";
+  main2 += `- [x] Set verdict label (${body.verdictLabel})
+
+`;
+  main2 += `**Verdict:** ${body.verdictBadge}   ${buildSeveritySummary(body.findings)}`;
+  parts.push(main2);
+  if (body.recap !== "") parts.push(`
+${body.recap}
+`);
+  let section = "\n";
+  section += "### Review Plan\n";
+  section += `${body.reviewPlan !== "" ? body.reviewPlan : "_No review plan provided._"}
+
+`;
+  section += `### Findings (${body.findings.length})
+
+`;
+  section += `${findingsSection}
+
+`;
+  section += "### Other checks\n";
+  section += `${body.otherChecks !== "" ? body.otherChecks : "_No additional checks performed._"}
+
+`;
+  section += "### Top-N must-fix\n";
+  section += buildTopMustFixSection(body);
+  parts.push(section);
+  if (body.history !== "") parts.push(`
+${body.history}
+`);
+  parts.push(`
+${body.verdictLabel}
+`);
+  if (body.marker !== "") parts.push(`
+${body.marker}
+`);
+  return parts.join("");
+}
+function buildFindingsSection(findings) {
+  if (findings.length === 0) return "_No findings._";
+  return findings.map(findingLine).join("\n");
+}
+function buildTruncatedFindingsSection(findings, keep, jobUrl2) {
+  const ordered = [...findings].sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]);
+  const shown = ordered.slice(0, keep);
+  const lines = shown.map(findingLine);
+  const extra = findings.length - keep;
+  if (extra > 0) lines.push(`_\u2026 ${extra} more findings \u2014 see the [job log](${jobUrl2})_`);
+  return lines.join("\n");
+}
+function findingLine(f) {
+  const loc = f.line !== void 0 && f.line !== null ? `:${f.line}` : "";
+  const meta = [f.category, f.confidence].filter((x) => x !== void 0 && x !== "");
+  const suffix = meta.length > 0 ? ` _(${meta.join(" \xB7 ")})_` : "";
+  return `\`${f.path}${loc}\`: ${f.severity}: ${f.text}${suffix}`;
+}
+function buildTopMustFixSection(body) {
+  const capped = dedupeCap(body.topMustFix, TOP_MUST_FIX_MAX);
+  if (capped.length > 0) return capped.join("\n");
+  const highSev = body.findings.filter((f) => f.severity === "blocker" || f.severity === "high");
+  if (highSev.length > 0) return highSev.map(mustFixLine).join("\n");
+  if (body.findings.length > 0) return body.findings.slice(0, 3).map(mustFixLine).join("\n");
+  return "_None._";
+}
+function dedupeCap(items, max) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const item of items) {
+    if (seen.has(item)) continue;
+    seen.add(item);
+    out.push(item);
+    if (out.length === max) break;
+  }
+  return out;
+}
+function mustFixLine(f) {
+  const loc = f.line !== void 0 && f.line !== null ? `:${f.line}` : "";
+  return `**\`${f.path}${loc}\`** \u2014 ${f.text}`;
+}
+function buildSeveritySummary(findings) {
+  const counts = { blocker: 0, high: 0, medium: 0, low: 0, nit: 0 };
+  for (const f of findings) counts[f.severity]++;
+  const parts = [];
+  if (counts.blocker > 0) parts.push(`\u{1F534} ${counts.blocker} blocker`);
+  if (counts.high > 0) parts.push(`\u{1F7E0} ${counts.high} high`);
+  if (counts.medium > 0) parts.push(`\u{1F7E1} ${counts.medium} medium`);
+  if (counts.low > 0) parts.push(`\u{1F535} ${counts.low} low`);
+  if (counts.nit > 0) parts.push(`\u26AA ${counts.nit} nit`);
+  return parts.join(" ");
+}
+
+// src/review/validate.ts
 function validateFindings(findings, changedLinesByPath, minConfidence) {
   const kept = [];
   for (const f of findings) {
@@ -36743,107 +36870,6 @@ function renderBucket(label, count, items) {
   return lines.join("\n");
 }
 
-// src/review/render.ts
-var SEVERITY_RANK2 = {
-  blocker: 0,
-  high: 1,
-  medium: 2,
-  low: 3,
-  nit: 4
-};
-function renderBody(body, findingsSection) {
-  const parts = [];
-  parts.push(`<img src="${body.botLogoUrl}" width="20" align="left"> **${body.botName}**
-`);
-  let main2 = `${body.header}
-
-`;
-  main2 += "---\n";
-  main2 += `### Code Review \u2014 \`${body.branch}\`
-
-`;
-  main2 += "- [x] Read repository context and PR diff\n";
-  main2 += "- [x] Review changed files\n";
-  main2 += "- [x] Analyze correctness, security, performance\n";
-  main2 += "- [x] Post findings\n";
-  main2 += `- [x] Set verdict label (${body.verdictLabel})
-
-`;
-  main2 += `**Verdict:** ${body.verdictBadge}   ${buildSeveritySummary(body.findings)}`;
-  parts.push(main2);
-  if (body.recap !== "") parts.push(`
-${body.recap}
-`);
-  let section = "\n";
-  section += "### Review Plan\n";
-  section += `${body.reviewPlan !== "" ? body.reviewPlan : "_No review plan provided._"}
-
-`;
-  section += `### Findings (${body.findings.length})
-
-`;
-  section += `${findingsSection}
-
-`;
-  section += "### Other checks\n";
-  section += `${body.otherChecks !== "" ? body.otherChecks : "_No additional checks performed._"}
-
-`;
-  section += "### Top-N must-fix\n";
-  section += buildTopMustFixSection(body);
-  parts.push(section);
-  if (body.history !== "") parts.push(`
-${body.history}
-`);
-  parts.push(`
-${body.verdictLabel}
-`);
-  if (body.marker !== "") parts.push(`
-${body.marker}
-`);
-  return parts.join("");
-}
-function buildFindingsSection(findings) {
-  if (findings.length === 0) return "_No findings._";
-  return findings.map(findingLine).join("\n");
-}
-function buildTruncatedFindingsSection(findings, keep, jobUrl2) {
-  const ordered = [...findings].sort((a, b) => SEVERITY_RANK2[a.severity] - SEVERITY_RANK2[b.severity]);
-  const shown = ordered.slice(0, keep);
-  const lines = shown.map(findingLine);
-  const extra = findings.length - keep;
-  if (extra > 0) lines.push(`_\u2026 ${extra} more findings \u2014 see the [job log](${jobUrl2})_`);
-  return lines.join("\n");
-}
-function findingLine(f) {
-  const loc = f.line !== void 0 && f.line !== null ? `:${f.line}` : "";
-  const meta = [f.category, f.confidence].filter((x) => x !== void 0 && x !== "");
-  const suffix = meta.length > 0 ? ` _(${meta.join(" \xB7 ")})_` : "";
-  return `\`${f.path}${loc}\`: ${f.severity}: ${f.text}${suffix}`;
-}
-function buildTopMustFixSection(body) {
-  if (body.topMustFix.length > 0) return body.topMustFix.join("\n");
-  const highSev = body.findings.filter((f) => f.severity === "blocker" || f.severity === "high");
-  if (highSev.length > 0) return highSev.map(mustFixLine).join("\n");
-  if (body.findings.length > 0) return body.findings.slice(0, 3).map(mustFixLine).join("\n");
-  return "_None._";
-}
-function mustFixLine(f) {
-  const loc = f.line !== void 0 && f.line !== null ? `:${f.line}` : "";
-  return `**\`${f.path}${loc}\`** \u2014 ${f.text}`;
-}
-function buildSeveritySummary(findings) {
-  const counts = { blocker: 0, high: 0, medium: 0, low: 0, nit: 0 };
-  for (const f of findings) counts[f.severity]++;
-  const parts = [];
-  if (counts.blocker > 0) parts.push(`\u{1F534} ${counts.blocker} blocker`);
-  if (counts.high > 0) parts.push(`\u{1F7E0} ${counts.high} high`);
-  if (counts.medium > 0) parts.push(`\u{1F7E1} ${counts.medium} medium`);
-  if (counts.low > 0) parts.push(`\u{1F535} ${counts.low} low`);
-  if (counts.nit > 0) parts.push(`\u26AA ${counts.nit} nit`);
-  return parts.join(" ");
-}
-
 // src/review/verdict.ts
 var BODY_SIZE_LIMIT = 65e3;
 var DEFAULT_BOT_NAME = "Toolu \u2014 Code Review";
@@ -36934,6 +36960,7 @@ var import_node_zlib = require("node:zlib");
 var MARKER_PREFIX = "<!-- toolu-review-state:v1 ";
 var MARKER_SUFFIX = " -->";
 var FP_SEP = "";
+var MAX_DECODE_BYTES = 5e6;
 function canonString(f) {
   const path = f.path ?? "";
   const category = f.category ?? "";
@@ -36958,7 +36985,9 @@ function decodeMarker(body) {
   const payload = m?.[1];
   if (!payload) return {};
   try {
-    const json = (0, import_node_zlib.gunzipSync)(Buffer.from(payload, "base64")).toString("utf8");
+    const json = (0, import_node_zlib.gunzipSync)(Buffer.from(payload, "base64"), {
+      maxOutputLength: MAX_DECODE_BYTES
+    }).toString("utf8");
     const parsed = JSON.parse(json);
     if (parsed && typeof parsed === "object") return parsed;
     return {};
@@ -36984,9 +37013,10 @@ function diffState(input) {
     resolved: resolved.length,
     total: current.length
   };
+  const nowMs = (input.now ?? Date.now)();
   const history_entry = {
     sha: input.head_sha.slice(0, 7),
-    ts: Math.floor(epochSeconds()),
+    ts: Math.floor(nowMs / 1e3),
     verdict: input.verdict,
     counts
   };
@@ -36999,9 +37029,6 @@ function diffState(input) {
     history_entry,
     next_state: { schema: "toolu-review-state", version: 1, findings: current, history }
   };
-}
-function epochSeconds() {
-  return Date.now() / 1e3;
 }
 
 // src/github/event.ts
@@ -37169,13 +37196,8 @@ async function postInlineReview(octokit, findings, target) {
     });
     return { posted: true, count: comments.length, url: data.html_url };
   } catch (err) {
-    return { posted: false, count: 0, reason: errorMessage2(err) };
+    return { posted: false, count: 0, reason: errorMessage(err, "reviews API request failed") };
   }
-}
-function errorMessage2(err) {
-  if (err instanceof Error && err.message) return err.message;
-  const s = String(err);
-  return s && s !== "[object Object]" ? s : "reviews API request failed";
 }
 
 // src/github/label.ts
@@ -37227,16 +37249,30 @@ async function setVerdictLabel(octokit, verdict, target, opts = {}) {
     });
     return { changed: true, added: mapping.add };
   } catch (err) {
-    return { changed: false, reason: errorMessage3(err) };
+    return { changed: false, reason: errorMessage(err, "labels API request failed") };
   }
-}
-function errorMessage3(err) {
-  if (err instanceof Error && err.message) return err.message;
-  const s = String(err);
-  return s && s !== "[object Object]" ? s : "labels API request failed";
 }
 
 // src/pipeline/bodies.ts
+var import_node_fs2 = require("node:fs");
+var import_node_path2 = require("node:path");
+function resolveChecklistPath() {
+  const fallback = "/action/prompts/review-checklist.txt";
+  const here = typeof __dirname !== "undefined" ? __dirname : "";
+  const candidates = [
+    (0, import_node_path2.join)(process.env["GITHUB_ACTION_PATH"] ?? "", "prompts/review-checklist.txt"),
+    fallback,
+    "prompts/review-checklist.txt",
+    "code-review/prompts/review-checklist.txt",
+    (0, import_node_path2.join)(here, "../prompts/review-checklist.txt")
+  ];
+  return candidates.find((p) => (0, import_node_fs2.existsSync)(p)) ?? fallback;
+}
+function formatDuration(ms) {
+  const secs = Math.max(0, Math.round(ms / 1e3));
+  const m = Math.floor(secs / 60);
+  return m > 0 ? `${m}m ${secs % 60}s` : `${secs}s`;
+}
 function jobUrl(ctx) {
   return `${ctx.serverUrl}/${ctx.repo.owner}/${ctx.repo.repo}/actions/runs/${ctx.runId}`;
 }
@@ -37281,16 +37317,6 @@ function gitOrNull3(args, cwd) {
   } catch {
     return null;
   }
-}
-function resolveChecklistPath() {
-  const fallback = "/action/prompts/review-checklist.txt";
-  const candidates = [fallback, "prompts/review-checklist.txt", "code-review/prompts/review-checklist.txt"];
-  return candidates.find((p) => (0, import_node_fs2.existsSync)(p)) ?? fallback;
-}
-function formatDuration(ms) {
-  const secs = Math.max(0, Math.round(ms / 1e3));
-  const m = Math.floor(secs / 60);
-  return m > 0 ? `${m}m ${secs % 60}s` : `${secs}s`;
 }
 async function runReview(deps) {
   const { inputs, octokit, context: context2 } = deps;
@@ -37349,12 +37375,10 @@ async function runReview(deps) {
   }
   let prior = null;
   let stickyId;
-  if (inputs.reviewMemory) {
-    const sticky = await findSticky(octokit, target).catch(() => null);
-    if (sticky) {
-      stickyId = sticky.id;
-      prior = asReviewState(decodeMarker(sticky.body));
-    }
+  const sticky = await findSticky(octokit, target).catch(() => null);
+  if (sticky) {
+    stickyId = sticky.id;
+    if (inputs.reviewMemory) prior = asReviewState(decodeMarker(sticky.body));
   }
   try {
     stickyId = await captureUpsertId(octokit, target, inProgressBody(context2), stickyId, prNumber);
@@ -37392,7 +37416,7 @@ async function runReview(deps) {
   );
   const findings = validateFindings(result.findings, changedLinesByPath, inputs.minConfidence);
   const validated = { ...result, findings };
-  const verdict = resolveVerdict2(validated.verdict, findings.length);
+  const verdict = resolveVerdict(validated.verdict, findings.length);
   let recap = "";
   let history = "";
   let marker17 = "";
@@ -37402,9 +37426,11 @@ async function runReview(deps) {
       current_findings: findings,
       scope: { in_scope_paths: diff.changed_files, full_review: fullReview },
       head_sha: headSha,
-      verdict
+      verdict,
+      now
+      // injected clock → deterministic marker history ts under a pinned clock.
     });
-    const hadPrior = (prior?.findings.length ?? 0) > 0 || (prior?.history.length ?? 0) > 0;
+    const hadPrior = (prior?.findings?.length ?? 0) > 0 || (prior?.history?.length ?? 0) > 0;
     if (hadPrior) {
       recap = renderRecapSection(state, { history: [], fullReview, hasPrior: true });
     }
@@ -37414,7 +37440,8 @@ async function runReview(deps) {
   const { body, label } = formatVerdict(validated, {
     botName: inputs.botName,
     botLogoUrl: inputs.botLogoUrl,
-    branch: reviewHead === "HEAD" ? baseBranch : reviewHead,
+    // Heading shows the PR SOURCE branch (bash used GITHUB_HEAD_REF); prefer it.
+    branch: context2.headRef ?? (reviewHead === "HEAD" ? baseBranch : reviewHead),
     jobUrl: jobUrl(context2),
     duration: formatDuration(now() - startMs),
     recap,
@@ -37424,7 +37451,8 @@ async function runReview(deps) {
   const commentUrl = await upsertComment(octokit, target, body, stickyId);
   await setVerdictLabel(octokit, verdict, target, { manageLabels: inputs.manageLabels });
   if (inputs.inlineComments) {
-    const r = await postInlineReview(octokit, findings, target);
+    const reviewTarget = { ...target, headSha: context2.headSha ?? headSha };
+    const r = await postInlineReview(octokit, findings, reviewTarget);
     if (!r.posted && r.reason !== "no anchored findings") {
       process.stderr.write(`  Warning: inline review step failed: ${r.reason ?? "unknown"}
 `);
@@ -37434,10 +37462,6 @@ async function runReview(deps) {
 }
 function asReviewState(decoded) {
   return "findings" in decoded ? decoded : null;
-}
-function resolveVerdict2(v, findingsCount) {
-  if (v === "approved" || v === "changes" || v === "error") return v;
-  return findingsCount === 0 ? "approved" : "changes";
 }
 async function captureUpsertId(octokit, target, body, stickyId, prNumber) {
   await upsertComment(octokit, target, body, stickyId);
@@ -41453,23 +41477,24 @@ async function mintAppToken(appId, privateKey, repo, seams) {
     }
     return token.token;
   } catch (err) {
-    console.warn(`[WARN] App token mint failed: ${errorMessage4(err)}`);
+    console.warn(`[WARN] App token mint failed: ${errorMessage(err)}`);
     return null;
   }
-}
-function errorMessage4(err) {
-  if (err instanceof Error && err.message) return err.message;
-  const s = String(err);
-  return s && s !== "[object Object]" ? s : "unknown error";
 }
 
 // src/main.ts
 function buildContext() {
+  const payload = github.context.payload ?? null;
+  const head = payload?.pull_request?.head;
   return {
     eventName: github.context.eventName,
-    payload: github.context.payload ?? null,
+    payload,
     repo: github.context.repo,
     sha: github.context.sha,
+    // The PR head sha/ref (when this is a pull_request event): the inline-review
+    // commit_id must be a commit IN the PR, and the heading shows the source branch.
+    ...head?.sha ? { headSha: head.sha } : {},
+    ...head?.ref ? { headRef: head.ref } : {},
     serverUrl: github.context.serverUrl,
     runId: github.context.runId
   };
