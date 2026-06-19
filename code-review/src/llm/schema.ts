@@ -19,7 +19,16 @@ export const Finding = z.object({
   category: z.string().optional(),
   confidence: z.enum(["high", "medium"]).optional(),
   quoted_line: z.string().optional(),
-  suggestion: z.string().optional(),
+  suggestion: z
+    .string()
+    .optional()
+    .describe(
+      "Replacement CODE ONLY — the exact source text to substitute for lines " +
+        "[line..end_line]. GitHub renders it as a committable 'Suggested change', so " +
+        "it must be literal, directly-applicable code, never prose, commentary, or an " +
+        "instruction like 'remove this line'. Explanations go in `text`. Omit this " +
+        "field entirely when there is no clean code replacement.",
+    ),
   // Provenance: which layer surfaced this finding. Absent → an LLM-discovered finding
   // (rendered as "llm"); set to a tool name when the model confirms a deterministic
   // (gitleaks/opengrep) finding it was asked to triage.
