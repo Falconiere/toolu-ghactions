@@ -1,5 +1,25 @@
 # Changelog
 
+## [3.4.0](https://github.com/Falconiere/toolu-ghactions/compare/v3.3.1...v3.4.0) (2026-06-20)
+
+
+### Features
+
+* **code-review:** default MODEL to deepseek/deepseek-v4-pro (1M context) ([18f797c](https://github.com/Falconiere/toolu-ghactions/commit/18f797c5083670299381435b4b8c3c024f77495b))
+
+
+### Bug Fixes
+
+* **code-review:** bound review_plan so it can't starve findings of budget ([0e39e74](https://github.com/Falconiere/toolu-ghactions/commit/0e39e744120eb3ebe05915314c06c660cb9b9315))
+* **code-review:** constrain `suggestion` to committable code, not prose ([82af6c9](https://github.com/Falconiere/toolu-ghactions/commit/82af6c9a370b253a8d5172e2d7338559f6060b68))
+* **code-review:** drop quote on blank cited line; clarify quote-gate intent ([9c636a8](https://github.com/Falconiere/toolu-ghactions/commit/9c636a82d039a78b72a98130bb1ab28c6e962f4c))
+* **code-review:** make review reliable against output-token truncation ([78f2354](https://github.com/Falconiere/toolu-ghactions/commit/78f235456dd483ebb0c21be9f7919b5021898a0c))
+* **code-review:** rebuild dist with bun to match CI ([52e41c7](https://github.com/Falconiere/toolu-ghactions/commit/52e41c73d3796c891d5d49801d9ac1600421ba86))
+* **code-review:** salvaged result is always "changes", never stale "approved" ([140195c](https://github.com/Falconiere/toolu-ghactions/commit/140195c361d34638517bf08588c8029714238264))
+* **code-review:** silence no-op input warnings, dedupe loading gif, bump codeql v4 ([99357c3](https://github.com/Falconiere/toolu-ghactions/commit/99357c3083c08a6558d186f4a9541e42097b17ef))
+* **code-review:** stop discarding good reviews on long plan / empty content ([02245bc](https://github.com/Falconiere/toolu-ghactions/commit/02245bcc672a9d4b0129d7954291d4ad2fa21468))
+* **code-review:** stop false 'still present' findings on removed diff lines ([2170952](https://github.com/Falconiere/toolu-ghactions/commit/21709520d0eedcd688b799b7068be7fd590d3c9d))
+
 ## [3.3.1](https://github.com/Falconiere/toolu-ghactions/compare/v3.3.0...v3.3.1) (2026-06-19)
 
 
