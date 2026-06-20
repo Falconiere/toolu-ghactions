@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.5.0](https://github.com/Falconiere/toolu-ghactions/compare/v3.4.1...v3.5.0) (2026-06-20)
+
+
+### Features
+
+* **code-review:** read prior thread replies and accept-or-argue instead of re-raising ([4a676c7](https://github.com/Falconiere/toolu-ghactions/commit/4a676c7fe3b4bf452cc6fc5789136804a66e53a9))
+
+
+### Bug Fixes
+
+* **code-review:** dedup duplicate threads and guard unattributable logins ([e8d26e7](https://github.com/Falconiere/toolu-ghactions/commit/e8d26e7ae106ec4ebd8567929b1f17f9c9eef48d))
+
 ## [3.4.1](https://github.com/Falconiere/toolu-ghactions/compare/v3.4.0...v3.4.1) (2026-06-20)
 
 
