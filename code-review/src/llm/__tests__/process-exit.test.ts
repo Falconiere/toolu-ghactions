@@ -48,10 +48,14 @@ void (async () => {
         // Ref'd timer = the in-flight request socket that keeps the loop alive until
         // the per-attempt deadline aborts it (just like a real pending fetch).
         const live = setTimeout(() => {}, 60_000);
-        init?.signal?.addEventListener("abort", () => {
+        const onAbort = () => {
           clearTimeout(live);
           reject(Object.assign(new Error("The operation was aborted."), { name: "AbortError" }));
-        });
+        };
+        // Guard the abort race: if the signal already fired before the listener is
+        // attached, reject immediately instead of hanging forever.
+        if (init?.signal?.aborted) onAbort();
+        else init?.signal?.addEventListener("abort", onAbort, { once: true });
       });
     }
     return Promise.resolve(
