@@ -108,6 +108,14 @@ const DEFAULT_MODEL = "deepseek/deepseek-v4-pro";
 const DEFAULT_MAX_TOKENS = 8192;
 
 /**
+ * Default per-attempt model deadline (ms) — kept in sync with action.yml
+ * REQUEST_TIMEOUT_MS default. 180s, not 60s: the default 1M-context model's
+ * structured-output generation on a full chunk routinely runs past a minute, so a
+ * 60s deadline aborted most chunks ("This operation was aborted") and abstained.
+ */
+const DEFAULT_REQUEST_TIMEOUT_MS = 180000;
+
+/**
  * Parse a string input as a base-10 integer, falling back to `fallback` for an
  * empty or non-numeric value (mirrors the bash `${VAR:-default}` + arithmetic).
  */
@@ -131,6 +139,20 @@ function validateTokenBudget(value: number, source: string): number {
     `${source}=${value} is not a positive token budget; falling back to ${DEFAULT_MAX_TOKENS}.`,
   );
   return DEFAULT_MAX_TOKENS;
+}
+
+/**
+ * Validate the per-attempt model deadline (ms): a non-positive value (≤0) would abort
+ * every attempt instantly (setTimeout(0)) or clamp negative to 1ms, abstaining the whole
+ * review — a config typo, never intended. Falls back to {@link DEFAULT_REQUEST_TIMEOUT_MS}
+ * with a `core.warning`. Unlike MAX_FILES, 0 is NOT "unlimited" here.
+ */
+function validateTimeout(value: number, source: string): number {
+  if (Number.isFinite(value) && value > 0) return value;
+  core.warning(
+    `${source}=${value} is not a positive timeout; falling back to ${DEFAULT_REQUEST_TIMEOUT_MS}ms.`,
+  );
+  return DEFAULT_REQUEST_TIMEOUT_MS;
 }
 
 /** Read MIN_CONFIDENCE, defaulting to "high"; only "medium" relaxes the floor. */
@@ -289,7 +311,10 @@ export function readInputs(): ActionInputs {
     maxDiffLines: intInput("MAX_DIFF_LINES", 0),
     maxChunkLines: intInput("MAX_CHUNK_LINES", 1500),
     maxChunks: intInput("MAX_CHUNKS", 20),
-    requestTimeoutMs: intInput("REQUEST_TIMEOUT_MS", 180000),
+    requestTimeoutMs: validateTimeout(
+      intInput("REQUEST_TIMEOUT_MS", DEFAULT_REQUEST_TIMEOUT_MS),
+      "REQUEST_TIMEOUT_MS",
+    ),
     token: core.getInput("TOKEN") || (process.env["GITHUB_TOKEN"] ?? ""),
     appId: core.getInput("APP_ID").trim(),
     appPrivateKey: core.getInput("APP_PRIVATE_KEY"),

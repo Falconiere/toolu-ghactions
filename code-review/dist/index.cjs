@@ -28192,6 +28192,7 @@ var ProviderEntrySchema = external_exports.object({
 });
 var DEFAULT_MODEL = "deepseek/deepseek-v4-pro";
 var DEFAULT_MAX_TOKENS = 8192;
+var DEFAULT_REQUEST_TIMEOUT_MS = 18e4;
 function intInput(name17, fallback) {
   const raw = core.getInput(name17).trim();
   if (raw === "") return fallback;
@@ -28204,6 +28205,13 @@ function validateTokenBudget(value, source) {
     `${source}=${value} is not a positive token budget; falling back to ${DEFAULT_MAX_TOKENS}.`
   );
   return DEFAULT_MAX_TOKENS;
+}
+function validateTimeout(value, source) {
+  if (Number.isFinite(value) && value > 0) return value;
+  core.warning(
+    `${source}=${value} is not a positive timeout; falling back to ${DEFAULT_REQUEST_TIMEOUT_MS}ms.`
+  );
+  return DEFAULT_REQUEST_TIMEOUT_MS;
 }
 function readMinConfidence() {
   return core.getInput("MIN_CONFIDENCE").trim().toLowerCase() === "medium" ? "medium" : "high";
@@ -28311,7 +28319,10 @@ function readInputs() {
     maxDiffLines: intInput("MAX_DIFF_LINES", 0),
     maxChunkLines: intInput("MAX_CHUNK_LINES", 1500),
     maxChunks: intInput("MAX_CHUNKS", 20),
-    requestTimeoutMs: intInput("REQUEST_TIMEOUT_MS", 18e4),
+    requestTimeoutMs: validateTimeout(
+      intInput("REQUEST_TIMEOUT_MS", DEFAULT_REQUEST_TIMEOUT_MS),
+      "REQUEST_TIMEOUT_MS"
+    ),
     token: core.getInput("TOKEN") || (process.env["GITHUB_TOKEN"] ?? ""),
     appId: core.getInput("APP_ID").trim(),
     appPrivateKey: core.getInput("APP_PRIVATE_KEY"),
