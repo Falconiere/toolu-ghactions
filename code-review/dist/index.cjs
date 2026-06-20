@@ -37512,8 +37512,7 @@ async function reviewWithModel(envelope, opts) {
     } catch (err) {
       if (controller.signal.aborted && attempt < maxAttempts) {
         await new Promise((resolve) => {
-          const backoff = setTimeout(resolve, 300 * attempt);
-          backoff.unref?.();
+          setTimeout(resolve, 300 * attempt);
         });
         continue;
       }
