@@ -28190,7 +28190,7 @@ var ProviderEntrySchema = external_exports.object({
   enforce_json_schema: external_exports.boolean().optional(),
   max_tokens: external_exports.number().optional()
 });
-var DEFAULT_MODEL = "google/gemini-2.5-flash";
+var DEFAULT_MODEL = "deepseek/deepseek-v4-pro";
 var DEFAULT_MAX_TOKENS = 8192;
 function intInput(name17, fallback) {
   const raw = core.getInput(name17).trim();
@@ -37544,7 +37544,9 @@ function salvageTruncated(err) {
   }
   if (findings.length === 0) return null;
   return {
-    verdict: loose.data.verdict ?? "changes",
+    // Salvage only returns when findings survived, so the verdict is necessarily
+    // "changes" — never carry a truncated "approved" forward alongside findings.
+    verdict: "changes",
     findings,
     review_plan: loose.data.review_plan ?? "",
     other_checks: "",
