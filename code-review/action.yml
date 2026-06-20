@@ -23,9 +23,9 @@ inputs:
     description: 'OpenRouter API key. Prefer passing via step-level env: block for better secret hygiene. Legacy single-provider input; use PROVIDERS for multi-provider configurations.'
     required: false
   MODEL:
-    description: 'OpenRouter model identifier'
+    description: 'OpenRouter model identifier. Default deepseek/deepseek-v4-pro (1M context, 384k max output, supports response_format + structured_outputs). Pick a model with reliable JSON-schema structured output.'
     required: false
-    default: 'google/gemini-2.5-flash'
+    default: 'deepseek/deepseek-v4-pro'
   FALLBACK_MODEL:
     description: 'DEPRECATED: Dropped in multi-provider mode. Use PROVIDERS array to configure multiple models.'
     required: false
