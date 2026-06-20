@@ -38543,10 +38543,12 @@ function matches(f, t) {
 function authorHasLastWord(thread) {
   const last = thread.replies.at(-1);
   if (!last) return false;
+  if (last.author === "" || thread.botLogin === "") return false;
   return last.author !== thread.botLogin;
 }
 function reconcile(findings, priorThreads) {
   const covered = /* @__PURE__ */ new Set();
+  const open = /* @__PURE__ */ new Set();
   const toReply = [];
   const toResolve = [];
   for (const thread of priorThreads) {
@@ -38558,6 +38560,11 @@ function reconcile(findings, priorThreads) {
       toResolve.push(thread);
       continue;
     }
+    if (open.has(idx)) {
+      toResolve.push(thread);
+      continue;
+    }
+    open.add(idx);
     if (authorHasLastWord(thread)) toReply.push({ thread, finding: matched });
   }
   const toCreate = findings.filter((_, i) => !covered.has(i));
