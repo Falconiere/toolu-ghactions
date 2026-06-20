@@ -84,14 +84,18 @@ const ProviderEntrySchema = z.object({
 });
 type ProviderEntry = z.infer<typeof ProviderEntrySchema>;
 
-/** Default model — kept in sync with action.yml MODEL default. gemini-2.5-flash:
- * constrained-decoding structured output, broadly accessible on OpenRouter (gpt-4o-mini
- * 404s on accounts without OpenAI access; deepseek json-mode returns empty content).
- * NOTE: on an exceptionally large diff the structured output can fail to parse — a
- * diff-size problem, not the model. The pipeline mitigates it by CHUNKING the diff
- * (see MAX_CHUNK_LINES / MAX_CHUNKS and git/chunk.ts), reviewing each chunk in its
- * own call and merging the results. */
-const DEFAULT_MODEL = "google/gemini-2.5-flash";
+/** Default model — kept in sync with action.yml MODEL default. deepseek-v4-pro:
+ * 1M-token context (huge diffs fit without aggressive chunking) and a 384k-token max
+ * output, so structured review output almost never hits the budget; it advertises
+ * `response_format` + `structured_outputs` on OpenRouter, so `require_parameters`
+ * routes to a provider that honors the JSON schema. Reasoning is disabled
+ * (EXTRA_BODY `reasoning.effort: "none"`) to avoid the reasoning-budget empty-content
+ * failure older deepseek json-mode showed.
+ * NOTE: on an exceptionally large diff the structured output can still truncate — the
+ * pipeline mitigates it by CHUNKING the diff (MAX_CHUNK_LINES / MAX_CHUNKS), and a
+ * length-truncated chunk is retried with a larger budget then salvaged (openrouter.ts),
+ * so the findings completed before the cut survive. */
+const DEFAULT_MODEL = "deepseek/deepseek-v4-pro";
 
 /**
  * Default completion-token budget — kept in sync with action.yml MAX_TOKENS default.
