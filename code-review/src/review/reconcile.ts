@@ -48,6 +48,9 @@ function matches(f: ReconcileFinding, t: PriorThread): boolean {
 function authorHasLastWord(thread: PriorThread): boolean {
   const last = thread.replies.at(-1);
   if (!last) return false; // no replies yet → the thread already states the finding; stay silent
+  // Unattributable logins (a null GitHub author, surfaced as "") — stay silent rather than risk
+  // replying to our own comment or to a deleted-account ghost we can't distinguish from the bot.
+  if (last.author === "" || thread.botLogin === "") return false;
   return last.author !== thread.botLogin;
 }
 
@@ -60,7 +63,8 @@ export function reconcile<F extends ReconcileFinding>(
   findings: F[],
   priorThreads: PriorThread[],
 ): Reconciliation<F> {
-  const covered = new Set<number>();
+  const covered = new Set<number>(); // finding indices represented by ANY prior thread
+  const open = new Set<number>(); // finding indices that already keep one OPEN bot thread
   const toReply: ReplyAction<F>[] = [];
   const toResolve: PriorThread[] = [];
 
@@ -73,6 +77,13 @@ export function reconcile<F extends ReconcileFinding>(
       toResolve.push(thread); // finding dropped this run → close the thread (accepted)
       continue;
     }
+    if (open.has(idx)) {
+      // A SECOND open thread for the same finding — a duplicate from an earlier run.
+      // Keep the first, resolve the extras so duplicates don't accumulate forever.
+      toResolve.push(thread);
+      continue;
+    }
+    open.add(idx);
     if (authorHasLastWord(thread)) toReply.push({ thread, finding: matched });
   }
 

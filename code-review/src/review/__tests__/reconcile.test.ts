@@ -130,6 +130,41 @@ describe("reconcile", () => {
     expect(plan.toResolve).toEqual([t]);
   });
 
+  it("dedups duplicate open threads for one finding: keeps the first, resolves the extras", () => {
+    // Two unresolved bot threads share a finding (e.g. left over from an earlier buggy run
+    // that posted twice). The finding persists with the author's last word, so the FIRST
+    // thread gets the reply and the duplicate is resolved — duplicates must not accumulate.
+    const f = finding({ fp: "fp-dup" });
+    const first = thread({ threadId: "T_first", fp: "fp-dup", replies: [authorReply] });
+    const dup = thread({
+      threadId: "T_dup",
+      rootCommentId: 200,
+      fp: "fp-dup",
+      replies: [authorReply],
+    });
+    const plan = reconcile([f], [first, dup]);
+    expect(plan.toReply.map((r) => r.thread.threadId)).toEqual(["T_first"]);
+    expect(plan.toResolve.map((t) => t.threadId)).toEqual(["T_dup"]);
+    expect(plan.toCreate).toEqual([]);
+  });
+
+  it("stays silent when the last reply has an unattributable (empty) author", () => {
+    // A null GitHub author surfaces as "" — we can't tell it from the bot, so don't reply.
+    const f = finding({ fp: "fp-keep" });
+    const t = thread({ fp: "fp-keep", replies: [{ author: "", body: "ghost" }] });
+    const plan = reconcile([f], [t]);
+    expect(plan.toReply).toEqual([]);
+    expect(plan.toCreate).toEqual([]);
+  });
+
+  it("stays silent when the bot login is unknown (empty), even with an author reply", () => {
+    const f = finding({ fp: "fp-keep" });
+    const t = thread({ fp: "fp-keep", botLogin: "", replies: [authorReply] });
+    const plan = reconcile([f], [t]);
+    expect(plan.toReply).toEqual([]);
+    expect(plan.toCreate).toEqual([]); // still deduped (it is our thread via the fp marker)
+  });
+
   it("handles a mixed run: create new, reply to one, resolve another", () => {
     const kept = finding({ fp: "fp-keep", path: "src/k.ts", line: 1 });
     const fresh = finding({ fp: "fp-fresh", path: "src/f.ts", line: 2 });
