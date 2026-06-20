@@ -6,10 +6,11 @@ import type { EventPayload } from "@/github/event.js";
 import type { CommentClient } from "@/github/comment.js";
 import type { ReviewClient } from "@/github/review.js";
 import type { LabelClient } from "@/github/label.js";
+import type { ThreadClient } from "@/github/threads.js";
 import type { ActionInputs } from "@/inputs.js";
 
 /** The full Octokit slice the pipeline needs — the union of every module's client. */
-export type PipelineOctokit = CommentClient & ReviewClient & LabelClient;
+export type PipelineOctokit = CommentClient & ReviewClient & LabelClient & ThreadClient;
 
 /** The slice of `@actions/github` context the pipeline reads (loose by design). */
 export interface GithubContext {

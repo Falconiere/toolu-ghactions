@@ -22,7 +22,7 @@ import { reviewChunked } from "./review/chunked.js";
 import { validateFindings } from "./review/validate.js";
 import { renderRecapSection, renderHistorySection } from "./review/recap.js";
 import { formatVerdict, resolveVerdict } from "./review/verdict.js";
-import { decodeMarker, diffState, encodeMarker } from "./state.js";
+import { decodeMarker, diffState, encodeMarker, fingerprint } from "./state.js";
 import type { ReviewState } from "./state.js";
 import { resolveEvent } from "./github/event.js";
 import type { EventResolution } from "./github/event.js";
@@ -30,6 +30,9 @@ import { findSticky, upsertComment } from "./github/comment.js";
 import type { CommentTarget } from "./github/comment.js";
 import { postInlineReview } from "./github/review.js";
 import type { ReviewTarget } from "./github/review.js";
+import { fetchReviewThreads, resolveThread, replyToThread } from "./github/threads.js";
+import type { PriorThread } from "./github/threads.js";
+import { reconcile } from "./review/reconcile.js";
 import { setVerdictLabel } from "./github/label.js";
 import type { LabelTarget } from "./github/label.js";
 import {
@@ -146,6 +149,14 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     process.stderr.write("  Warning: could not post in-progress comment\n");
   }
 
+  // --- Fetch the bot's prior inline review threads (best-effort, never throws). These
+  // drive accept-or-argue (the author's replies go into the prompt) + dedup/resolve, so a
+  // re-review reacts to what the author SAID instead of blindly re-posting every finding.
+  // Only when inline comments are enabled (otherwise the bot owns no threads). ---
+  const priorThreads: PriorThread[] = inputs.inlineComments
+    ? await fetchReviewThreads(octokit, target)
+    : [];
+
   // --- Resolve the head SHA the review/state anchors to. ---
   const headSha = resolveHeadSha(reviewHead, context.sha, cwd);
   target.headSha = headSha;
@@ -163,6 +174,14 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
   // --- Deterministic findings (gitleaks/opengrep SARIF the composite steps wrote).
   // Fed to the LLM as triage context AND summarized in the comment; absent dir → []. ---
   const mechanical = gatherMechanical(deps.sarifDir);
+
+  // Map the prior threads to the prompt's accept-or-argue context (finding text + replies).
+  const priorThreadContexts = priorThreads.map((t) => ({
+    path: t.path,
+    line: t.line,
+    finding: cleanFindingBody(t.rootBody),
+    replies: t.replies,
+  }));
 
   // --- Build the prompt + run the review, chunking the diff when it exceeds the
   // per-chunk budget (a large diff would otherwise overwhelm one structured-output
@@ -184,6 +203,7 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
         projectRules,
         githubWorkspace: cwd,
         mechanicalFindings: chunkMechanical,
+        priorThreads: priorThreadContexts,
       }),
     review: (envelope) =>
       reviewWithModel(envelope, {
@@ -257,14 +277,48 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
   // --- Set the verdict label (non-fatal). ---
   await setVerdictLabel(octokit, verdict, target, { manageLabels: inputs.manageLabels });
 
-  // --- Inline review comments (non-fatal). ---
+  // --- Inline review comments, reconciled against the bot's prior threads (non-fatal).
+  // Instead of re-posting every finding each run, diff this run's findings against the
+  // existing bot threads (see review/reconcile.ts): post only genuinely NEW findings,
+  // answer IN PLACE on threads where the author had the last word, and RESOLVE threads
+  // whose finding the model dropped (it accepted the rebuttal). This is what stops the
+  // "re-raise the same finding forever" loop. ---
   if (inputs.inlineComments) {
     // The Reviews API needs a commit_id that is IN the PR; the merge sha is not (it
     // 422s and the comments vanish), so anchor to the PR head sha when present.
     const reviewTarget: typeof target = { ...target, headSha: context.headSha ?? headSha };
-    const r = await postInlineReview(octokit, findings, reviewTarget);
+    // Stamp each finding with its fingerprint so reconcile can match it to a prior thread.
+    const withFp = findings.map((f) => ({ ...f, fp: fingerprint(f) }));
+    const plan = reconcile(withFp, priorThreads);
+
+    // 1. Genuinely new findings → one fresh inline review.
+    const r = await postInlineReview(octokit, plan.toCreate, reviewTarget);
     if (!r.posted && r.reason !== "no anchored findings") {
       process.stderr.write(`  Warning: inline review step failed: ${r.reason ?? "unknown"}\n`);
+    }
+
+    // 2. Findings that persist where the author had the last word → answer in that thread.
+    for (const { thread, finding } of plan.toReply) {
+      await replyToThread(
+        octokit,
+        target,
+        thread.rootCommentId,
+        `**Still flagging after re-review.** ${finding.text}`,
+      );
+    }
+
+    // 3. Findings the bot dropped this run → resolve the thread (accepted / no longer
+    // applies). Leave a one-line note first unless the hunk is already outdated.
+    for (const thread of plan.toResolve) {
+      if (!thread.isOutdated) {
+        await replyToThread(
+          octokit,
+          target,
+          thread.rootCommentId,
+          "Re-reviewed — this no longer applies (addressed, or point taken). Resolving.",
+        );
+      }
+      await resolveThread(octokit, thread.threadId);
     }
   }
 
@@ -279,6 +333,16 @@ function isReviewState(decoded: ReviewState | Record<string, never>): decoded is
 /** Narrow a decoded marker to a usable ReviewState, or null when it was the empty `{}`. */
 function asReviewState(decoded: ReviewState | Record<string, never>): ReviewState | null {
   return isReviewState(decoded) ? decoded : null;
+}
+
+/** Strip the hidden fp marker and any ```suggestion block from a stored finding body,
+ *  leaving the human-readable finding text for the accept-or-argue prompt block. */
+function cleanFindingBody(body: string): string {
+  return body
+    .replace(/<!-- toolu-fp:[0-9a-f]+ -->/g, "")
+    .replace(/```suggestion[\s\S]*?```/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 /**
