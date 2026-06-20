@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.5.1](https://github.com/Falconiere/toolu-ghactions/compare/v3.5.0...v3.5.1) (2026-06-20)
+
+
+### Bug Fixes
+
+* **code-review:** raise per-attempt model timeout to 180s, make it configurable ([b7b4a53](https://github.com/Falconiere/toolu-ghactions/commit/b7b4a53e57caef7b88f4c84fe18e6ef84250bafd))
+* **code-review:** reject non-positive REQUEST_TIMEOUT_MS ([b4c7cae](https://github.com/Falconiere/toolu-ghactions/commit/b4c7cae773c2aec31ccf70644fa6866578d788ec))
+
 ## [3.5.0](https://github.com/Falconiere/toolu-ghactions/compare/v3.4.1...v3.5.0) (2026-06-20)
 
 
