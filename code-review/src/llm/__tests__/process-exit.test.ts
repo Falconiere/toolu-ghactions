@@ -105,7 +105,9 @@ afterAll(() => {
 it("completes the retry in a bare process — the aborted-attempt backoff must keep the event loop alive", () => {
   const stdout = execFileSync("node", [bundle, FIXTURE], { encoding: "utf8", timeout: 30_000 });
   // The success verdict from attempt 2 came through: the process stayed alive across
-  // the backoff and the retry ran. With the unref'd-backoff bug the process exits 0
-  // during the backoff and stdout is empty.
-  expect(stdout).toContain("RESULT:changes:calls=2");
+  // the backoff and the retry ran. Assert the EXACT last output line (not a loose
+  // substring) so incidental stdout can't yield a false positive. With the unref'd-
+  // backoff bug the process exits 0 during the backoff and stdout is empty.
+  const lastLine = stdout.trim().split("\n").at(-1);
+  expect(lastLine).toBe("RESULT:changes:calls=2");
 }, 30_000);
