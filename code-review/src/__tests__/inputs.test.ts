@@ -41,10 +41,22 @@ describe("REQUEST_TIMEOUT_MS — per-attempt model deadline", () => {
     expect(readInputs().requestTimeoutMs).toBe(300000);
   });
 
-  it("falls back to the default when set to 0 or a negative value (would abort instantly)", () => {
+  it('"0" falls back to the 180000 default with a warning (would abort instantly)', () => {
     setInput("REQUEST_TIMEOUT_MS", "0");
+    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
     expect(readInputs().requestTimeoutMs).toBe(180000);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("REQUEST_TIMEOUT_MS=0"));
+  });
+
+  it('"-5" (negative) falls back to 180000 with a warning', () => {
     setInput("REQUEST_TIMEOUT_MS", "-5");
+    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+    expect(readInputs().requestTimeoutMs).toBe(180000);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("REQUEST_TIMEOUT_MS=-5"));
+  });
+
+  it("a non-numeric value falls back to 180000 (intInput's own non-finite guard, silent)", () => {
+    setInput("REQUEST_TIMEOUT_MS", "not-a-number");
     expect(readInputs().requestTimeoutMs).toBe(180000);
   });
 });
