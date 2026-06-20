@@ -40,6 +40,13 @@ describe("REQUEST_TIMEOUT_MS — per-attempt model deadline", () => {
     setInput("REQUEST_TIMEOUT_MS", "300000");
     expect(readInputs().requestTimeoutMs).toBe(300000);
   });
+
+  it("falls back to the default when set to 0 or a negative value (would abort instantly)", () => {
+    setInput("REQUEST_TIMEOUT_MS", "0");
+    expect(readInputs().requestTimeoutMs).toBe(180000);
+    setInput("REQUEST_TIMEOUT_MS", "-5");
+    expect(readInputs().requestTimeoutMs).toBe(180000);
+  });
 });
 
 describe("FIX 8 — token budget must be positive", () => {
