@@ -224,6 +224,7 @@ function baseInputs(overrides: Partial<ActionInputs> = {}): ActionInputs {
     maxDiffLines: 0,
     maxChunkLines: 0, // never chunk: existing tests exercise the single-call fast path
     maxChunks: 20,
+    requestTimeoutMs: 180000,
     token: "ghs_test",
     appId: "",
     appPrivateKey: "",

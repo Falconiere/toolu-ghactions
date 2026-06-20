@@ -52,6 +52,8 @@ export interface ActionInputs {
   maxChunkLines: number;
   /** Max chunks (= model calls) per review, bounding cost; files beyond are skipped (0 = unlimited). */
   maxChunks: number;
+  /** Per-attempt model deadline in ms before an attempt is aborted and retried (must fit the model). */
+  requestTimeoutMs: number;
   /** GitHub token for posting/editing comments. */
   token: string;
   /** GitHub App id (empty when no App identity configured). */
@@ -287,6 +289,7 @@ export function readInputs(): ActionInputs {
     maxDiffLines: intInput("MAX_DIFF_LINES", 0),
     maxChunkLines: intInput("MAX_CHUNK_LINES", 1500),
     maxChunks: intInput("MAX_CHUNKS", 20),
+    requestTimeoutMs: intInput("REQUEST_TIMEOUT_MS", 180000),
     token: core.getInput("TOKEN") || (process.env["GITHUB_TOKEN"] ?? ""),
     appId: core.getInput("APP_ID").trim(),
     appPrivateKey: core.getInput("APP_PRIVATE_KEY"),

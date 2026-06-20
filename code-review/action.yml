@@ -90,6 +90,10 @@ inputs:
     description: 'Maximum number of chunks (= model calls) per review, bounding cost and wall-clock on very large PRs. Files beyond the limit are not reviewed and the comment says so. 0 = unlimited. Default 20.'
     required: false
     default: '20'
+  REQUEST_TIMEOUT_MS:
+    description: 'Per-attempt model deadline in milliseconds. Each chunk gets up to this long per attempt (retried a few times) before it is aborted and the chunk abstains ("This operation was aborted"). Raise it for slow/large models, lower it to fail faster. Default 180000 (3 min).'
+    required: false
+    default: '180000'
   TOKEN:
     description: 'GitHub token for posting/editing comments'
     required: false
@@ -226,6 +230,7 @@ runs:
         INPUT_MAX_DIFF_LINES: ${{ inputs.MAX_DIFF_LINES }}
         INPUT_MAX_CHUNK_LINES: ${{ inputs.MAX_CHUNK_LINES }}
         INPUT_MAX_CHUNKS: ${{ inputs.MAX_CHUNKS }}
+        INPUT_REQUEST_TIMEOUT_MS: ${{ inputs.REQUEST_TIMEOUT_MS }}
         INPUT_TOKEN: ${{ inputs.TOKEN }}
         INPUT_APP_ID: ${{ inputs.APP_ID }}
         INPUT_APP_PRIVATE_KEY: ${{ inputs.APP_PRIVATE_KEY }}
