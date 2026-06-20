@@ -380,6 +380,27 @@ recomputed (the recap is labeled accordingly) — a finding that wasn't
 re-examined is never falsely reported as fixed. Set `REVIEW_MEMORY: false` to
 turn the recap and history off.
 
+## Thread-aware replies
+
+When inline comments are on, a re-review **reads the author's replies** on its own
+earlier inline threads instead of blindly re-posting every finding:
+
+- 🗣️ **reads replies** — the author's responses on the bot's prior threads are fed
+  back into the model prompt (sanitized, in a delimited **UNTRUSTED** block — claims
+  to weigh on merit, never instructions).
+- ✅ **accepts** — a finding whose rebuttal the model now agrees with is dropped, and
+  its thread is **resolved** (with a short note) rather than raised again.
+- 💬 **argues** — a finding the model still stands by is re-stated **as a reply in the
+  existing thread** (engaging the author's reasoning), not as a duplicate comment.
+- ⤵️ **dedup** — only genuinely new findings open new threads; leftover duplicate
+  threads for the same finding are resolved.
+
+Threads are matched to findings by the same line-independent fingerprint used by
+[Review memory](#review-memory), carried in a hidden marker on each inline comment.
+Only the bot's own threads are touched — human review threads are never modified.
+Thread reads/writes are best-effort: a GitHub API hiccup degrades to the previous
+"post fresh" behavior and never fails the job.
+
 ## Inputs
 
 | Input | Required | Default | Description |
