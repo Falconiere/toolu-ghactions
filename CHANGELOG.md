@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.1](https://github.com/Falconiere/toolu-ghactions/compare/v3.4.0...v3.4.1) (2026-06-20)
+
+
+### Bug Fixes
+
+* **code-review:** keep retry backoff timer ref'd so the action can't exit 0 mid-retry ([cda3ba7](https://github.com/Falconiere/toolu-ghactions/commit/cda3ba72e378274085c8876969754b709ca8e47a))
+
 ## [3.4.0](https://github.com/Falconiere/toolu-ghactions/compare/v3.3.1...v3.4.0) (2026-06-20)
 
 
