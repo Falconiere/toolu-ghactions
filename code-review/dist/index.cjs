@@ -37440,7 +37440,12 @@ var Finding = external_exports.object({
   text: external_exports.string()
 });
 var Verdict = external_exports.object({
-  review_plan: external_exports.string(),
+  // Bounded: review_plan is emitted FIRST, so an unbounded plan eats the output
+  // budget before findings and starves them under truncation. maxLength is honored
+  // during constrained decoding (the model caps the plan, then continues cleanly),
+  // so this both saves tokens and never fails validation. The prompt also asks for
+  // ≤ 2 short sentences, so the hard cap is only a backstop.
+  review_plan: external_exports.string().max(280),
   verdict: external_exports.enum(["approved", "changes"]),
   findings: external_exports.array(Finding),
   other_checks: external_exports.string().default(""),
