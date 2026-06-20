@@ -164,9 +164,15 @@ export async function reviewWithModel(
       // Retry a hang (OUR per-attempt timer fired). The SDK never retries an abort,
       // so we do — with a short backoff.
       if (controller.signal.aborted && attempt < maxAttempts) {
+        // Do NOT unref this timer. The per-attempt timeout above CAN be unref'd
+        // because the live fetch socket keeps the event loop alive during the
+        // request — but the abort just DESTROYED that socket, so during this
+        // backoff the timer is the only pending handle. An unref'd timer here lets
+        // Node see an empty event loop and exit 0 mid-retry: the backoff never
+        // resolves, the loop never resumes, the pipeline never finalizes the
+        // comment, and the job goes GREEN with the in-progress comment frozen.
         await new Promise<void>((resolve) => {
-          const backoff = setTimeout(resolve, 300 * attempt);
-          backoff.unref?.();
+          setTimeout(resolve, 300 * attempt);
         });
         continue;
       }
