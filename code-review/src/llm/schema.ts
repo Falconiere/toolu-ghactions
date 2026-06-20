@@ -50,7 +50,12 @@ export const Finding = z.object({
  * chunk being lost.
  */
 export const Verdict = z.object({
-  review_plan: z.string(),
+  // Bounded: review_plan is emitted FIRST, so an unbounded plan eats the output
+  // budget before findings and starves them under truncation. maxLength is honored
+  // during constrained decoding (the model caps the plan, then continues cleanly),
+  // so this both saves tokens and never fails validation. The prompt also asks for
+  // ≤ 2 short sentences, so the hard cap is only a backstop.
+  review_plan: z.string().max(280),
   verdict: z.enum(["approved", "changes"]),
   findings: z.array(Finding),
   other_checks: z.string().default(""),

@@ -86,7 +86,9 @@ The available review dimensions are:
   goes in `text`. If you cannot give an exact code replacement, omit `suggestion`.
 
 Output your review as a JSON object with:
-- review_plan: (string, markdown) — the Phase 1 plan
+- review_plan: (string) — the Phase 1 plan in AT MOST 2 short sentences (≤ 280
+  chars). Keep it terse: the findings are what matter, and a long plan steals the
+  output budget from them.
 - verdict: ("approved"|"changes") — overall verdict
 - findings[]: ({path, line, quoted_line, severity, text, suggestion?}) — issues
   found during Phase 2. `quoted_line` is the verbatim text of the cited `Lnnn:`
