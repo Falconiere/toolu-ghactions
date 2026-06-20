@@ -11,7 +11,8 @@ import { dirname, join } from "node:path";
 import { runReview } from "@/pipeline.js";
 import type { GithubContext, PipelineOctokit, ReviewDeps } from "@/pipeline.js";
 import type { ActionInputs } from "@/inputs.js";
-import { encodeMarker, type ReviewState } from "@/state.js";
+import { encodeMarker, fingerprint, type ReviewState } from "@/state.js";
+import { appendFpMarker } from "@/review/fpmarker.js";
 import { git, setupGitRepo, writeFile, removeRepo } from "@/git/__tests__/helpers.js";
 
 const FIXTURES = join(
@@ -61,6 +62,21 @@ interface Recorded {
   removedLabels: string[];
   addedLabels: string[][];
   reviews: { commit_id: string; comments: number; body: string }[];
+  replies: { comment_id: number; body: string }[];
+  resolved: string[];
+}
+
+/** A bot-authored review thread to seed into the fake graphql reviewThreads response. */
+interface SeedThread {
+  threadId: string;
+  rootCommentId: number;
+  fp: string;
+  path: string;
+  line: number | null;
+  isResolved?: boolean;
+  isOutdated?: boolean;
+  botLogin?: string;
+  replies?: { author: string; body: string }[];
 }
 
 /**
@@ -68,7 +84,10 @@ interface Recorded {
  * → the bot CREATES, then re-finds, then UPDATES). create/update return a
  * synthetic html_url; the labels + reviews APIs record their args and succeed.
  */
-function fakeOctokit(existing: { id: number; body: string }[] = []): {
+function fakeOctokit(
+  existing: { id: number; body: string }[] = [],
+  seedThreads: SeedThread[] = [],
+): {
   octokit: PipelineOctokit;
   rec: Recorded;
 } {
@@ -80,6 +99,8 @@ function fakeOctokit(existing: { id: number; body: string }[] = []): {
     removedLabels: [],
     addedLabels: [],
     reviews: [],
+    replies: [],
+    resolved: [],
   };
   // A mutable comment store so a created comment is found on the next list.
   const store = existing.map((c, i) => ({
@@ -135,7 +156,49 @@ function fakeOctokit(existing: { id: number; body: string }[] = []): {
           rec.reviews.push({ commit_id: p.commit_id, comments: p.comments.length, body: p.body });
           return { data: { html_url: "https://github.com/o/r/pull/7#review" } };
         },
+        createReplyForReviewComment: async (p) => {
+          rec.replies.push({ comment_id: p.comment_id, body: p.body });
+          return { data: { id: 7000 + rec.replies.length } };
+        },
       },
+    },
+    // GraphQL: serves the seeded reviewThreads page on a read query and records
+    // resolveReviewThread mutations. One page (no pagination) is enough for tests.
+    graphql: async (query: string, variables?: Record<string, unknown>) => {
+      if (query.includes("resolveReviewThread")) {
+        rec.resolved.push(String(variables?.["threadId"]));
+        return { resolveReviewThread: { thread: { isResolved: true } } };
+      }
+      return {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: seedThreads.map((t) => ({
+                id: t.threadId,
+                isResolved: t.isResolved ?? false,
+                isOutdated: t.isOutdated ?? false,
+                path: t.path,
+                line: t.line,
+                comments: {
+                  nodes: [
+                    {
+                      databaseId: t.rootCommentId,
+                      body: appendFpMarker(`**finding** at ${t.path}`, t.fp),
+                      author: { login: t.botLogin ?? "toolu-bot" },
+                    },
+                    ...(t.replies ?? []).map((r, i) => ({
+                      databaseId: t.rootCommentId + i + 1,
+                      body: r.body,
+                      author: { login: r.author },
+                    })),
+                  ],
+                },
+              })),
+            },
+          },
+        },
+      };
     },
   };
   return { octokit, rec };
@@ -615,5 +678,119 @@ describe("runReview — chunked large diff", () => {
     // …and the partial failure is surfaced in the posted comment.
     const lastBody = rec.updated.at(-1)?.body ?? rec.created.at(-1)?.body ?? "";
     expect(lastBody).toContain("chunks failed");
+  });
+});
+
+describe("runReview — thread-aware inline reconciliation", () => {
+  /** Read a finding's identity fields from a recorded fixture, to compute its real fp. */
+  function fixtureFinding(
+    name: string,
+    idx: number,
+  ): { path: string; category?: string; text: string } {
+    const raw: { choices: { message: { content: string } }[] } = JSON.parse(
+      readFileSync(join(FIXTURES, `${name}.json`), "utf8"),
+    );
+    const content: { findings: { path: string; category?: string; text: string }[] } = JSON.parse(
+      raw.choices[0]?.message.content ?? "{}",
+    );
+    const f = content.findings[idx];
+    if (!f) throw new Error(`fixture ${name} has no finding #${idx}`);
+    return { path: f.path, category: f.category, text: f.text };
+  }
+
+  it("dedups a finding the author replied to and answers IN the thread (no new review)", async () => {
+    const { dir, headSha } = track(featureRepoWithChange());
+    const f0 = fixtureFinding("findings", 0); // src/util.ts:2
+    const seed: SeedThread = {
+      threadId: "T_keep",
+      rootCommentId: 8001,
+      fp: fingerprint(f0),
+      path: f0.path,
+      line: 2,
+      replies: [{ author: "human-dev", body: "Intentional — callers expect a delta." }],
+    };
+    const { octokit, rec } = fakeOctokit([], [seed]);
+
+    const result = await runReview({
+      inputs: baseInputs(),
+      octokit,
+      context: prContext(headSha),
+      fetch: replayFetch("findings"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    expect(result.findingsCount).toBe(1);
+    // The finding maps to the existing thread → NOT re-posted as a fresh inline review.
+    expect(rec.reviews.length).toBe(0);
+    // The author had the last word → the bot answers in that thread.
+    expect(rec.replies.length).toBe(1);
+    expect(rec.replies[0]?.comment_id).toBe(8001);
+    expect(rec.replies[0]?.body).toContain("Still flagging");
+    // Nothing was resolved (the finding persists).
+    expect(rec.resolved).toEqual([]);
+  });
+
+  it("resolves a dropped finding's thread (with a note) and posts only the genuinely new finding", async () => {
+    const { dir, headSha } = track(featureRepoWithChange());
+    const keep = fixtureFinding("findings-two", 0); // src/util.ts:2 — persists, has a reply
+    const seedKeep: SeedThread = {
+      threadId: "T_keep",
+      rootCommentId: 8001,
+      fp: fingerprint(keep),
+      path: keep.path,
+      line: 2,
+      replies: [{ author: "human-dev", body: "Working as intended." }],
+    };
+    // A prior thread whose finding the model no longer emits → should be resolved.
+    const seedDrop: SeedThread = {
+      threadId: "T_drop",
+      rootCommentId: 9001,
+      fp: "0000000000000000000000000000000000000000",
+      path: "src/removed.ts",
+      line: 5,
+    };
+    const { octokit, rec } = fakeOctokit([], [seedKeep, seedDrop]);
+
+    const result = await runReview({
+      inputs: baseInputs(),
+      octokit,
+      context: prContext(headSha),
+      fetch: replayFetch("findings-two"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    expect(result.findingsCount).toBe(2);
+    // Only the NEW finding (src/util.ts:1) is posted — NOT the full set of 2 (dedup works).
+    expect(rec.reviews.length).toBe(1);
+    expect(rec.reviews[0]?.comments).toBe(1);
+    // The dropped finding's thread is resolved.
+    expect(rec.resolved).toEqual(["T_drop"]);
+    // Two replies: the "still flagging" answer + the "no longer applies" resolution note.
+    expect(rec.replies.length).toBe(2);
+    const bodies = rec.replies.map((r) => r.body).join("\n");
+    expect(bodies).toContain("Still flagging");
+    expect(bodies).toContain("no longer applies");
+  });
+
+  it("with NO prior threads, posts every finding (matches the old behaviour)", async () => {
+    const { dir, headSha } = track(featureRepoWithChange());
+    const { octokit, rec } = fakeOctokit([], []);
+
+    const result = await runReview({
+      inputs: baseInputs(),
+      octokit,
+      context: prContext(headSha),
+      fetch: replayFetch("findings-two"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    expect(result.findingsCount).toBe(2);
+    expect(rec.reviews.length).toBe(1);
+    expect(rec.reviews[0]?.comments).toBe(2);
+    expect(rec.replies).toEqual([]);
+    expect(rec.resolved).toEqual([]);
   });
 });

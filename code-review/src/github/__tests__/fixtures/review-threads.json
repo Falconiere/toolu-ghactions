@@ -1,0 +1,64 @@
+{
+  "repository": {
+    "pullRequest": {
+      "reviewThreads": {
+        "pageInfo": { "hasNextPage": false, "endCursor": null },
+        "nodes": [
+          {
+            "id": "PRRT_kwBOTthread1",
+            "isResolved": false,
+            "isOutdated": false,
+            "path": "src/auth.ts",
+            "line": 42,
+            "comments": {
+              "nodes": [
+                {
+                  "databaseId": 5001,
+                  "body": "**high** (security): token compared with `==` instead of a constant-time compare\n\n<!-- toolu-fp:1111111111111111111111111111111111111111 -->",
+                  "author": { "login": "toolu-bot" }
+                },
+                {
+                  "databaseId": 5002,
+                  "body": "This is intentional — the value is already HMAC'd upstream.",
+                  "author": { "login": "human-dev" }
+                }
+              ]
+            }
+          },
+          {
+            "id": "PRRT_kwBOhumanthread",
+            "isResolved": false,
+            "isOutdated": false,
+            "path": "src/db.ts",
+            "line": 10,
+            "comments": {
+              "nodes": [
+                {
+                  "databaseId": 6001,
+                  "body": "nit: consider renaming this variable",
+                  "author": { "login": "human-dev" }
+                }
+              ]
+            }
+          },
+          {
+            "id": "PRRT_kwBOnoid",
+            "isResolved": true,
+            "isOutdated": true,
+            "path": "src/x.ts",
+            "line": 1,
+            "comments": {
+              "nodes": [
+                {
+                  "databaseId": null,
+                  "body": "pending bot finding with no usable id\n\n<!-- toolu-fp:2222222222222222222222222222222222222222 -->",
+                  "author": { "login": "toolu-bot" }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -7,6 +7,8 @@
 // caught and reported, never thrown. Only findings anchored by a real `line`
 // are posted; a multi-line span uses start_line..line.
 import { errorMessage } from "@/errors.js";
+import { fingerprint } from "@/state.js";
+import { appendFpMarker } from "@/review/fpmarker.js";
 import type { Finding } from "@/llm/schema.js";
 
 /** One inline review comment in the Reviews-API request body. */
@@ -69,7 +71,12 @@ function buildComment(f: Finding): ReviewComment {
     f.suggestion !== undefined && f.suggestion !== ""
       ? `\n\n\`\`\`suggestion\n${f.suggestion}\n\`\`\``
       : "";
-  const body = `**${severity}**${category}: ${f.text ?? ""}${suggestion}`;
+  // Embed the finding fingerprint as a hidden marker so a later run recognises THIS
+  // thread as its own (to dedup, reply in place, or resolve — see review/reconcile.ts).
+  const body = appendFpMarker(
+    `**${severity}**${category}: ${f.text ?? ""}${suggestion}`,
+    fingerprint(f),
+  );
 
   const end = f.end_line ?? f.line;
   if (end > f.line) {

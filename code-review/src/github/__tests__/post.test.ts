@@ -62,7 +62,9 @@ describe("postInlineReview", () => {
     // Single-line comment: line set, no start_line.
     expect(single).toMatchObject({ path: "src/a.ts", line: 10, side: "RIGHT" });
     expect(single?.start_line).toBeUndefined();
-    expect(single?.body).toBe("**high** _(correctness)_: off-by-one");
+    expect(single?.body).toContain("**high** _(correctness)_: off-by-one");
+    // The hidden fingerprint marker is appended so a later run can recognise this thread.
+    expect(single?.body).toMatch(/<!-- toolu-fp:[0-9a-f]{40} -->$/);
 
     // Multi-line span: start_line..line, plus a committable suggestion fence.
     expect(span).toMatchObject({
