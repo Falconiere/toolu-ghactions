@@ -31,6 +31,17 @@ afterEach(() => {
   Object.assign(process.env, savedEnv);
 });
 
+describe("REQUEST_TIMEOUT_MS — per-attempt model deadline", () => {
+  it("defaults to 180000ms (3 min) when unset — generous for the slow default model", () => {
+    expect(readInputs().requestTimeoutMs).toBe(180000);
+  });
+
+  it("is overridable via the input", () => {
+    setInput("REQUEST_TIMEOUT_MS", "300000");
+    expect(readInputs().requestTimeoutMs).toBe(300000);
+  });
+});
+
 describe("FIX 8 — token budget must be positive", () => {
   it('MAX_TOKENS="0" falls back to the 8192 default with a warning', () => {
     setInput("MAX_TOKENS", "0");

@@ -28311,6 +28311,7 @@ function readInputs() {
     maxDiffLines: intInput("MAX_DIFF_LINES", 0),
     maxChunkLines: intInput("MAX_CHUNK_LINES", 1500),
     maxChunks: intInput("MAX_CHUNKS", 20),
+    requestTimeoutMs: intInput("REQUEST_TIMEOUT_MS", 18e4),
     token: core.getInput("TOKEN") || (process.env["GITHUB_TOKEN"] ?? ""),
     appId: core.getInput("APP_ID").trim(),
     appPrivateKey: core.getInput("APP_PRIVATE_KEY"),
@@ -37478,7 +37479,7 @@ var PartialVerdict = external_exports.object({
 });
 
 // src/llm/openrouter.ts
-var REQUEST_TIMEOUT_MS = 6e4;
+var REQUEST_TIMEOUT_MS = 18e4;
 var MAX_ATTEMPTS = 3;
 var MAX_TOKEN_CEILING = 32768;
 var EXTRA_BODY = {
@@ -38801,6 +38802,7 @@ async function runReview(deps) {
     review: (envelope) => reviewWithModel(envelope, {
       model: inputs.model,
       apiKey: inputs.apiKey,
+      timeoutMs: inputs.requestTimeoutMs,
       ...deps.fetch ? { fetch: deps.fetch } : {}
     })
   });

@@ -31,9 +31,13 @@ import type { Envelope } from "@/prompt.js";
  * is aborted and RETRIED up to {@link MAX_ATTEMPTS} with a fresh attempt. The
  * total ceiling is therefore ≈ MAX_ATTEMPTS × this. On the final attempt's abort
  * the AbortController fires and abstain() maps it to a verdict:"error".
- * Input-overridable via {@link ReviewOptions.timeoutMs}.
+ * Input-overridable via {@link ReviewOptions.timeoutMs} (REQUEST_TIMEOUT_MS input).
+ *
+ * Default is 180s, not 60s: the default model is a large 1M-context model whose
+ * structured-output generation on a full diff chunk routinely runs past a minute, so
+ * a 60s deadline aborted most chunks ("This operation was aborted") and abstained.
  */
-export const REQUEST_TIMEOUT_MS = 60_000;
+export const REQUEST_TIMEOUT_MS = 180_000;
 
 /**
  * Outer attempts against a hang/timeout. Each attempt gets its own
