@@ -229,7 +229,9 @@ function salvageTruncated(err: unknown): ProviderResult | null {
   }
   if (findings.length === 0) return null;
   return {
-    verdict: loose.data.verdict ?? "changes",
+    // Salvage only returns when findings survived, so the verdict is necessarily
+    // "changes" — never carry a truncated "approved" forward alongside findings.
+    verdict: "changes",
     findings,
     review_plan: loose.data.review_plan ?? "",
     other_checks: "",
