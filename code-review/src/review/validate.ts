@@ -39,10 +39,17 @@ export function validateFindings(
   minConfidence: MinConfidence,
   lineTextByPath?: Map<string, Map<number, string>>,
 ): Finding[] {
+  // Build each path's changed-line Set once, not once per finding: the Set depends
+  // only on f.path, and N findings can span far fewer files than N.
+  const changedSetByPath = new Map<string, Set<number>>();
+  for (const [path, lines] of changedLinesByPath) {
+    changedSetByPath.set(path, new Set(lines));
+  }
+  const EMPTY_CHANGED = new Set<number>();
+
   const kept: Finding[] = [];
   for (const f of findings) {
-    const changed = changedLinesByPath.get(f.path) ?? [];
-    const changedSet = new Set(changed);
+    const changedSet = changedSetByPath.get(f.path) ?? EMPTY_CHANGED;
 
     // 1. Anchored: the cited line must be a real changed line in the diff.
     if (!changedSet.has(f.line)) continue;

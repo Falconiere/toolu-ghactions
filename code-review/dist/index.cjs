@@ -37441,11 +37441,14 @@ var Finding = external_exports.object({
 });
 var Verdict = external_exports.object({
   // Bounded: review_plan is emitted FIRST, so an unbounded plan eats the output
-  // budget before findings and starves them under truncation. maxLength is honored
-  // during constrained decoding (the model caps the plan, then continues cleanly),
-  // so this both saves tokens and never fails validation. The prompt also asks for
-  // ≤ 2 short sentences, so the hard cap is only a backstop.
-  review_plan: external_exports.string().max(280),
+  // budget before findings and starves them under truncation. The prompt asks for
+  // ≤ 2 short sentences (≤ 280 chars) and the JSON-schema maxLength nudges the model,
+  // but in JSON mode the provider only receives response_format:{type:"json_object"} —
+  // the schema (hence maxLength) is NOT enforced during decoding. So the cap is a soft
+  // backstop: an over-length plan is TRUNCATED via .catch rather than failing
+  // validation, which would otherwise throw the whole (complete, valid) review away as
+  // an abstention.
+  review_plan: external_exports.string().max(280).catch(({ input }) => typeof input === "string" ? input.slice(0, 280) : ""),
   verdict: external_exports.enum(["approved", "changes"]),
   findings: external_exports.array(Finding),
   other_checks: external_exports.string().default(""),
@@ -37514,7 +37517,7 @@ async function reviewWithModel(envelope, opts) {
         });
         continue;
       }
-      if (isLengthTruncation(err)) {
+      if (isLengthTruncation(err) && hasPartialOutput(err)) {
         if (budget < MAX_TOKEN_CEILING && attempt < maxAttempts) {
           budget = Math.min(budget * 2, MAX_TOKEN_CEILING);
           continue;
@@ -37531,6 +37534,9 @@ async function reviewWithModel(envelope, opts) {
 }
 function isLengthTruncation(err) {
   return NoObjectGeneratedError.isInstance(err) && err.finishReason === "length";
+}
+function hasPartialOutput(err) {
+  return NoObjectGeneratedError.isInstance(err) && typeof err.text === "string" && err.text.trim() !== "";
 }
 function salvageTruncated(err) {
   if (!NoObjectGeneratedError.isInstance(err) || typeof err.text !== "string") return null;
@@ -37553,7 +37559,9 @@ function salvageTruncated(err) {
     // "changes" — never carry a truncated "approved" forward alongside findings.
     verdict: "changes",
     findings,
-    review_plan: loose.data.review_plan ?? "",
+    // Match the main-path cap: PartialVerdict leaves review_plan unbounded, so truncate
+    // here too rather than carry an over-length plan that the strict path would reject.
+    review_plan: (loose.data.review_plan ?? "").slice(0, 280),
     other_checks: "",
     top_must_fix: [],
     partial: true,
@@ -37900,10 +37908,14 @@ function buildSeveritySummary(findings) {
 
 // src/review/validate.ts
 function validateFindings(findings, changedLinesByPath, minConfidence, lineTextByPath) {
+  const changedSetByPath = /* @__PURE__ */ new Map();
+  for (const [path, lines] of changedLinesByPath) {
+    changedSetByPath.set(path, new Set(lines));
+  }
+  const EMPTY_CHANGED = /* @__PURE__ */ new Set();
   const kept = [];
   for (const f of findings) {
-    const changed = changedLinesByPath.get(f.path) ?? [];
-    const changedSet = new Set(changed);
+    const changedSet = changedSetByPath.get(f.path) ?? EMPTY_CHANGED;
     if (!changedSet.has(f.line)) continue;
     const isLlm = f.source === void 0 || f.source === "llm";
     if (isLlm && f.quoted_line !== void 0 && lineTextByPath !== void 0) {

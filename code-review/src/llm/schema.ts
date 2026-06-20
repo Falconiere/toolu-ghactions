@@ -51,11 +51,17 @@ export const Finding = z.object({
  */
 export const Verdict = z.object({
   // Bounded: review_plan is emitted FIRST, so an unbounded plan eats the output
-  // budget before findings and starves them under truncation. maxLength is honored
-  // during constrained decoding (the model caps the plan, then continues cleanly),
-  // so this both saves tokens and never fails validation. The prompt also asks for
-  // ≤ 2 short sentences, so the hard cap is only a backstop.
-  review_plan: z.string().max(280),
+  // budget before findings and starves them under truncation. The prompt asks for
+  // ≤ 2 short sentences (≤ 280 chars) and the JSON-schema maxLength nudges the model,
+  // but in JSON mode the provider only receives response_format:{type:"json_object"} —
+  // the schema (hence maxLength) is NOT enforced during decoding. So the cap is a soft
+  // backstop: an over-length plan is TRUNCATED via .catch rather than failing
+  // validation, which would otherwise throw the whole (complete, valid) review away as
+  // an abstention.
+  review_plan: z
+    .string()
+    .max(280)
+    .catch(({ input }) => (typeof input === "string" ? input.slice(0, 280) : "")),
   verdict: z.enum(["approved", "changes"]),
   findings: z.array(Finding),
   other_checks: z.string().default(""),
