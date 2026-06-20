@@ -59,6 +59,35 @@ describe("reviewWithModel", () => {
     expect(result.finishReason).toBe("length");
   });
 
+  it("abstains on the FIRST attempt for empty content (reasoning-budget bug), not after escalating", async () => {
+    // Empty content + finish_reason "length" is the reasoning-budget bug, NOT a real
+    // mid-JSON truncation: the model burned the whole budget on hidden reasoning and
+    // emitted nothing, so a larger budget only burns more reasoning tokens. The loop
+    // must abstain immediately — one model call, no budget-escalation retries — even
+    // though maxAttempts 3 leaves room.
+    let calls = 0;
+    const countingFetch: typeof fetch = async () => {
+      calls++;
+      return new Response(JSON.stringify(fixture("empty-content")), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const result = await reviewWithModel(ENVELOPE, {
+      model: "deepseek/deepseek-v4-flash",
+      apiKey: "sk-test",
+      fetch: countingFetch,
+      maxRetries: 0,
+      maxAttempts: 3,
+    });
+
+    expect(result.verdict).toBe("error");
+    expect(result.finishReason).toBe("length");
+    // The headline fix: empty content does NOT trigger the 3x budget-escalation retries.
+    expect(calls).toBe(1);
+  });
+
   it("salvages the findings completed before a length-truncation cut (partial)", async () => {
     // Recorded response truncated mid-third-finding with finish_reason "length":
     // two findings are complete, the third is cut off. maxAttempts 1 skips the

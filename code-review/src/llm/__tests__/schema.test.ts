@@ -98,4 +98,23 @@ describe("Verdict schema", () => {
       expect(parsed.data.top_must_fix).toEqual([]);
     }
   });
+
+  // The provider does not enforce the schema's maxLength during JSON-mode decoding, so
+  // a complete, valid review can come back with a >280-char plan. The .catch backstop
+  // must TRUNCATE it to 280 rather than fail validation, which would otherwise throw
+  // the entire (complete) review away as an abstention.
+  it("truncates an over-length review_plan instead of rejecting the whole verdict", () => {
+    const longPlan = "x".repeat(400);
+    const verbose = {
+      review_plan: longPlan,
+      verdict: "changes",
+      findings: [],
+    };
+    const parsed = Verdict.safeParse(verbose);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.review_plan).toHaveLength(280);
+      expect(parsed.data.review_plan).toBe(longPlan.slice(0, 280));
+    }
+  });
 });

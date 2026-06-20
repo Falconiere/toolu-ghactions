@@ -1,6 +1,6 @@
 // llm/openrouter.ts — the single OpenRouter LLM call, via the Vercel AI SDK.
 // Consolidation target of the bash providers/openrouter/* scripts: one model,
-// structured output (generateObject + the Zod Verdict schema), temperature 0.1.
+// structured output (generateObject + the Zod Verdict schema), temperature 0.
 //
 // REASONING-OFF (the bug fix): reasoning models burn the whole max_tokens budget
 // on hidden reasoning and return empty content (finish_reason "length"). We send
@@ -103,7 +103,7 @@ const EXTRA_BODY = {
 /**
  * Run one structured code review against an OpenRouter model.
  *
- * Wraps generateObject with the {@link Verdict} schema and temperature 0.1, and
+ * Wraps generateObject with the {@link Verdict} schema and temperature 0, and
  * forwards {@link EXTRA_BODY} (reasoning-off + require_parameters) on every call.
  * NEVER throws: any failure after retries (empty content, parse/validation error,
  * API error) is caught and returned as a verdict:"error" abstention.
@@ -170,9 +170,13 @@ export async function reviewWithModel(
         });
         continue;
       }
-      // Length truncation (finish_reason "length"): the model hit the token limit
-      // mid-JSON, so the response is truncated and unparseable.
-      if (isLengthTruncation(err)) {
+      // Length truncation (finish_reason "length") WITH partial output: the model hit
+      // the token limit mid-JSON, so the response is truncated but salvageable. Empty
+      // content + finish_reason "length" is instead the reasoning-budget bug this file
+      // exists to fix (the model burned the whole budget on hidden reasoning and emitted
+      // nothing) — a larger budget would only burn MORE reasoning tokens, so we neither
+      // escalate nor salvage that; we fall straight through to a fast abstain.
+      if (isLengthTruncation(err) && hasPartialOutput(err)) {
         // Prefer a COMPLETE response: retry with a doubled output budget while there's
         // room. Not an abort and not rate-limited, so no backoff. Capped at the ceiling.
         if (budget < MAX_TOKEN_CEILING && attempt < maxAttempts) {
@@ -206,6 +210,18 @@ function isLengthTruncation(err: unknown): boolean {
 }
 
 /**
+ * True when a NoObjectGeneratedError carries non-empty raw model output. Separates a
+ * real mid-JSON truncation (partial text present — worth a bigger budget + salvage)
+ * from the reasoning-budget bug (empty content + finish_reason "length": the model
+ * emitted nothing, so escalating the budget only burns more reasoning tokens).
+ */
+function hasPartialOutput(err: unknown): boolean {
+  return (
+    NoObjectGeneratedError.isInstance(err) && typeof err.text === "string" && err.text.trim() !== ""
+  );
+}
+
+/**
  * Recover the findings completed before a length-truncation cut. The raw (truncated)
  * model output is on {@link NoObjectGeneratedError.text}; jsonrepair closes the open
  * JSON, then each finding is validated INDIVIDUALLY so the incomplete trailing one is
@@ -233,7 +249,9 @@ function salvageTruncated(err: unknown): ProviderResult | null {
     // "changes" — never carry a truncated "approved" forward alongside findings.
     verdict: "changes",
     findings,
-    review_plan: loose.data.review_plan ?? "",
+    // Match the main-path cap: PartialVerdict leaves review_plan unbounded, so truncate
+    // here too rather than carry an over-length plan that the strict path would reject.
+    review_plan: (loose.data.review_plan ?? "").slice(0, 280),
     other_checks: "",
     top_must_fix: [],
     partial: true,
