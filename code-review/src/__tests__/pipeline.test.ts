@@ -207,6 +207,7 @@ function fakeOctokit(
 /** Default, fully-resolved inputs (what readInputs would yield for a basic run). */
 function baseInputs(overrides: Partial<ActionInputs> = {}): ActionInputs {
   return {
+    provider: "openrouter",
     model: "deepseek/deepseek-v4-flash",
     apiKey: "sk-test",
     maxTokens: 4096,

@@ -207,6 +207,7 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
       }),
     review: (envelope) =>
       reviewWithModel(envelope, {
+        provider: inputs.provider,
         model: inputs.model,
         apiKey: inputs.apiKey,
         timeoutMs: inputs.requestTimeoutMs,

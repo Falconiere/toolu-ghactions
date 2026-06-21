@@ -1,142 +1,145 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as core from "@actions/core";
-import { readInputs } from "@/inputs.js";
+import { readInputs } from "../inputs.js";
 
-// readInputs() reads real INPUT_* env vars via @actions/core.getInput (the same
-// pattern main.test.ts uses). No mocks of getInput — we set the env directly and
-// only SPY on core.warning to assert the FIX 8 fallback warnings fire. This is
-// the real resolution path end to end.
-
-const savedEnv = { ...process.env };
-
-/** core.getInput("FOO_BAR") reads process.env.INPUT_FOO_BAR. */
+/** Set an action input as @actions/core reads it (process.env.INPUT_<NAME>). */
 function setInput(name: string, value: string): void {
   process.env[`INPUT_${name}`] = value;
 }
 
-beforeEach(() => {
-  for (const k of Object.keys(process.env)) {
-    if (k.startsWith("INPUT_")) delete process.env[k];
+/** Snapshot the env so each test starts from a known state. */
+const savedEnv = { ...process.env };
+
+function clearInputs(): void {
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith("INPUT_")) delete process.env[key];
   }
-  // A legacy key so a provider resolves without throwing.
-  setInput("OPENROUTER_API_KEY", "sk-test");
+}
+
+beforeEach(() => {
+  clearInputs();
+  // API_KEY is required; default it so tests that don't exercise it never throw.
+  setInput("API_KEY", "sk-test");
   setInput("TOKEN", "ghs_token");
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
-  for (const k of Object.keys(process.env)) {
-    if (k.startsWith("INPUT_")) delete process.env[k];
+  clearInputs();
+  for (const key of Object.keys(process.env)) {
+    if (!(key in savedEnv)) delete process.env[key];
   }
   Object.assign(process.env, savedEnv);
 });
 
-describe("REQUEST_TIMEOUT_MS — per-attempt model deadline", () => {
-  it("defaults to 180000ms (3 min) when unset — generous for the slow default model", () => {
+describe("REQUEST_TIMEOUT_MS", () => {
+  it("defaults to 180000ms", () => {
     expect(readInputs().requestTimeoutMs).toBe(180000);
   });
 
-  it("is overridable via the input", () => {
+  it("honors a valid override", () => {
     setInput("REQUEST_TIMEOUT_MS", "300000");
     expect(readInputs().requestTimeoutMs).toBe(300000);
   });
 
-  it('"0" falls back to the 180000 default with a warning (would abort instantly)', () => {
+  it("falls back to the default on a non-positive value, with a warning", () => {
     setInput("REQUEST_TIMEOUT_MS", "0");
     const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
     expect(readInputs().requestTimeoutMs).toBe(180000);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("REQUEST_TIMEOUT_MS=0"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("not a positive timeout"));
   });
 
-  it('"-5" (negative) falls back to 180000 with a warning', () => {
-    setInput("REQUEST_TIMEOUT_MS", "-5");
-    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
-    expect(readInputs().requestTimeoutMs).toBe(180000);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("REQUEST_TIMEOUT_MS=-5"));
-  });
-
-  it("a non-numeric value falls back to 180000 (intInput's own non-finite guard, silent)", () => {
-    setInput("REQUEST_TIMEOUT_MS", "not-a-number");
+  it("falls back to the default on a non-numeric value", () => {
+    setInput("REQUEST_TIMEOUT_MS", "abc");
     expect(readInputs().requestTimeoutMs).toBe(180000);
   });
 });
 
-describe("FIX 8 — token budget must be positive", () => {
-  it('MAX_TOKENS="0" falls back to the 8192 default with a warning', () => {
+describe("MAX_TOKENS", () => {
+  it("defaults to 8192", () => {
+    expect(readInputs().maxTokens).toBe(8192);
+  });
+
+  it("honors a valid override", () => {
+    setInput("MAX_TOKENS", "2048");
+    expect(readInputs().maxTokens).toBe(2048);
+  });
+
+  it("falls back to the default on a non-positive value, with a warning", () => {
     setInput("MAX_TOKENS", "0");
     const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+    expect(readInputs().maxTokens).toBe(8192);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("not a positive token budget"));
+  });
+});
+
+describe("string inputs are trimmed", () => {
+  it("trims REVIEW_PROMPT_FILE and CODEBASE_OVERVIEW", () => {
+    setInput("REVIEW_PROMPT_FILE", "  ./custom-prompt.md  ");
+    setInput("CODEBASE_OVERVIEW", "  a TypeScript GitHub Action  ");
     const inputs = readInputs();
-    expect(inputs.maxTokens).toBe(8192);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("MAX_TOKENS=0"));
+    expect(inputs.reviewPromptFile).toBe("./custom-prompt.md");
+    expect(inputs.codebaseOverview).toBe("a TypeScript GitHub Action");
+  });
+});
+
+describe("provider contract (PROVIDER / MODEL_ID / API_KEY)", () => {
+  it("AC-3: defaults PROVIDER to openrouter and MODEL_ID to the openrouter default", () => {
+    const inputs = readInputs();
+    expect(inputs.provider).toBe("openrouter");
+    expect(inputs.model).toBe("deepseek/deepseek-v4-pro");
   });
 
-  it('MAX_TOKENS="-1" (negative) also falls back to 8192 with a warning', () => {
-    setInput("MAX_TOKENS", "-1");
+  it("AC-4: PROVIDER=deepseek without MODEL_ID defaults to deepseek-v4-flash", () => {
+    setInput("PROVIDER", "deepseek");
+    const inputs = readInputs();
+    expect(inputs.provider).toBe("deepseek");
+    expect(inputs.model).toBe("deepseek-v4-flash");
+  });
+
+  it("honors an explicit MODEL_ID over the per-provider default", () => {
+    setInput("PROVIDER", "deepseek");
+    setInput("MODEL_ID", "deepseek-v4-pro");
+    expect(readInputs().model).toBe("deepseek-v4-pro");
+  });
+
+  it("reads the API_KEY input", () => {
+    setInput("API_KEY", "sk-live");
+    expect(readInputs().apiKey).toBe("sk-live");
+  });
+
+  it("AC-5: throws when API_KEY is empty", () => {
+    setInput("API_KEY", "");
+    expect(() => readInputs()).toThrow(/API_KEY is required/);
+  });
+
+  it("AC-6: an unsupported PROVIDER throws, naming the supported set and the workaround", () => {
+    setInput("PROVIDER", "openai");
+    expect(() => readInputs()).toThrow(/is not supported \(supported: openrouter, deepseek\)/);
+    expect(() => readInputs()).toThrow(/PROVIDER:"openrouter"/);
+  });
+
+  it("resolves PROVIDER case-insensitively", () => {
+    setInput("PROVIDER", "DeepSeek");
+    expect(readInputs().provider).toBe("deepseek");
+  });
+
+  it("warns when a deepseek MODEL_ID looks like an OpenRouter id (slash namespace)", () => {
+    setInput("PROVIDER", "deepseek");
+    setInput("MODEL_ID", "deepseek/deepseek-v4-pro");
     const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
-    const inputs = readInputs();
-    expect(inputs.maxTokens).toBe(8192);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("MAX_TOKENS=-1"));
+    readInputs();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("looks like an OpenRouter id"));
   });
 
-  it("a PROVIDERS entry with max_tokens:0 falls back to 8192 with a warning", () => {
-    setInput(
-      "PROVIDERS",
-      JSON.stringify([{ model: "deepseek/deepseek-v4-flash", api_key: "k", max_tokens: 0 }]),
+  it("warns with a migration hint when a removed v4 input is still passed", () => {
+    setInput("OPENROUTER_API_KEY", "sk-old");
+    setInput("MODEL", "deepseek/deepseek-v4-pro");
+    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+    readInputs();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("OPENROUTER_API_KEY was removed in v4"),
     );
-    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
-    const inputs = readInputs();
-    expect(inputs.maxTokens).toBe(8192);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("PROVIDERS[0].max_tokens=0"));
-  });
-
-  it("a valid positive MAX_TOKENS is preserved and does NOT warn", () => {
-    setInput("MAX_TOKENS", "8192");
-    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
-    const inputs = readInputs();
-    expect(inputs.maxTokens).toBe(8192);
-    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("token budget"));
-  });
-
-  it("a valid positive PROVIDERS max_tokens is preserved", () => {
-    setInput("PROVIDERS", JSON.stringify([{ model: "x/y", api_key: "k", max_tokens: 2048 }]));
-    vi.spyOn(core, "warning").mockImplementation(() => {});
-    const inputs = readInputs();
-    expect(inputs.maxTokens).toBe(2048);
-  });
-});
-
-describe("FIX 9 — REVIEW_PROMPT_FILE / CODEBASE_OVERVIEW are trimmed", () => {
-  it('REVIEW_PROMPT_FILE="\\n  " (whitespace-only YAML block scalar) resolves to ""', () => {
-    setInput("REVIEW_PROMPT_FILE", "\n  ");
-    vi.spyOn(core, "warning").mockImplementation(() => {});
-    const inputs = readInputs();
-    // Trimmed to "" → prompt.ts uses the default checklist instead of a bogus path.
-    expect(inputs.reviewPromptFile).toBe("");
-  });
-
-  it("CODEBASE_OVERVIEW is trimmed of surrounding whitespace/newlines", () => {
-    setInput("CODEBASE_OVERVIEW", "\n  A monorepo of TS actions.  \n");
-    vi.spyOn(core, "warning").mockImplementation(() => {});
-    const inputs = readInputs();
-    expect(inputs.codebaseOverview).toBe("A monorepo of TS actions.");
-  });
-
-  it("a real REVIEW_PROMPT_FILE path survives trimming", () => {
-    setInput("REVIEW_PROMPT_FILE", "  prompts/custom.txt  ");
-    vi.spyOn(core, "warning").mockImplementation(() => {});
-    const inputs = readInputs();
-    expect(inputs.reviewPromptFile).toBe("prompts/custom.txt");
-  });
-});
-
-describe("PROVIDERS zod validation (rejects malformed entries instead of mistyping them)", () => {
-  it("throws when a PROVIDERS entry is not an object", () => {
-    setInput("PROVIDERS", JSON.stringify(["deepseek/deepseek-v4-flash"]));
-    expect(() => readInputs()).toThrow(/PROVIDERS entries are not valid/);
-  });
-
-  it("throws when a PROVIDERS entry has a wrong-typed field", () => {
-    setInput("PROVIDERS", JSON.stringify([{ model: 123 }]));
-    expect(() => readInputs()).toThrow(/PROVIDERS entries are not valid/);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("MODEL was removed in v4"));
   });
 });

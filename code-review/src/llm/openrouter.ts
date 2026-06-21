@@ -1,24 +1,24 @@
-// llm/openrouter.ts — the single OpenRouter LLM call, via the Vercel AI SDK.
-// Consolidation target of the bash providers/openrouter/* scripts: one model,
-// structured output (generateObject + the Zod Verdict schema), temperature 0.
+// llm/openrouter.ts — the provider-agnostic review LLM call, via the Vercel AI SDK.
+// One model, structured output (generateObject + the Zod Verdict schema), temperature 0.
+// The backend (OpenRouter or native DeepSeek) is chosen by resolveModel() in
+// providers.ts; this file owns only the provider-agnostic review loop (timeout/abort,
+// retries, budget escalation, salvage, abstain). NOTE: the filename predates the
+// multi-provider split — the export is reviewWithModel().
 //
-// REASONING-OFF (the bug fix): reasoning models burn the whole max_tokens budget
-// on hidden reasoning and return empty content (finish_reason "length"). We send
-// `reasoning: { effort: "none" }` to disable it. The typed provider setting only
-// allows effort high|medium|low, so "none" must ride in `extraBody`, alongside
-// `provider: { require_parameters: true }` (the bash sets this when enforcing the
-// schema). Both land in every outgoing request body because the provider merges
-// the factory `extraBody` into baseArgs for all generation modes — see
-// request-shape.test.ts for the proof.
+// REASONING-OFF / require_parameters: the OpenRouter-only request-body extras that
+// disable hidden reasoning and force schema honoring now live in providers.ts
+// (OPENROUTER_EXTRA_BODY). They are NOT sent on the native DeepSeek path, which rejects
+// them (deepseek-v4-flash is non-thinking by default). See request-shape.test.ts
+// (OpenRouter extras present) and deepseek.test.ts (native: extras absent) for the proof.
 //
 // ABSTAIN-ON-ERROR: generateObject throws on empty content, JSON parse failure,
 // schema-validation failure, or an API error (after retries). We CATCH every
 // throw and return a verdict:"error" ProviderResult — never throw to the caller,
 // never return a null verdict. A failed model call abstains; it does not block.
-import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { generateObject, NoObjectGeneratedError } from "ai";
 import { jsonrepair } from "jsonrepair";
 import { errorMessage } from "@/errors.js";
+import { resolveModel, type ProviderId } from "./providers.js";
 import { Verdict, Finding, PartialVerdict } from "./schema.js";
 import type { Envelope } from "@/prompt.js";
 
@@ -58,11 +58,13 @@ export const MAX_ATTEMPTS = 3;
  */
 export const MAX_TOKEN_CEILING = 32_768;
 
-/** Options for {@link reviewWithModel}: the model id, API key, and test seams. */
+/** Options for {@link reviewWithModel}: the provider, model id, API key, and test seams. */
 export interface ReviewOptions {
-  /** OpenRouter model id, e.g. "deepseek/deepseek-v4-flash". */
+  /** Backend provider; defaults to "openrouter" when omitted (preserves legacy callers). */
+  provider?: ProviderId;
+  /** Model id for the chosen provider (e.g. "deepseek-v4-flash" or "deepseek/deepseek-v4-pro"). */
   model: string;
-  /** OpenRouter API key (Authorization: Bearer). */
+  /** Provider API key (Authorization: Bearer). */
   apiKey: string;
   /** Custom fetch — injected by tests to replay recorded responses; real fetch in prod. */
   fetch?: typeof fetch;
@@ -93,33 +95,24 @@ export interface ProviderResult {
   partial?: boolean;
 }
 
-/** Extra request-body fields the AI SDK has no typed slot for, forwarded verbatim. */
-const EXTRA_BODY = {
-  // Disable reasoning so the model spends max_tokens on the answer, not hidden
-  // thinking. "none" is not in the SDK's typed reasoning effort union, so it
-  // must be carried as raw extraBody.
-  reasoning: { effort: "none" },
-  // Require the upstream provider to honor the structured-output parameters —
-  // the bash sets this whenever it enforces the JSON schema.
-  provider: { require_parameters: true },
-} as const;
-
 /**
- * Run one structured code review against an OpenRouter model.
+ * Run one structured code review against the configured provider's model.
  *
- * Wraps generateObject with the {@link Verdict} schema and temperature 0, and
- * forwards {@link EXTRA_BODY} (reasoning-off + require_parameters) on every call.
- * NEVER throws: any failure after retries (empty content, parse/validation error,
+ * Wraps generateObject with the {@link Verdict} schema and temperature 0. The backend
+ * client (and any provider-specific request-body extras) comes from {@link resolveModel}
+ * — OpenRouter sends the reasoning-off + require_parameters extras; native DeepSeek sends
+ * neither. NEVER throws: any failure after retries (empty content, parse/validation error,
  * API error) is caught and returned as a verdict:"error" abstention.
  */
 export async function reviewWithModel(
   envelope: Envelope,
   opts: ReviewOptions,
 ): Promise<ProviderResult> {
-  const provider = createOpenRouter({
+  const model = resolveModel({
+    provider: opts.provider ?? "openrouter",
+    model: opts.model,
     apiKey: opts.apiKey,
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
-    extraBody: EXTRA_BODY,
   });
 
   const perAttemptMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
@@ -142,7 +135,7 @@ export async function reviewWithModel(
 
     try {
       const { object } = await generateObject({
-        model: provider(opts.model),
+        model,
         schema: Verdict,
         // JSON mode (not the SDK default "tool" mode): the bash reads the verdict
         // from .choices[0].message.content via response_format, NOT from a tool

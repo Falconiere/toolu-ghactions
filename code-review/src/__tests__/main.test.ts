@@ -70,8 +70,8 @@ afterEach(() => {
 
 describe("main — entry wiring", () => {
   it("non-trigger push event → sets verdict=skip output, does not fail the job", async () => {
-    // A legacy single-provider key so readInputs resolves an effective provider.
-    process.env["INPUT_OPENROUTER_API_KEY"] = "sk-test";
+    // The required API key so readInputs resolves a provider.
+    process.env["INPUT_API_KEY"] = "sk-test";
     process.env["INPUT_TOKEN"] = "ghs_token";
     process.env["GITHUB_SHA"] = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
     setEvent("push", { ref: "refs/heads/feature" });
@@ -85,11 +85,12 @@ describe("main — entry wiring", () => {
     expect(process.exitCode === undefined || process.exitCode === 0).toBe(true);
   });
 
-  it("infra failure (malformed PROVIDERS) → verdict=error output and the job is failed", async () => {
-    // readInputs() throws on a PROVIDERS value that is set but not a JSON array.
-    // This trips the last-resort main().catch BEFORE any octokit/network call —
-    // proving the top-level guard sets verdict=error and fails the job hermetically.
-    process.env["INPUT_PROVIDERS"] = "not-a-json-array";
+  it("infra failure (unsupported PROVIDER) → verdict=error output and the job is failed", async () => {
+    // readInputs() throws on an unsupported PROVIDER. This trips the last-resort
+    // main().catch BEFORE any octokit/network call — proving the top-level guard sets
+    // verdict=error and fails the job hermetically.
+    process.env["INPUT_API_KEY"] = "sk-test";
+    process.env["INPUT_PROVIDER"] = "openai";
     process.env["INPUT_TOKEN"] = "ghs_token";
     process.env["GITHUB_SHA"] = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
     setEvent("pull_request", { pull_request: { number: 7, base: { ref: "main" } } });
