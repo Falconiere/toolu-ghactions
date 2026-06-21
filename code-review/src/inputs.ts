@@ -16,6 +16,7 @@ import {
   defaultModelFor,
 } from "./llm/providers.js";
 import { parseFailOn, type BlockableVerdict } from "./review/gate.js";
+import { splitGlobs } from "./git/globs.js";
 
 /** Minimum confidence floor for the validate gate (high|medium). */
 export type MinConfidence = "high" | "medium";
@@ -48,6 +49,8 @@ export interface ActionInputs {
   checkProjectRules: boolean;
   /** Extra path globs to include as project rules (newline/comma-separated), or "". */
   rulesGlob: string;
+  /** Extra path globs to EXCLUDE from the reviewed diff, on top of the built-in generated/vendored set. */
+  excludeGlobs: string[];
   /** Total byte cap on gathered project-rules text. */
   rulesMaxBytes: number;
   /** Max changed files before the action skips (0 = unlimited). */
@@ -215,6 +218,7 @@ export function readInputs(): ActionInputs {
     codebaseOverview: core.getInput("CODEBASE_OVERVIEW").trim(),
     checkProjectRules: readBool("CHECK_PROJECT_RULES", true),
     rulesGlob: core.getInput("RULES_GLOB"),
+    excludeGlobs: splitGlobs(core.getInput("EXCLUDE_GLOBS")),
     rulesMaxBytes: intInput("RULES_MAX_BYTES", 32768),
     maxFiles: intInput("MAX_FILES", 0),
     maxDiffLines: intInput("MAX_DIFF_LINES", 0),

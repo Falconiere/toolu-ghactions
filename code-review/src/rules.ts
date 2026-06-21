@@ -9,6 +9,7 @@
 // No working-tree reads occur, so a PR cannot poison the rules until it is merged,
 // and the RULES_GLOB cannot path-escape the repo (ls-tree lists tracked blobs only).
 import { execFileSync } from "node:child_process";
+import { splitGlobs, globMatcher } from "./git/globs.js";
 
 /** Default byte cap matching gather-rules.sh INPUT_RULES_MAX_BYTES. */
 const DEFAULT_MAX_BYTES = 32768;
@@ -80,42 +81,7 @@ function listTracked(baseSha: string, cwd: string): string[] {
   return out.split("\n").filter((p) => p !== "");
 }
 
-/** Split RULES_GLOB on commas and newlines, trimming each entry (drops blanks). */
-function splitGlobs(rulesGlob: string): string[] {
-  return rulesGlob
-    .split(/[,\n]/)
-    .map((e) => e.trim())
-    .filter((e) => e !== "");
-}
-
-/**
- * Translate one tracked-path glob entry into a matcher. `dir/**` and `dir/` are
- * prefix matches (everything under dir/); anything else is a shell-style glob
- * where `*` matches any run including `/` and `?` matches one char — reproducing
- * bash `[[ "$p" == $entry ]]` against tracked paths.
- */
-function globMatcher(entry: string): (p: string) => boolean {
-  if (entry.endsWith("/**")) {
-    const prefix = entry.slice(0, -2); // drop the "**", keep the trailing "/"
-    return (p) => p.startsWith(prefix);
-  }
-  if (entry.endsWith("/")) {
-    return (p) => p.startsWith(entry);
-  }
-  const re = globToRegExp(entry);
-  return (p) => re.test(p);
-}
-
-/** Compile a shell glob (`*`, `?`) to an anchored RegExp; all else is literal. */
-function globToRegExp(glob: string): RegExp {
-  let out = "";
-  for (const ch of glob) {
-    if (ch === "*") out += "[\\s\\S]*";
-    else if (ch === "?") out += "[\\s\\S]";
-    else out += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-  }
-  return new RegExp(`^${out}$`);
-}
+// splitGlobs / globMatcher / globToRegExp now live in git/globs.ts (shared with EXCLUDE_GLOBS).
 
 /** Ancestor directories of a changed file, nearest first (root file → none). */
 function ancestorDirs(file: string): string[] {

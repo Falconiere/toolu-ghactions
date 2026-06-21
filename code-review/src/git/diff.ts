@@ -5,11 +5,20 @@
 import { execFileSync } from "node:child_process";
 import { shapeDiff, type ShapedFile } from "./shape.js";
 import { noiseReason } from "./noise.js";
+import { anyGlobMatches } from "./globs.js";
 
 /** A file dropped before diffing, with the reason it was classified as noise. */
 export interface DroppedFile {
   path: string;
   reason: string;
+}
+
+/** A file renamed within the diff range (detected with rename detection, separately
+ *  from the `--no-renames` review diff) — surfaced to the prompt so the model reads
+ *  a move as a rename, not a delete + add. */
+export interface RenamedFile {
+  from: string;
+  to: string;
 }
 
 /**
@@ -23,6 +32,7 @@ export interface DiffData {
   changed_files: string[];
   binary_files: string[];
   dropped_files: DroppedFile[];
+  renames: RenamedFile[];
   total_lines: number;
   total_files: number;
   truncated: boolean;
@@ -44,6 +54,8 @@ export interface DiffOptions {
   maxDiffLines?: number;
   reviewHead?: string;
   githubBaseRef?: string;
+  /** Extra path globs to exclude from the reviewed diff (← INPUT_EXCLUDE_GLOBS, split). */
+  excludeGlobs?: string[];
   cwd?: string;
 }
 
@@ -90,6 +102,7 @@ function emptyResult(baseSha: string): DiffData {
     changed_files: [],
     binary_files: [],
     dropped_files: [],
+    renames: [],
     total_lines: 0,
     total_files: 0,
     truncated: false,
@@ -160,6 +173,8 @@ function classifyFiles(
   numstat: string,
   reviewHead: string,
   cwd: string,
+  excludeGlobs: readonly string[],
+  generatedPaths: ReadonlySet<string>,
 ): { binary: string[]; text: string[]; dropped: DroppedFile[] } {
   const binary: string[] = [];
   const text: string[] = [];
@@ -188,6 +203,16 @@ function classifyFiles(
 
     if (added === "-" && removed === "-") {
       binary.push(path);
+      continue;
+    }
+    // User globs (EXCLUDE_GLOBS) and repo .gitattributes linguist-generated drop a
+    // file before the static noise classifier — both are non-authored by definition.
+    if (excludeGlobs.length > 0 && anyGlobMatches(excludeGlobs, path)) {
+      dropped.push({ path, reason: "excluded" });
+      continue;
+    }
+    if (generatedPaths.has(path)) {
+      dropped.push({ path, reason: "generated (.gitattributes)" });
       continue;
     }
     const reason = noiseReason(path, readBlob, blobSize);
@@ -244,6 +269,7 @@ export function fetchDiff(opts: DiffOptions): DiffData {
   const maxFiles = opts.maxFiles ?? 0;
   const maxDiffLines = opts.maxDiffLines ?? 0;
   const reviewHead = opts.reviewHead ?? "HEAD";
+  const excludeGlobs = opts.excludeGlobs ?? [];
 
   // Prefer the PR base ref when the caller left the default "main".
   let baseBranch = opts.baseBranch ?? "main";
@@ -260,26 +286,37 @@ export function fetchDiff(opts: DiffOptions): DiffData {
   // new" arrow path that breaks the pathspec'd diff; off, a rename is delete + add.
   const changedFiles =
     gitOrNull(["diff", "--no-renames", "--name-only", mergeBase, reviewHead], cwd) ?? "";
-  const totalFiles = changedFiles.split("\n").filter((l) => l.trim() !== "").length;
+  const changedPaths = changedFiles.split("\n").filter((l) => l.trim() !== "");
+  const totalFiles = changedPaths.length;
 
   if (totalFiles === 0) {
     return emptyResult(baseSha);
   }
 
-  // Enforce the file-count limit before expensive diff work (opt-in: >0). This
-  // is a non-throwing skip signal: main reads `.error` and posts a skip comment.
-  if (maxFiles > 0 && totalFiles > maxFiles) {
+  const numstat =
+    gitOrNull(["diff", "--no-renames", "--numstat", mergeBase, reviewHead], cwd) ?? "";
+  // Exclusion (EXCLUDE_GLOBS → .gitattributes linguist-generated → static noise) runs
+  // BEFORE the file-count gate, so a PR dominated by generated/vendored files is
+  // reviewed on its few real files instead of being skipped wholesale.
+  const generatedPaths = gitattributesGenerated(changedPaths, cwd);
+  const { binary, text, dropped } = classifyFiles(
+    numstat,
+    reviewHead,
+    cwd,
+    excludeGlobs,
+    generatedPaths,
+  );
+
+  // The file-count limit gates the POST-EXCLUSION reviewed set (opt-in: >0). Non-throwing
+  // skip signal: main reads `.error` and posts a skip comment.
+  if (maxFiles > 0 && text.length > maxFiles) {
     return {
       ...emptyResult(baseSha),
       total_files: totalFiles,
       max_files: maxFiles,
-      error: `PR exceeds file limit (${totalFiles} changed files > ${maxFiles} max). Raise MAX_FILES to review it.`,
+      error: `PR exceeds file limit (${text.length} files to review > ${maxFiles} max). Raise MAX_FILES to review it.`,
     };
   }
-
-  const numstat =
-    gitOrNull(["diff", "--no-renames", "--numstat", mergeBase, reviewHead], cwd) ?? "";
-  const { binary, text, dropped } = classifyFiles(numstat, reviewHead, cwd);
 
   // Build the line-primed diff + per-file changed_lines for the text files.
   // Command-substitution in the bash strips trailing newlines, so do the same.
@@ -307,11 +344,67 @@ export function fetchDiff(opts: DiffOptions): DiffData {
     changed_files: text,
     binary_files: binary,
     dropped_files: dropped,
+    renames: detectRenames(mergeBase, reviewHead, cwd, new Set(text)),
     total_lines: diffLines,
     total_files: totalFiles,
     truncated,
     base_sha: baseSha,
   };
+}
+
+/**
+ * Paths the repo marks `linguist-generated` in `.gitattributes` (the signal GitHub's
+ * own diff UI uses). One batched `git check-attr` over the changed paths. Degrades to
+ * an empty set if check-attr is unavailable or errors — static patterns + EXCLUDE_GLOBS
+ * still apply. Only `linguist-generated` suppresses diffs; `linguist-vendored` does not.
+ */
+function gitattributesGenerated(paths: readonly string[], cwd: string): Set<string> {
+  const out = new Set<string>();
+  if (paths.length === 0) return out;
+  let res: string;
+  try {
+    res = execFileSync("git", ["check-attr", "linguist-generated", "--stdin"], {
+      cwd,
+      input: paths.join("\n"),
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    });
+  } catch {
+    return out; // check-attr unavailable / no .gitattributes → skip this layer
+  }
+  for (const line of res.split("\n")) {
+    // Format: "<path>: linguist-generated: set" (or ": unspecified" / ": unset").
+    const idx = line.lastIndexOf(": linguist-generated: ");
+    if (idx === -1) continue;
+    if (line.slice(idx + ": linguist-generated: ".length).trim() === "set") {
+      out.add(line.slice(0, idx));
+    }
+  }
+  return out;
+}
+
+/**
+ * Renames in the diff range, detected WITH rename detection (`-M`) — separate from the
+ * `--no-renames` review diff. Filtered to renames whose target survives exclusion, so the
+ * prompt manifest never advertises a move into a generated/excluded path.
+ */
+function detectRenames(
+  mergeBase: string,
+  reviewHead: string,
+  cwd: string,
+  kept: ReadonlySet<string>,
+): RenamedFile[] {
+  const raw = gitOrNull(["diff", "--name-status", "-M", mergeBase, reviewHead], cwd) ?? "";
+  const out: RenamedFile[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line.startsWith("R")) continue;
+    const parts = line.split("\t"); // R<score>\t<old>\t<new>
+    if (parts.length < 3) continue;
+    const from = parts[1];
+    const to = parts[2];
+    if (from !== undefined && to !== undefined && kept.has(to)) out.push({ from, to });
+  }
+  return out;
 }
 
 /** Strip trailing newlines, reproducing bash `$(...)` command-substitution behavior. */

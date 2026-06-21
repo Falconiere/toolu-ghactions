@@ -101,6 +101,12 @@ describe("string inputs are trimmed", () => {
     expect(inputs.reviewPromptFile).toBe("./custom-prompt.md");
     expect(inputs.codebaseOverview).toBe("a TypeScript GitHub Action");
   });
+
+  it("parses EXCLUDE_GLOBS into a trimmed list (default empty)", () => {
+    expect(readInputs().excludeGlobs).toEqual([]);
+    setInput("EXCLUDE_GLOBS", "migrations/**, **/*.snap\n vendor/ ");
+    expect(readInputs().excludeGlobs).toEqual(["migrations/**", "**/*.snap", "vendor/"]);
+  });
 });
 
 describe("provider contract (PROVIDER / MODEL_ID / API_KEY)", () => {

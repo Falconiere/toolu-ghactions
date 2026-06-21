@@ -185,6 +185,7 @@ export function buildPrompt(opts: PromptOptions): Envelope {
   const changedFiles = (diff.changed_files ?? []).join(", ");
   const binaryFiles = diff.binary_files ?? [];
   const droppedFiles = (diff.dropped_files ?? []).map((d) => `${d.path} (${d.reason})`);
+  const renames = diff.renames ?? [];
   const truncated = diff.truncated === true;
   const totalLines = diff.total_lines ?? 0;
   const totalFiles = diff.total_files ?? 0;
@@ -207,6 +208,14 @@ export function buildPrompt(opts: PromptOptions): Envelope {
   }
 
   user += `\n\n## Changed Files (${totalFiles} total)\n${changedFiles}`;
+
+  if (renames.length > 0) {
+    user +=
+      "\n\n## Renamed Files (the diff shows each as a delete + add because rename detection " +
+      "is off — treat these as MOVES, not a deletion plus a brand-new file; the target path " +
+      "exists and its imports resolve)\n" +
+      renames.map((r) => `- ${r.from} → ${r.to}`).join("\n");
+  }
 
   if (binaryFiles.length > 0) {
     user += `\n\n## Binary Files (not reviewed)\n${binaryFiles.map((f) => `- ${f}`).join("\n")}`;

@@ -217,3 +217,92 @@ describe("fetchDiff", () => {
     expect(r.changed_files).toContain("feat.ts");
   });
 });
+
+describe("fetchDiff — generated/vendored exclusion + renames", () => {
+  it("drops cross-ecosystem generated/vendored/lock files from the reviewed diff", () => {
+    const dir = featureRepo();
+    writeFile(dir, "src/app.ts", "export const real = 1\n");
+    writeFile(dir, "go.sum", "h1:abc=\n");
+    writeFile(dir, "node_modules/x/y.js", "module.exports = {}\n");
+    writeFile(dir, ".next/server/page.js", "export default 1\n");
+    writeFile(dir, "api/svc.pb.go", "package api\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "mix", "--quiet");
+
+    const r = fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 8000 });
+    expect(r.changed_files).toEqual(["src/app.ts"]);
+    const dropped = r.dropped_files.map((d) => d.path);
+    for (const p of ["go.sum", "node_modules/x/y.js", ".next/server/page.js", "api/svc.pb.go"]) {
+      expect(dropped).toContain(p);
+    }
+    expect(r.diff).not.toContain("go.sum");
+    expect(r.diff).not.toContain("svc.pb.go");
+  });
+
+  it("drops a path marked linguist-generated in .gitattributes (no static match)", () => {
+    const dir = featureRepo();
+    writeFile(dir, ".gitattributes", "schema/api.yaml linguist-generated\n");
+    writeFile(dir, "schema/api.yaml", "openapi: 3.0.0\n");
+    writeFile(dir, "src/app.ts", "export const x = 1\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "gen", "--quiet");
+
+    const r = fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 8000 });
+    expect(r.changed_files).toContain("src/app.ts");
+    expect(r.changed_files).not.toContain("schema/api.yaml");
+    expect(r.dropped_files.find((d) => d.path === "schema/api.yaml")?.reason).toBe(
+      "generated (.gitattributes)",
+    );
+  });
+
+  it("EXCLUDE_GLOBS drops matches; defaults keep migrations + snapshots", () => {
+    const dir = featureRepo();
+    writeFile(dir, "migrations/001.sql", "CREATE TABLE t (id int);\n");
+    writeFile(dir, "src/a.snap", "snapshot\n");
+    writeFile(dir, "src/app.ts", "export const x = 1\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "files", "--quiet");
+
+    const def = fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 8000 });
+    expect(def.changed_files).toContain("migrations/001.sql");
+    expect(def.changed_files).toContain("src/a.snap");
+
+    const ex = fetchDiff({
+      ...BASE,
+      cwd: dir,
+      maxFiles: 0,
+      maxDiffLines: 8000,
+      excludeGlobs: ["migrations/**"],
+    });
+    expect(ex.changed_files).not.toContain("migrations/001.sql");
+    expect(ex.changed_files).toContain("src/app.ts");
+    expect(ex.dropped_files.find((d) => d.path === "migrations/001.sql")?.reason).toBe("excluded");
+  });
+
+  it("MAX_FILES gates the post-exclusion reviewed count", () => {
+    const dir = featureRepo();
+    writeFile(dir, "src/app.ts", "export const x = 1\n");
+    for (let i = 0; i < 5; i++)
+      writeFile(dir, `node_modules/p${i}/index.js`, "module.exports = 1\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "many", "--quiet");
+
+    const r = fetchDiff({ ...BASE, cwd: dir, maxFiles: 2, maxDiffLines: 8000 });
+    expect(r.error).toBeUndefined();
+    expect(r.changed_files).toEqual(["src/app.ts"]);
+  });
+
+  it("detects renames (filtered to kept targets)", () => {
+    const dir = setupGitRepo();
+    repos.push(dir);
+    writeFile(dir, "old.ts", "export const v = 1\n".repeat(8));
+    git(dir, "add", "old.ts");
+    git(dir, "commit", "-m", "add old", "--quiet");
+    git(dir, "checkout", "-b", "feature", "--quiet");
+    git(dir, "mv", "old.ts", "new.ts");
+    git(dir, "commit", "-m", "rename old -> new", "--quiet");
+
+    const r = fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 8000 });
+    expect(r.renames).toContainEqual({ from: "old.ts", to: "new.ts" });
+  });
+});
