@@ -255,6 +255,25 @@ describe("fetchDiff — generated/vendored exclusion + renames", () => {
     );
   });
 
+  it("drops every linguist-generated path when several are present (NUL -z parse)", () => {
+    const dir = featureRepo();
+    writeFile(
+      dir,
+      ".gitattributes",
+      "schema/api.yaml linguist-generated\ndist/bundle.js linguist-generated\n",
+    );
+    writeFile(dir, "schema/api.yaml", "openapi: 3.0.0\n");
+    writeFile(dir, "dist/bundle.js", "console.log(1)\n");
+    writeFile(dir, "src/app.ts", "export const x = 1\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "gen", "--quiet");
+
+    const r = fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 8000 });
+    expect(r.changed_files).toContain("src/app.ts");
+    expect(r.changed_files).not.toContain("schema/api.yaml");
+    expect(r.changed_files).not.toContain("dist/bundle.js");
+  });
+
   it("EXCLUDE_GLOBS drops matches; defaults keep migrations + snapshots", () => {
     const dir = featureRepo();
     writeFile(dir, "migrations/001.sql", "CREATE TABLE t (id int);\n");
