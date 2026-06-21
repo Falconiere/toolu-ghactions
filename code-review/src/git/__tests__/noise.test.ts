@@ -104,6 +104,16 @@ describe("noiseReason", () => {
     }
   });
 
+  it("does not over-match normal source files that merely end in g.cs / similar", () => {
+    const { readBlob, blobSize } = fromMap({});
+    for (const p of ["src/config.cs", "Debug.cs", "util/log.cs"]) {
+      expect(noiseReason(p, readBlob, blobSize)).toBeNull();
+    }
+    // …but a real generated .g.cs / .designer.cs IS dropped.
+    expect(noiseReason("Form1.g.cs", readBlob, blobSize)).toBe("generated");
+    expect(noiseReason("View.designer.cs", readBlob, blobSize)).toBe("generated");
+  });
+
   it("KEEPS opinionated paths (migrations, snapshots) for review by default", () => {
     const { readBlob, blobSize } = fromMap({});
     expect(noiseReason("migrations/001_init.sql", readBlob, blobSize)).toBeNull();

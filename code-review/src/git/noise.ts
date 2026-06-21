@@ -135,8 +135,10 @@ function isVendored(path: string): boolean {
 
 /** Code emitted by a generator from a schema/IDL (protobuf, graphql-codegen, .NET, Dart, Go). */
 function isGeneratedCode(path: string): boolean {
+  // Each alternative carries its own leading "." so the intent is unambiguous: these
+  // match a dotted suffix (".g.cs", ".pb.go", …), never a bare "...g.cs" tail like "config.cs".
   if (
-    /\.(pb\.go|generated\.tsx?|designer\.cs|g\.cs|g\.dart|freezed\.dart|gr\.dart|bundle\.js|chunk\.js)$/.test(
+    /(\.pb\.go|\.generated\.tsx?|\.designer\.cs|\.g\.cs|\.g\.dart|\.freezed\.dart|\.gr\.dart|\.bundle\.js|\.chunk\.js)$/.test(
       path,
     )
   ) {
