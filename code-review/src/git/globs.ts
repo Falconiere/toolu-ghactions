@@ -27,7 +27,13 @@ export function globMatcher(entry: string): (p: string) => boolean {
   return (p) => re.test(p);
 }
 
-/** Compile a shell glob (`*`, `?`) to an anchored RegExp; all else is literal. */
+/**
+ * Compile a shell glob to an anchored RegExp; all else is literal. NOTE: `*` matches any
+ * run INCLUDING `/` (and `?` any single char) — bash `[[ "$p" == $entry ]]` semantics, NOT
+ * standard globbing. So `src/*.ts` also matches `src/sub/deep.ts`. This is intentional and
+ * shared with RULES_GLOB; for a single path segment use an explicit prefix like `src/` or
+ * a suffix like `*.ts`.
+ */
 export function globToRegExp(glob: string): RegExp {
   let out = "";
   for (const ch of glob) {
