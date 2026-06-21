@@ -111,6 +111,7 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     baseBranch,
     maxFiles: inputs.maxFiles,
     maxDiffLines: inputs.maxDiffLines,
+    excludeGlobs: inputs.excludeGlobs,
     reviewHead,
     githubBaseRef: baseBranch,
     cwd,

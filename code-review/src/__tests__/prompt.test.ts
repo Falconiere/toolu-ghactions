@@ -24,6 +24,7 @@ function sampleDiff(overrides: Partial<DiffData> = {}): DiffData {
     changed_files: ["src/app.ts"],
     binary_files: ["logo.png"],
     dropped_files: [{ path: "pnpm-lock.yaml", reason: "lockfile" }],
+    renames: [],
     total_lines: 2,
     total_files: 1,
     truncated: false,
@@ -175,6 +176,20 @@ describe("buildPrompt — envelope and inputs", () => {
     expect(env.user).toContain(
       "[Diff truncated at 8000 lines; some hunks omitted. Review what is shown.]",
     );
+  });
+
+  it("lists renames so a move is not read as delete + add", () => {
+    const env = buildPrompt({
+      diff: sampleDiff({ renames: [{ from: "src/old.ts", to: "src/new.ts" }] }),
+      checklistPath: CHECKLIST_PATH,
+    });
+    expect(env.user).toContain("## Renamed Files");
+    expect(env.user).toContain("src/old.ts → src/new.ts");
+  });
+
+  it("omits the Renamed Files section when there are no renames", () => {
+    const env = buildPrompt({ diff: sampleDiff(), checklistPath: CHECKLIST_PATH });
+    expect(env.user).not.toContain("Renamed Files");
   });
 });
 

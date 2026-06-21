@@ -48,8 +48,20 @@ export function noiseReason(path: string, readBlob: ReadBlob, blobSize: BlobSize
   if (path.endsWith(".map")) {
     return "sourcemap";
   }
+  if (isExtraLockfile(path)) {
+    return "lockfile";
+  }
+
+  if (isVendored(path)) {
+    return "vendored";
+  }
+
   if (isBuildOutput(path)) {
     return "build-output";
+  }
+
+  if (isGeneratedCode(path)) {
+    return "generated";
   }
 
   // @generated marker in the first lines of the new content. A missing blob
@@ -89,5 +101,51 @@ export function noiseReason(path: string, readBlob: ReadBlob, blobSize: BlobSize
  * required trailing-slash-star suffix.
  */
 function isBuildOutput(path: string): boolean {
-  return /(^|\/)(dist|build)\/.+/.test(path);
+  return (
+    /(^|\/)(dist|build|out|coverage|target|obj|\.next|\.nuxt|\.svelte-kit|\.nyc_output|__pycache__|\.venv|venv|\.terraform|\.idea)\/.+/.test(
+      path,
+    ) || path.endsWith(".pyc")
+  );
+}
+
+/** path === name OR path ends with /name (root or any directory). */
+function isNamed(path: string, name: string): boolean {
+  return path === name || path.endsWith("/" + name);
+}
+
+/** Lockfiles whose names don't end in `.lock`/`-lock.json` (the inline check covers those). */
+function isExtraLockfile(path: string): boolean {
+  return (
+    path.endsWith(".gradle.lockfile") ||
+    isNamed(path, "go.sum") ||
+    isNamed(path, "npm-shrinkwrap.json") ||
+    isNamed(path, "packages.lock.json") ||
+    isNamed(path, "Package.resolved") ||
+    isNamed(path, ".terraform.lock.hcl")
+  );
+}
+
+/** Vendored third-party dependency directories (not authored in this repo). */
+function isVendored(path: string): boolean {
+  return (
+    /(^|\/)(node_modules|vendor|third_party|Pods|Carthage|bower_components)\//.test(path) ||
+    /(^|\/)\.yarn\/(releases|plugins|unplugged)\//.test(path)
+  );
+}
+
+/** Code emitted by a generator from a schema/IDL (protobuf, graphql-codegen, .NET, Dart, Go). */
+function isGeneratedCode(path: string): boolean {
+  if (
+    /\.(pb\.go|generated\.tsx?|designer\.cs|g\.cs|g\.dart|freezed\.dart|gr\.dart|bundle\.js|chunk\.js)$/.test(
+      path,
+    )
+  ) {
+    return true;
+  }
+  if (/_grpc\.pb\.go$/.test(path) || /_pb2\.pyi?$/.test(path) || /_pb2_grpc\.py$/.test(path)) {
+    return true;
+  }
+  if (/Grpc\.(java|cs|ts|js)$/.test(path)) return true;
+  if (/(^|\/)zz_generated_[^/]*\.go$/.test(path)) return true;
+  return /(^|\/)__generated__\//.test(path);
 }

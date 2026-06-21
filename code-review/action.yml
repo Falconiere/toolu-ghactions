@@ -57,6 +57,10 @@ inputs:
     description: 'Extra path globs (relative to repo root, newline- or comma-separated) to include as project rules, e.g. "docs/architecture/**". Matched against tracked files at the base ref. Empty (default) = the well-known convention files only.'
     required: false
     default: ''
+  EXCLUDE_GLOBS:
+    description: 'Extra path globs (relative to repo root, newline- or comma-separated) to EXCLUDE from the AI review diff, on top of the built-in generated/vendored/lockfile set and any .gitattributes linguist-generated paths. e.g. "migrations/**, **/*.snap". Excluded files are still committed and CI-checked; they are only kept out of the LLM review.'
+    required: false
+    default: ''
   RULES_MAX_BYTES:
     description: 'Total byte cap on the gathered project-rules text. Files are added in priority order until the cap; whole files past it are dropped with a truncation notice. Default: 32768.'
     required: false
@@ -212,6 +216,7 @@ runs:
         INPUT_CODEBASE_OVERVIEW: ${{ inputs.CODEBASE_OVERVIEW }}
         INPUT_CHECK_PROJECT_RULES: ${{ inputs.CHECK_PROJECT_RULES }}
         INPUT_RULES_GLOB: ${{ inputs.RULES_GLOB }}
+        INPUT_EXCLUDE_GLOBS: ${{ inputs.EXCLUDE_GLOBS }}
         INPUT_RULES_MAX_BYTES: ${{ inputs.RULES_MAX_BYTES }}
         INPUT_MAX_FILES: ${{ inputs.MAX_FILES }}
         INPUT_MAX_DIFF_LINES: ${{ inputs.MAX_DIFF_LINES }}

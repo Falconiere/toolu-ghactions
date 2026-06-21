@@ -31252,6 +31252,34 @@ function shouldBlock(verdict, failOn) {
   return false;
 }
 
+// src/git/globs.ts
+function splitGlobs(raw) {
+  return raw.split(/[,\n]/).map((e) => e.trim()).filter((e) => e !== "");
+}
+function globMatcher(entry) {
+  if (entry.endsWith("/**")) {
+    const prefix = entry.slice(0, -2);
+    return (p) => p.startsWith(prefix);
+  }
+  if (entry.endsWith("/")) {
+    return (p) => p.startsWith(entry);
+  }
+  const re2 = globToRegExp(entry);
+  return (p) => re2.test(p);
+}
+function globToRegExp(glob) {
+  let out = "";
+  for (const ch of glob) {
+    if (ch === "*") out += "[\\s\\S]*";
+    else if (ch === "?") out += "[\\s\\S]";
+    else out += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(`^${out}$`);
+}
+function anyGlobMatches(globs, path) {
+  return globs.some((g) => globMatcher(g)(path));
+}
+
 // src/inputs.ts
 var DEFAULT_MAX_TOKENS = 8192;
 var DEFAULT_REQUEST_TIMEOUT_MS = 18e4;
@@ -31324,6 +31352,7 @@ function readInputs() {
     codebaseOverview: core2.getInput("CODEBASE_OVERVIEW").trim(),
     checkProjectRules: readBool("CHECK_PROJECT_RULES", true),
     rulesGlob: core2.getInput("RULES_GLOB"),
+    excludeGlobs: splitGlobs(core2.getInput("EXCLUDE_GLOBS")),
     rulesMaxBytes: intInput("RULES_MAX_BYTES", 32768),
     maxFiles: intInput("MAX_FILES", 0),
     maxDiffLines: intInput("MAX_DIFF_LINES", 0),
@@ -31440,8 +31469,17 @@ function noiseReason(path, readBlob, blobSize) {
   if (path.endsWith(".map")) {
     return "sourcemap";
   }
+  if (isExtraLockfile(path)) {
+    return "lockfile";
+  }
+  if (isVendored(path)) {
+    return "vendored";
+  }
   if (isBuildOutput(path)) {
     return "build-output";
+  }
+  if (isGeneratedCode(path)) {
+    return "generated";
   }
   const blob = readBlob(path);
   if (blob !== null) {
@@ -31459,7 +31497,31 @@ function noiseReason(path, readBlob, blobSize) {
   return null;
 }
 function isBuildOutput(path) {
-  return /(^|\/)(dist|build)\/.+/.test(path);
+  return /(^|\/)(dist|build|out|coverage|target|obj|\.next|\.nuxt|\.svelte-kit|\.nyc_output|__pycache__|\.venv|venv|\.terraform|\.idea)\/.+/.test(
+    path
+  ) || path.endsWith(".pyc");
+}
+function isNamed(path, name17) {
+  return path === name17 || path.endsWith("/" + name17);
+}
+function isExtraLockfile(path) {
+  return path.endsWith(".gradle.lockfile") || isNamed(path, "go.sum") || isNamed(path, "npm-shrinkwrap.json") || isNamed(path, "packages.lock.json") || isNamed(path, "Package.resolved") || isNamed(path, ".terraform.lock.hcl");
+}
+function isVendored(path) {
+  return /(^|\/)(node_modules|vendor|third_party|Pods|Carthage|bower_components)\//.test(path) || /(^|\/)\.yarn\/(releases|plugins|unplugged)\//.test(path);
+}
+function isGeneratedCode(path) {
+  if (/\.(pb\.go|generated\.tsx?|designer\.cs|g\.cs|g\.dart|freezed\.dart|gr\.dart|bundle\.js|chunk\.js)$/.test(
+    path
+  )) {
+    return true;
+  }
+  if (/_grpc\.pb\.go$/.test(path) || /_pb2\.pyi?$/.test(path) || /_pb2_grpc\.py$/.test(path)) {
+    return true;
+  }
+  if (/Grpc\.(java|cs|ts|js)$/.test(path)) return true;
+  if (/(^|\/)zz_generated_[^/]*\.go$/.test(path)) return true;
+  return /(^|\/)__generated__\//.test(path);
 }
 
 // src/git/diff.ts
@@ -31495,6 +31557,7 @@ function emptyResult(baseSha) {
     changed_files: [],
     binary_files: [],
     dropped_files: [],
+    renames: [],
     total_lines: 0,
     total_files: 0,
     truncated: false,
@@ -31532,7 +31595,7 @@ function resolveMergeBase(reviewHead, remoteBase, baseBranch, cwd) {
   }
   return mergeBase;
 }
-function classifyFiles(numstat, reviewHead, cwd) {
+function classifyFiles(numstat, reviewHead, cwd, excludeGlobs, generatedPaths) {
   const binary = [];
   const text2 = [];
   const dropped = [];
@@ -31554,6 +31617,14 @@ function classifyFiles(numstat, reviewHead, cwd) {
     if (path === "") continue;
     if (added === "-" && removed === "-") {
       binary.push(path);
+      continue;
+    }
+    if (excludeGlobs.length > 0 && anyGlobMatches(excludeGlobs, path)) {
+      dropped.push({ path, reason: "excluded" });
+      continue;
+    }
+    if (generatedPaths.has(path)) {
+      dropped.push({ path, reason: "generated (.gitattributes)" });
       continue;
     }
     const reason = noiseReason(path, readBlob, blobSize);
@@ -31588,6 +31659,7 @@ function fetchDiff(opts) {
   const maxFiles = opts.maxFiles ?? 0;
   const maxDiffLines = opts.maxDiffLines ?? 0;
   const reviewHead = opts.reviewHead ?? "HEAD";
+  const excludeGlobs = opts.excludeGlobs ?? [];
   let baseBranch = opts.baseBranch ?? "main";
   if (opts.githubBaseRef && opts.githubBaseRef !== "" && baseBranch === "main") {
     baseBranch = opts.githubBaseRef;
@@ -31596,20 +31668,28 @@ function fetchDiff(opts) {
   const mergeBase = resolveMergeBase(reviewHead, remoteBase, baseBranch, cwd);
   const baseSha = gitOrNull(["rev-parse", remoteBase], cwd)?.trim() ?? "";
   const changedFiles = gitOrNull(["diff", "--no-renames", "--name-only", mergeBase, reviewHead], cwd) ?? "";
-  const totalFiles = changedFiles.split("\n").filter((l) => l.trim() !== "").length;
+  const changedPaths = changedFiles.split("\n").filter((l) => l.trim() !== "");
+  const totalFiles = changedPaths.length;
   if (totalFiles === 0) {
     return emptyResult(baseSha);
   }
-  if (maxFiles > 0 && totalFiles > maxFiles) {
+  const numstat = gitOrNull(["diff", "--no-renames", "--numstat", mergeBase, reviewHead], cwd) ?? "";
+  const generatedPaths = gitattributesGenerated(changedPaths, cwd);
+  const { binary, text: text2, dropped } = classifyFiles(
+    numstat,
+    reviewHead,
+    cwd,
+    excludeGlobs,
+    generatedPaths
+  );
+  if (maxFiles > 0 && text2.length > maxFiles) {
     return {
       ...emptyResult(baseSha),
       total_files: totalFiles,
       max_files: maxFiles,
-      error: `PR exceeds file limit (${totalFiles} changed files > ${maxFiles} max). Raise MAX_FILES to review it.`
+      error: `PR exceeds file limit (${text2.length} files to review > ${maxFiles} max). Raise MAX_FILES to review it.`
     };
   }
-  const numstat = gitOrNull(["diff", "--no-renames", "--numstat", mergeBase, reviewHead], cwd) ?? "";
-  const { binary, text: text2, dropped } = classifyFiles(numstat, reviewHead, cwd);
   let diff = "";
   let files = [];
   if (text2.length > 0) {
@@ -31631,11 +31711,48 @@ function fetchDiff(opts) {
     changed_files: text2,
     binary_files: binary,
     dropped_files: dropped,
+    renames: detectRenames(mergeBase, reviewHead, cwd, new Set(text2)),
     total_lines: diffLines,
     total_files: totalFiles,
     truncated,
     base_sha: baseSha
   };
+}
+function gitattributesGenerated(paths, cwd) {
+  const out = /* @__PURE__ */ new Set();
+  if (paths.length === 0) return out;
+  let res;
+  try {
+    res = (0, import_node_child_process.execFileSync)("git", ["check-attr", "linguist-generated", "--stdin"], {
+      cwd,
+      input: paths.join("\n"),
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024
+    });
+  } catch {
+    return out;
+  }
+  for (const line of res.split("\n")) {
+    const idx = line.lastIndexOf(": linguist-generated: ");
+    if (idx === -1) continue;
+    if (line.slice(idx + ": linguist-generated: ".length).trim() === "set") {
+      out.add(line.slice(0, idx));
+    }
+  }
+  return out;
+}
+function detectRenames(mergeBase, reviewHead, cwd, kept) {
+  const raw = gitOrNull(["diff", "--name-status", "-M", mergeBase, reviewHead], cwd) ?? "";
+  const out = [];
+  for (const line of raw.split("\n")) {
+    if (!line.startsWith("R")) continue;
+    const parts = line.split("	");
+    if (parts.length < 3) continue;
+    const from = parts[1];
+    const to = parts[2];
+    if (from !== void 0 && to !== void 0 && kept.has(to)) out.push({ from, to });
+  }
+  return out;
 }
 function stripTrailingNewlines(s) {
   return s.replace(/\n+$/, "");
@@ -31671,29 +31788,6 @@ function listTracked(baseSha, cwd) {
   );
   if (out === null) return [];
   return out.split("\n").filter((p) => p !== "");
-}
-function splitGlobs(rulesGlob) {
-  return rulesGlob.split(/[,\n]/).map((e) => e.trim()).filter((e) => e !== "");
-}
-function globMatcher(entry) {
-  if (entry.endsWith("/**")) {
-    const prefix = entry.slice(0, -2);
-    return (p) => p.startsWith(prefix);
-  }
-  if (entry.endsWith("/")) {
-    return (p) => p.startsWith(entry);
-  }
-  const re2 = globToRegExp(entry);
-  return (p) => re2.test(p);
-}
-function globToRegExp(glob) {
-  let out = "";
-  for (const ch of glob) {
-    if (ch === "*") out += "[\\s\\S]*";
-    else if (ch === "?") out += "[\\s\\S]";
-    else out += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-  }
-  return new RegExp(`^${out}$`);
 }
 function ancestorDirs(file) {
   const dirs = [];
@@ -31885,6 +31979,7 @@ function buildPrompt(opts) {
   const changedFiles = (diff.changed_files ?? []).join(", ");
   const binaryFiles = diff.binary_files ?? [];
   const droppedFiles = (diff.dropped_files ?? []).map((d) => `${d.path} (${d.reason})`);
+  const renames = diff.renames ?? [];
   const truncated = diff.truncated === true;
   const totalLines = diff.total_lines ?? 0;
   const totalFiles = diff.total_files ?? 0;
@@ -31902,6 +31997,9 @@ ${overview}`;
 
 ## Changed Files (${totalFiles} total)
 ${changedFiles}`;
+  if (renames.length > 0) {
+    user += "\n\n## Renamed Files (the diff shows each as a delete + add because rename detection is off \u2014 treat these as MOVES, not a deletion plus a brand-new file; the target path exists and its imports resolve)\n" + renames.map((r) => `- ${r.from} \u2192 ${r.to}`).join("\n");
+  }
   if (binaryFiles.length > 0) {
     user += `
 
@@ -39616,6 +39714,7 @@ async function runReview(deps) {
     baseBranch,
     maxFiles: inputs.maxFiles,
     maxDiffLines: inputs.maxDiffLines,
+    excludeGlobs: inputs.excludeGlobs,
     reviewHead,
     githubBaseRef: baseBranch,
     cwd
