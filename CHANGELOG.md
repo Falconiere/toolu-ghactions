@@ -1,5 +1,16 @@
 # Changelog
 
+## [5.0.0](https://github.com/Falconiere/toolu-ghactions/compare/v4.0.0...v5.0.0) (2026-06-21)
+
+
+### ⚠ BREAKING CHANGES
+
+* **code-review:** FAIL_ON defaults to "changes", so the action now fails its own job when the bot requests changes. PRs previously green-with-changes are blocked once this check is Required in branch protection. Set FAIL_ON: none to restore advisory-only behavior.
+
+### Features
+
+* **code-review:** add FAIL_ON merge gate (on by default) ([1fbeb16](https://github.com/Falconiere/toolu-ghactions/commit/1fbeb1697e1812211160996a2dd3e5bc86eb63ea))
+
 ## [Unreleased]
 
 
