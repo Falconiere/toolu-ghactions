@@ -158,43 +158,13 @@ function resolveProviderId(raw: string): ProviderId {
         `To use "${p}" models, set PROVIDER:"openrouter" and MODEL_ID:"${p}/<model>" to route through OpenRouter.`,
     );
   }
-  // isSupportedProvider is a `s is ProviderId` type guard, so p is narrowed to
-  // ProviderId here — returned without a cast.
+  // The `if (!isSupportedProvider(p)) throw` above narrows p to ProviderId on this branch
+  // (isSupportedProvider is a `s is ProviderId` type guard), so no cast is needed.
   return p;
 }
 
-/** Removed-in-v4 inputs that map to a replacement, for an actionable migration warning. */
-const REMOVED_REPLACED: Record<string, string> = {
-  OPENROUTER_API_KEY: "API_KEY",
-  DEEPSEEK_API_KEY: "API_KEY",
-  MODEL: "MODEL_ID",
-  PROVIDERS: "PROVIDER + MODEL_ID + API_KEY",
-};
-
-/** Removed-in-v4 inputs that were no-ops and have no replacement. */
-const REMOVED_DROPPED = ["MERGE_STRATEGY", "FALLBACK_MODEL", "REVIEW_MODE", "ENFORCE_JSON_SCHEMA"];
-
-/**
- * Warn for each removed-in-v4 input that is still being passed, pointing at its
- * replacement. A v4 upgrader who kept the old inputs would otherwise hit a bare
- * "API_KEY is required" (or silent no-op) with no hint that the contract changed.
- */
-function warnRemovedInputs(): void {
-  for (const [name, replacement] of Object.entries(REMOVED_REPLACED)) {
-    if (core.getInput(name).trim() !== "") {
-      core.warning(`${name} was removed in v4; use ${replacement} instead.`);
-    }
-  }
-  for (const name of REMOVED_DROPPED) {
-    if (core.getInput(name).trim() !== "") {
-      core.warning(
-        `${name} was removed in v4 and has no effect (one model per review; the JSON schema is always enforced).`,
-      );
-    }
-  }
-}
-
-/** Warn when a deepseek model id looks like an OpenRouter id (slash namespace) — it will 400. */
+/** Warn when a deepseek model id looks like an OpenRouter id (slash namespace) — it will 400.
+ *  Heuristic: current native DeepSeek ids have no "/"; revisit if that ever changes. */
 function warnSuspiciousModel(provider: ProviderId, model: string): void {
   if (provider === "deepseek" && model.includes("/")) {
     core.warning(
@@ -212,7 +182,6 @@ function warnSuspiciousModel(provider: ProviderId, model: string): void {
  * empty API_KEY throws (a keyless review would abstain on every call).
  */
 export function readInputs(): ActionInputs {
-  warnRemovedInputs();
   const provider = resolveProviderId(core.getInput("PROVIDER"));
   const model = core.getInput("MODEL_ID").trim() || defaultModelFor(provider);
   warnSuspiciousModel(provider, model);

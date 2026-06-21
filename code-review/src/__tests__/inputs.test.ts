@@ -131,15 +131,4 @@ describe("provider contract (PROVIDER / MODEL_ID / API_KEY)", () => {
     readInputs();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("looks like an OpenRouter id"));
   });
-
-  it("warns with a migration hint when a removed v4 input is still passed", () => {
-    setInput("OPENROUTER_API_KEY", "sk-old");
-    setInput("MODEL", "deepseek/deepseek-v4-pro");
-    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
-    readInputs();
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("OPENROUTER_API_KEY was removed in v4"),
-    );
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("MODEL was removed in v4"));
-  });
 });
