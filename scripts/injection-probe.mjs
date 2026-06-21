@@ -54,7 +54,7 @@ async function main() {
     return 0;
   }
 
-  // Bundle prompt.ts + llm/review.ts into one ESM file we can import. esbuild
+  // Bundle prompt.ts + llm/reviewWithModel.ts into one ESM file we can import. esbuild
   // resolves the .ts imports and inlines node_modules deps (AI SDK is ESM-only).
   const tmp = await mkdtemp(join(tmpdir(), "injection-probe-"));
   const bundlePath = join(tmp, "probe-bundle.mjs");
@@ -83,7 +83,7 @@ async function main() {
             b.onLoad({ filter: /.*/, namespace: "virtual-entry" }, () => ({
               contents:
                 'export { buildPrompt } from "./prompt.ts";\n' +
-                'export { reviewWithModel } from "./llm/review.ts";\n',
+                'export { reviewWithModel } from "./llm/reviewWithModel.ts";\n',
               resolveDir: join(CODE_REVIEW, "src"),
               loader: "js",
             }));

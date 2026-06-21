@@ -11,7 +11,7 @@
 // "error" carries the request-changes label on purpose: a failed review must
 // never auto-merge (the do-not-approve fail-safe), but the badge says plainly it
 // was a provider error, not a real request for changes.
-import type { ProviderResult } from "@/llm/review.js";
+import type { ProviderResult } from "@/llm/reviewWithModel.js";
 import type { Finding } from "@/llm/schema.js";
 import type { MechanicalFinding } from "@/mechanical/sarif.js";
 import {
