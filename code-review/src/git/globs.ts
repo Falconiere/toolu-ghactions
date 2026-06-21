@@ -1,6 +1,5 @@
-// git/globs.ts — shared tracked-path glob matching. Extracted from rules.ts so both
-// the project-rules gathering (RULES_GLOB) and the diff exclusion (EXCLUDE_GLOBS) use
-// one matcher. Reproduces bash `[[ "$p" == $entry ]]` semantics against tracked paths.
+// git/globs.ts — shared tracked-path glob matching for RULES_GLOB and EXCLUDE_GLOBS
+// (reproduces bash `[[ "$p" == $entry ]]` semantics; extracted from rules.ts).
 
 /** Split a glob input on commas and newlines, trimming each entry (drops blanks). */
 export function splitGlobs(raw: string): string[] {
