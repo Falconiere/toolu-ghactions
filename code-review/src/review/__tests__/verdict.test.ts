@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { formatVerdict } from "@/review/verdict.js";
-import type { ProviderResult } from "@/llm/openrouter.js";
+import type { ProviderResult } from "@/llm/review.js";
 import type { Finding } from "@/llm/schema.js";
 import type { MechanicalFinding } from "@/mechanical/sarif.js";
 import { encodeMarker } from "@/state.js";

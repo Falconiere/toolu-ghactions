@@ -12,7 +12,7 @@ import { countLines } from "@/git/diff.js";
 import type { DiffData } from "@/git/diff.js";
 import { mapWithConcurrency } from "@/concurrency.js";
 import { mergeResults } from "@/llm/merge.js";
-import type { ProviderResult } from "@/llm/openrouter.js";
+import type { ProviderResult } from "@/llm/review.js";
 import type { Envelope } from "@/prompt.js";
 import type { MechanicalFinding } from "@/mechanical/sarif.js";
 
