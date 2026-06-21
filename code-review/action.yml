@@ -5,45 +5,32 @@ description: |
   coverage, doc accuracy, tight assertions, migration warnings, and adherence
   to the project's own convention files read from the base ref) and posts a
   structured verdict with actionable findings. Runs on OpenRouter (any
-  OpenAI-compatible model) via the Vercel AI SDK with structured-output
-  validation and retries.
+  OpenAI-compatible model) or the native DeepSeek API, via the Vercel AI SDK
+  with structured-output validation and retries.
 author: 'Falconiere'
 branding:
   icon: 'check-circle'
   color: 'green'
 
 inputs:
-  PROVIDERS:
-    description: 'JSON array of {provider, model, api_key, enforce_json_schema?, max_tokens?} entries. Providers: openrouter, openai, anthropic, deepseek, moonshot, minimax. Overrides legacy single-provider inputs.'
+  PROVIDER:
+    description: 'LLM backend: "openrouter" (default — any OpenAI-compatible model via OpenRouter) or "deepseek" (native api.deepseek.com). Any other value fails with an error.'
     required: false
-  MERGE_STRATEGY:
-    description: 'DEPRECATED: No-op. This action reviews with a single model; verdict merging no longer applies. Kept for backward compatibility.'
+    default: 'openrouter'
+  MODEL_ID:
+    description: 'Model id for the chosen provider. Defaults per provider: openrouter -> deepseek/deepseek-v4-pro, deepseek -> deepseek-v4-flash. Use a "<vendor>/<model>" id for OpenRouter; a bare id like "deepseek-v4-flash" for native DeepSeek.'
     required: false
-  OPENROUTER_API_KEY:
-    description: 'OpenRouter API key. Prefer passing via step-level env: block for better secret hygiene. Legacy single-provider input; use PROVIDERS for multi-provider configurations.'
-    required: false
-  MODEL:
-    description: 'OpenRouter model identifier. Default deepseek/deepseek-v4-pro (1M context, 384k max output, supports response_format + structured_outputs). Pick a model with reliable JSON-schema structured output.'
-    required: false
-    default: 'deepseek/deepseek-v4-pro'
-  FALLBACK_MODEL:
-    description: 'DEPRECATED: Dropped in multi-provider mode. Use PROVIDERS array to configure multiple models.'
-    required: false
+  API_KEY:
+    description: 'API key for the chosen provider (Authorization: Bearer). Required. Prefer passing via a step-level env: block for better secret hygiene.'
+    required: true
   MAX_TOKENS:
-    description: 'Max completion tokens per request. Always sent — omitting it makes OpenRouter reserve the model''s full output capacity against your credit budget. A truncated (finish_reason "length") chunk is retried with a doubled budget up to 32768.'
+    description: 'Max completion tokens per request. Always sent — omitting it makes the provider reserve the model''s full output capacity against your credit budget. A truncated (finish_reason "length") chunk is retried with a doubled budget up to 32768.'
     required: false
     default: '8192'
-  REVIEW_MODE:
-    description: 'DEPRECATED: No-op. Previously parallel=single vs parallel=multi-dimension; multi-provider ensemble review replaces this. Kept for backward compatibility.'
-    required: false
   MIN_CONFIDENCE:
     description: 'Drop findings below this confidence unless severity is blocker/high. One of: high, medium'
     required: false
     default: 'high'
-  ENFORCE_JSON_SCHEMA:
-    description: 'When true, requests use response_format json_schema + provider.require_parameters (routes only to providers that support it). Set false to allow free-text + regex fallback'
-    required: false
-    default: 'true'
   INLINE_COMMENTS:
     description: 'When true, post per-line review comments (with committable code suggestions) via the GitHub Reviews API, in addition to the summary comment. Set false for summary-only'
     required: false
@@ -209,15 +196,11 @@ runs:
       env:
         # The node action reads inputs via @actions/core.getInput (process.env.INPUT_*).
         # Composite run-steps do NOT auto-expose inputs, so map each one explicitly.
-        INPUT_PROVIDERS: ${{ inputs.PROVIDERS }}
-        INPUT_MERGE_STRATEGY: ${{ inputs.MERGE_STRATEGY }}
-        INPUT_OPENROUTER_API_KEY: ${{ inputs.OPENROUTER_API_KEY }}
-        INPUT_MODEL: ${{ inputs.MODEL }}
-        INPUT_FALLBACK_MODEL: ${{ inputs.FALLBACK_MODEL }}
+        INPUT_PROVIDER: ${{ inputs.PROVIDER }}
+        INPUT_MODEL_ID: ${{ inputs.MODEL_ID }}
+        INPUT_API_KEY: ${{ inputs.API_KEY }}
         INPUT_MAX_TOKENS: ${{ inputs.MAX_TOKENS }}
-        INPUT_REVIEW_MODE: ${{ inputs.REVIEW_MODE }}
         INPUT_MIN_CONFIDENCE: ${{ inputs.MIN_CONFIDENCE }}
-        INPUT_ENFORCE_JSON_SCHEMA: ${{ inputs.ENFORCE_JSON_SCHEMA }}
         INPUT_INLINE_COMMENTS: ${{ inputs.INLINE_COMMENTS }}
         INPUT_MANAGE_LABELS: ${{ inputs.MANAGE_LABELS }}
         INPUT_BASE_BRANCH: ${{ inputs.BASE_BRANCH }}

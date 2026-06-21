@@ -24,7 +24,8 @@ export interface Envelope {
 /**
  * Inputs for buildPrompt, mirroring the env vars build-prompt.sh reads — passed in
  * (never read from process.env) so the module is testable: maxTokens ←
- * INPUT_MAX_TOKENS (8192), enforceJsonSchema ← INPUT_ENFORCE_JSON_SCHEMA (true),
+ * INPUT_MAX_TOKENS (8192), enforceJsonSchema (always true; the JSON schema is always
+ * enforced on the single-model path),
  * reviewPromptFile ← INPUT_REVIEW_PROMPT_FILE (custom system prompt path, relative
  * to githubWorkspace), codebaseOverview ← INPUT_CODEBASE_OVERVIEW, reviewInstruction
  * ← INPUT_REVIEW_INSTRUCTION (UNTRUSTED), projectRules ← gathered rules blob

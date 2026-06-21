@@ -4,7 +4,7 @@
 
 ### AI code review for every pull request
 
-Audits the diff against an 8-dimension checklist — correctness, security, performance, test coverage, doc accuracy, tight assertions, migration warnings, and adherence to the project's own convention files — by running **one model through [OpenRouter](https://openrouter.ai)** (any OpenAI-compatible model id) via the **[Vercel AI SDK](https://sdk.vercel.ai)** (`generateObject` + Zod: structured output with retries, reasoning disabled). Posts a structured, machine-readable comment with inline, committable suggestions.
+Audits the diff against an 8-dimension checklist — correctness, security, performance, test coverage, doc accuracy, tight assertions, migration warnings, and adherence to the project's own convention files — by running **one model** through either [OpenRouter](https://openrouter.ai) (any OpenAI-compatible model id) or the **native DeepSeek API** (`api.deepseek.com`), selected with a single `PROVIDER` input, via the **[Vercel AI SDK](https://sdk.vercel.ai)** (`generateObject` + Zod: structured output with retries, reasoning disabled). Posts a structured, machine-readable comment with inline, committable suggestions.
 
 [![Release](https://img.shields.io/github/v/release/Falconiere/toolu-ghactions?sort=semver&color=d97757)](https://github.com/Falconiere/toolu-ghactions/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](../LICENSE)
@@ -45,21 +45,22 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # full history so the merge-base resolves without deepening
-      - uses: falconiere/toolu-ghactions/code-review@v2
+      - uses: falconiere/toolu-ghactions/code-review@v4
         with:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 ```
 
 > `fetch-depth: 0` is recommended but optional — on a shallow checkout the action
 > deepens the history itself to find the merge-base.
 
-Use `MODEL` to switch models and `REVIEW_PROMPT_FILE` for a custom checklist:
+Use `MODEL_ID` to switch models and `REVIEW_PROMPT_FILE` for a custom checklist:
 
 ```yaml
-      - uses: falconiere/toolu-ghactions/code-review@v2
+      - uses: falconiere/toolu-ghactions/code-review@v4
         with:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          MODEL: 'anthropic/claude-sonnet-4'
+          PROVIDER: openrouter
+          MODEL_ID: 'anthropic/claude-sonnet-4'
+          API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           REVIEW_PROMPT_FILE: '.github/review-prompt.md'
 ```
 
@@ -67,22 +68,29 @@ On every PR push, the action shapes the diff, sends it to the configured model, 
 
 ## Choosing a model
 
-The action runs **one model**, resolved through OpenRouter. Set the key and
-(optionally) the model id; anything OpenRouter serves works as long as it's
+The action runs **one model**, selected with three flat inputs:
+
+- **`PROVIDER`** — `openrouter` (default) or `deepseek` (native `api.deepseek.com`).
+- **`MODEL_ID`** — the model id (per-provider default if omitted).
+- **`API_KEY`** — the provider API key (**required**).
+
+By default it is resolved through OpenRouter; you can also point it at the **native
+DeepSeek API** (see below). Anything OpenRouter serves works as long as it's
 OpenAI-compatible:
 
 ```yaml
-- uses: falconiere/toolu-ghactions/code-review@v2
+- uses: falconiere/toolu-ghactions/code-review@v4
   with:
-    OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-    MODEL: 'anthropic/claude-sonnet-4-5'   # default: deepseek/deepseek-v4-pro
-    MAX_TOKENS: '16384'                     # per-request completion budget (default 8192)
+    PROVIDER: openrouter
+    MODEL_ID: 'anthropic/claude-sonnet-4-5'   # default: deepseek/deepseek-v4-pro
+    API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    MAX_TOKENS: '16384'                        # per-request completion budget (default 8192)
 ```
 
-`MODEL` is an OpenRouter model id — `openai/gpt-4o`, `anthropic/claude-sonnet-4-5`,
-`deepseek/deepseek-v4-flash`, `moonshotai/kimi-k2`, and so on. One key, one
-endpoint: OpenRouter fronts every vendor, so switching models is a string change,
-not a new integration.
+For OpenRouter, `MODEL_ID` is an OpenRouter model id — `openai/gpt-4o`,
+`anthropic/claude-sonnet-4-5`, `deepseek/deepseek-v4-flash`, `moonshotai/kimi-k2`,
+and so on. One key, one endpoint: OpenRouter fronts every vendor, so switching
+models is a string change, not a new integration.
 
 Under the hood the action calls the model with the [Vercel AI SDK](https://sdk.vercel.ai)'s
 `generateObject` against a Zod verdict schema, so the response is **structured by
@@ -93,22 +101,42 @@ the action surfaces an `error` verdict carrying the finish reason — rendered a
 "🚫 Review incomplete" and labeled `request-changes`, so a failed review
 never auto-merges. It never emits a silent null verdict.
 
-### Deprecated inputs (no-ops, kept for back-compat)
+### Native DeepSeek API
 
-Earlier versions ran a parallel multi-vendor ensemble. v2 consolidates on a
-single OpenRouter model, so these inputs are **deprecated no-ops** — still
-accepted (your workflow won't break), but ignored with a warning in the logs:
+To call DeepSeek's own API (`api.deepseek.com`) directly instead of going through
+OpenRouter — lower cost, direct billing — set `PROVIDER: deepseek` and a **native**
+model id (no vendor prefix):
 
-| Input | Old behavior | Now |
-|---|---|---|
-| `PROVIDERS` | JSON array of `{provider, model, api_key}` for an N-vendor ensemble | Only the **first** entry's `model` (and optional `api_key`/`max_tokens`) is used; the `provider` field is accepted-but-ignored. Extra entries are dropped with a warning. Prefer `OPENROUTER_API_KEY` + `MODEL`. |
-| `MERGE_STRATEGY` | How to merge N verdicts (`conservative` / `majority` / `all_approve`) | No-op — there is one verdict from one model. |
-| `ENFORCE_JSON_SCHEMA` | Toggle strict JSON vs free-text + regex fallback | No-op — `generateObject` is always structured; there is no free-text path. |
-| `FALLBACK_MODEL` | Extra model in the OpenRouter fallback array | No-op. |
-| `REVIEW_MODE` | Per-dimension sub-reviewer toggle | No-op. |
+```yaml
+- uses: falconiere/toolu-ghactions/code-review@v4
+  with:
+    PROVIDER: deepseek
+    MODEL_ID: deepseek-v4-flash
+    API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+```
 
-Ensemble review may return later behind the same preserved inputs; for now a
-single model handles the review.
+`PROVIDER: deepseek` hits `api.deepseek.com` directly (lower cost, direct billing).
+`MODEL_ID` takes a **native** DeepSeek model id (no vendor prefix) and defaults to
+`deepseek-v4-flash` (non-thinking, fast, 1M context) when omitted. `API_KEY` is your
+DeepSeek key — here `${{ secrets.DEEPSEEK_API_KEY }}` is just the name of *your*
+GitHub repo secret, passed into the single `API_KEY` input.
+
+Only `openrouter` (default) and `deepseek` are implemented; any other `PROVIDER`
+value fails the action with an error that points you at routing it through OpenRouter
+instead (`PROVIDER: "openrouter"`, `MODEL_ID: "<vendor>/<model>"`).
+
+### Removed in v4 (migration)
+
+v4 is a **breaking change**. The split provider/key inputs and the multi-vendor
+ensemble inputs are **gone entirely** — they no longer exist on the action (they
+are not silent no-ops). Migrate to the three flat provider inputs:
+
+| Removed input | Replacement |
+|---|---|
+| `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY` | `API_KEY` (the key for the selected `PROVIDER`) |
+| `MODEL` | `MODEL_ID` |
+| `PROVIDERS` | `PROVIDER` + `MODEL_ID` + `API_KEY` (a single model only) |
+| `MERGE_STRATEGY`, `FALLBACK_MODEL`, `REVIEW_MODE`, `ENFORCE_JSON_SCHEMA` | removed — one model, schema always enforced |
 
 ## Deterministic checks
 
@@ -143,7 +171,8 @@ line with its real source line number so findings anchor to actual lines.
 **2 — Gather rules.** Reads the repo's own convention files from the base ref and
 folds them into the prompt (see [Project conventions](#project-conventions)).
 
-**3 — Review.** Builds the system + user prompt and calls one OpenRouter model via
+**3 — Review.** Builds the system + user prompt and calls the configured model (the
+`PROVIDER` backend — OpenRouter or native DeepSeek) via
 the Vercel AI SDK (`generateObject` + a Zod verdict schema) against the full
 8-dimension checklist (the 8th, convention adherence, applies only when project
 rules were found). Output is structured with automatic retries; reasoning is off.
@@ -268,9 +297,9 @@ Prefer clicking through github.com → Settings → Developer settings → GitHu
 ### Use it
 
 ```yaml
-- uses: falconiere/toolu-ghactions/code-review@v2
+- uses: falconiere/toolu-ghactions/code-review@v4
   with:
-    OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
     APP_ID: ${{ secrets.APP_ID }}
     APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
 ```
@@ -328,9 +357,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: falconiere/toolu-ghactions/code-review@v2
+      - uses: falconiere/toolu-ghactions/code-review@v4
         with:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 ```
 
 The `concurrency:` group is keyed per PR — note the
@@ -405,8 +434,9 @@ Thread reads/writes are best-effort: a GitHub API hiccup degrades to the previou
 
 | Input | Required | Default | Description |
 |---|---|---|---|
-| `OPENROUTER_API_KEY` | no | — | OpenRouter API key. The model runs through OpenRouter. Prefer passing via a step-level `env:` block for secret hygiene. |
-| `MODEL` | no | `deepseek/deepseek-v4-pro` | OpenRouter model id (any OpenAI-compatible model, e.g. `anthropic/claude-sonnet-4-5`, `google/gemini-2.5-flash`). The default has a 1M-token context and 384k max output, so large diffs and verbose reviews rarely truncate. Pick one with reliable JSON-schema structured output. |
+| `PROVIDER` | no | `openrouter` | Backend to call: `openrouter` (any OpenAI-compatible model via OpenRouter) or `deepseek` (native `api.deepseek.com`, lower cost). Any other value fails the action with an error suggesting `PROVIDER: "openrouter"` + `MODEL_ID: "<vendor>/<model>"`. See [Native DeepSeek API](#native-deepseek-api). |
+| `MODEL_ID` | no | per-provider | Model id. Defaults to `deepseek/deepseek-v4-pro` for `openrouter` (1M-token context, 384k max output, so large diffs and verbose reviews rarely truncate) and `deepseek-v4-flash` for `deepseek`. Use `<vendor>/<model>` ids for OpenRouter; bare ids for native DeepSeek. Pick one with reliable JSON-schema structured output. |
+| `API_KEY` | **yes** | — | API key for the selected `PROVIDER` (OpenRouter or DeepSeek). **Required** — an empty value fails the action. Pass via a step-level `env:`/`secrets` reference for secret hygiene. |
 | `MAX_TOKENS` | no | `8192` | Max completion-token budget per request (always sent — omitting it makes OpenRouter reserve the model's full output window against your credits and can 402-reject). A response truncated at this limit (`finish_reason: length`) is retried with a doubled budget up to 32768; if it still truncates, the findings completed before the cut are salvaged. |
 | `MIN_CONFIDENCE` | no | `high` | Drop findings below this confidence unless severity is blocker/high (`high` or `medium`) |
 | `INLINE_COMMENTS` | no | `true` | Post per-line review comments with committable code suggestions (Reviews API), in addition to the summary comment |
@@ -434,17 +464,18 @@ Thread reads/writes are best-effort: a GitHub API hiccup degrades to the previou
 | `RUN_SAST` | no | `true` | Run the deterministic SAST pass (Opengrep) before the LLM review; same flow as above. |
 | `SAST_RULES` | no | `p/typescript` | Opengrep rule config(s) for the SAST pass (comma-separated). |
 
-### Deprecated inputs
+### Removed in v4
 
-Still accepted so existing workflows don't break, but ignored (warned in logs). See [Deprecated inputs](#deprecated-inputs-no-ops-kept-for-back-compat).
+These inputs were **removed** in v4 (breaking change) — they no longer exist on
+the action. See [Removed in v4 (migration)](#removed-in-v4-migration) for the full
+mapping.
 
-| Input | Default | Status |
-|---|---|---|
-| `PROVIDERS` | — | **Deprecated.** Only the first entry's `model` (+ optional `api_key` / `max_tokens`) is used; `provider` is accepted-but-ignored; extra entries dropped. Use `OPENROUTER_API_KEY` + `MODEL`. |
-| `MERGE_STRATEGY` | — | **Deprecated — no-op.** One model means one verdict; nothing to merge. |
-| `ENFORCE_JSON_SCHEMA` | `true` | **Deprecated — no-op.** `generateObject` is always structured; there is no free-text/regex path. |
-| `FALLBACK_MODEL` | — | **Deprecated — no-op.** No fallback array; set `MODEL` instead. |
-| `REVIEW_MODE` | — | **Deprecated — no-op.** The per-dimension sub-reviewer was removed. |
+| Removed input | Replacement |
+|---|---|
+| `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY` | `API_KEY` |
+| `MODEL` | `MODEL_ID` |
+| `PROVIDERS` | `PROVIDER` + `MODEL_ID` + `API_KEY` (single model only) |
+| `MERGE_STRATEGY`, `FALLBACK_MODEL`, `REVIEW_MODE`, `ENFORCE_JSON_SCHEMA` | removed — one model, schema always enforced |
 
 ## Outputs
 
@@ -457,10 +488,10 @@ Still accepted so existing workflows don't break, but ignored (warned in logs). 
 Use outputs in downstream workflow steps:
 
 ```yaml
-- uses: falconiere/toolu-ghactions/code-review@v2
+- uses: falconiere/toolu-ghactions/code-review@v4
   id: review
   with:
-    OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 - if: steps.review.outputs.verdict == 'changes'
   run: echo "PR needs work — ${{ steps.review.outputs.findings-count }} findings"
 ```
@@ -477,9 +508,12 @@ Dockerized bash action; there is **no Docker image** anymore.
 - **Fixes land on merge.** Because consumers run the checked-out ref directly
   (no image to rebuild and re-push to a registry), a fix reaches `@v2` the moment
   it merges — no release required.
-- **Single OpenRouter model.** The 6-vendor parallel ensemble was dropped in favor
-  of one model via OpenRouter + the Vercel AI SDK; `PROVIDERS`, `MERGE_STRATEGY`,
-  and `ENFORCE_JSON_SCHEMA` are now [deprecated no-ops](#deprecated-inputs-no-ops-kept-for-back-compat).
+- **Single model, two backends.** The 6-vendor parallel ensemble was dropped in
+  favor of one model — via OpenRouter or the native DeepSeek API, selected with
+  `PROVIDER` — through the Vercel AI SDK. The old ensemble inputs (`PROVIDERS`,
+  `MERGE_STRATEGY`, `FALLBACK_MODEL`, `REVIEW_MODE`, `ENFORCE_JSON_SCHEMA`) and the
+  split key/model inputs (`OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `MODEL`) were
+  [removed in v4](#removed-in-v4-migration).
 
 ## Development
 

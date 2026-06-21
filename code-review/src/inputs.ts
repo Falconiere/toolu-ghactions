@@ -1,32 +1,37 @@
-// inputs.ts — read and normalize every action.yml input into a typed
-// ActionInputs object. Port of the env-reading + provider-resolution logic that
-// build_providers_list() / build-prompt.sh / fetch-diff.sh split across the bash:
-// done ONCE here so the pipeline takes a plain typed object, never process.env.
+// inputs.ts — read and normalize every action.yml input into a typed ActionInputs
+// object, ONCE, so the pipeline takes a plain typed object and never reads process.env.
 //
-// LEGACY → EFFECTIVE PROVIDER: the TS action runs a SINGLE OpenRouter model
-// (see llm/openrouter.ts). We collapse the legacy single-provider inputs
-// (OPENROUTER_API_KEY + MODEL) and the multi-provider PROVIDERS array down to one
-// effective {model, apiKey}. When PROVIDERS is given, the FIRST entry's
-// model/api_key wins; any extra entries are a no-op and warned. The other
-// multi-provider knobs (MERGE_STRATEGY, FALLBACK_MODEL, REVIEW_MODE) and
-// ENFORCE_JSON_SCHEMA=false are deprecated no-ops that emit a core.warning.
+// FLAT PROVIDER CONTRACT (v4): the action runs a SINGLE model, selected by three flat
+// inputs — PROVIDER ("openrouter" | "deepseek"), MODEL_ID, and API_KEY. The old
+// multi-provider PROVIDERS array and the legacy OPENROUTER_API_KEY/MODEL inputs (plus
+// the MERGE_STRATEGY/FALLBACK_MODEL/REVIEW_MODE/ENFORCE_JSON_SCHEMA no-ops) were removed
+// in v4 — a breaking change. PROVIDER defaults to "openrouter"; MODEL_ID defaults per
+// provider (see llm/providers.ts defaultModelFor); an unsupported PROVIDER or an empty
+// API_KEY throws so a misconfig fails loud instead of silently abstaining.
 import * as core from "@actions/core";
-import { z } from "zod";
+import {
+  type ProviderId,
+  SUPPORTED_PROVIDERS,
+  isSupportedProvider,
+  defaultModelFor,
+} from "./llm/providers.js";
 
 /** Minimum confidence floor for the validate gate (high|medium). */
 export type MinConfidence = "high" | "medium";
 
 /** The fully-resolved, typed inputs the pipeline consumes (no env reads downstream). */
 export interface ActionInputs {
-  /** Effective OpenRouter model id (PROVIDERS[0].model | MODEL | default). */
+  /** Resolved backend provider (PROVIDER | "openrouter"); selects the LLM API. */
+  provider: ProviderId;
+  /** Effective model id for the provider (MODEL_ID | per-provider default). */
   model: string;
-  /** Effective OpenRouter API key (PROVIDERS[0].api_key | OPENROUTER_API_KEY | ""). */
+  /** Provider API key (Authorization: Bearer); required, validated non-empty. */
   apiKey: string;
   /** Max completion tokens per request. */
   maxTokens: number;
   /** Confidence floor for keeping findings. */
   minConfidence: MinConfidence;
-  /** When true, request response_format json_schema + require_parameters. */
+  /** Always true — the single-model path always enforces the JSON schema. */
   enforceJsonSchema: boolean;
   /** When true, post per-line inline review comments in addition to the summary. */
   inlineComments: boolean;
@@ -73,33 +78,6 @@ export interface ActionInputs {
 }
 
 /**
- * One PROVIDERS array entry; only the fields we read are typed (loose by design —
- * unknown keys like `provider` are stripped). Validated, not asserted: a non-object
- * entry or a wrong-typed field is rejected by {@link parseProviders} instead of
- * being silently mistyped.
- */
-const ProviderEntrySchema = z.object({
-  model: z.string().optional(),
-  api_key: z.string().optional(),
-  enforce_json_schema: z.boolean().optional(),
-  max_tokens: z.number().optional(),
-});
-type ProviderEntry = z.infer<typeof ProviderEntrySchema>;
-
-/** Default model — kept in sync with action.yml MODEL default. deepseek-v4-pro:
- * 1M-token context (huge diffs fit without aggressive chunking) and a 384k-token max
- * output, so structured review output almost never hits the budget; it advertises
- * `response_format` + `structured_outputs` on OpenRouter, so `require_parameters`
- * routes to a provider that honors the JSON schema. Reasoning is disabled
- * (EXTRA_BODY `reasoning.effort: "none"`) to avoid the reasoning-budget empty-content
- * failure older deepseek json-mode showed.
- * NOTE: on an exceptionally large diff the structured output can still truncate — the
- * pipeline mitigates it by CHUNKING the diff (MAX_CHUNK_LINES / MAX_CHUNKS), and a
- * length-truncated chunk is retried with a larger budget then salvaged (openrouter.ts),
- * so the findings completed before the cut survive. */
-const DEFAULT_MODEL = "deepseek/deepseek-v4-pro";
-
-/**
  * Default completion-token budget — kept in sync with action.yml MAX_TOKENS default.
  * 8192 (not 4096): a single chunk's structured output (review_plan + findings +
  * other_checks) overran 4096 and truncated mid-JSON (finish_reason "length"). This
@@ -128,10 +106,9 @@ function intInput(name: string, fallback: number): number {
 
 /**
  * Validate a completion-token budget: a non-positive value (≤0) is a config typo
- * that would force an OpenRouter 400 → silent abstain, so it falls back to
+ * that would force a provider 400 → silent abstain, so it falls back to
  * {@link DEFAULT_MAX_TOKENS} with a `core.warning` instead of being forwarded.
- * Unlike MAX_FILES/MAX_DIFF_LINES, 0 is NOT "unlimited" here — the budget must be
- * positive. `source` names where the bad value came from for the warning text.
+ * 0 is NOT "unlimited" here — the budget must be positive.
  */
 function validateTokenBudget(value: number, source: string): number {
   if (Number.isFinite(value) && value > 0) return value;
@@ -145,7 +122,7 @@ function validateTokenBudget(value: number, source: string): number {
  * Validate the per-attempt model deadline (ms): a non-positive value (≤0) would abort
  * every attempt instantly (setTimeout(0)) or clamp negative to 1ms, abstaining the whole
  * review — a config typo, never intended. Falls back to {@link DEFAULT_REQUEST_TIMEOUT_MS}
- * with a `core.warning`. Unlike MAX_FILES, 0 is NOT "unlimited" here.
+ * with a `core.warning`. 0 is NOT "unlimited" here.
  */
 function validateTimeout(value: number, source: string): number {
   if (Number.isFinite(value) && value > 0) return value;
@@ -168,93 +145,59 @@ function readMinTriggerPermission(): "write" | "admin" {
 }
 
 /**
- * Parse the PROVIDERS input as a JSON array. Returns the parsed entries, or null
- * when PROVIDERS is empty/whitespace. Throws on a value that is set but is NOT a
- * non-empty JSON array — matching build_providers_list()'s `return 1` (the bash
- * `fail "No providers configured"` path).
+ * Resolve and validate the PROVIDER input. Defaults to "openrouter" when omitted;
+ * THROWS on an advertised-but-unimplemented provider (openai/anthropic/...) so a
+ * misconfig fails loud here instead of silently routing through the wrong backend.
  */
-function parseProviders(raw: string): ProviderEntry[] | null {
-  if (raw.trim() === "") return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error("PROVIDERS is set but is not valid JSON.");
+function resolveProviderId(raw: string): ProviderId {
+  const p = raw.trim().toLowerCase();
+  if (p === "") return "openrouter";
+  if (!isSupportedProvider(p)) {
+    throw new Error(
+      `PROVIDER "${p}" is not supported (supported: ${SUPPORTED_PROVIDERS.join(", ")}). ` +
+        `To use "${p}" models, set PROVIDER:"openrouter" and MODEL_ID:"${p}/<model>" to route through OpenRouter.`,
+    );
   }
-  if (!Array.isArray(parsed) || parsed.length === 0) {
-    throw new Error("PROVIDERS is set but is not a non-empty JSON array.");
-  }
-  const result = ProviderEntrySchema.array().safeParse(parsed);
-  if (!result.success) {
-    throw new Error(`PROVIDERS entries are not valid: ${result.error.message}`);
-  }
-  return result.data;
+  return p;
 }
+
+/** Removed-in-v4 inputs that map to a replacement, for an actionable migration warning. */
+const REMOVED_REPLACED: Record<string, string> = {
+  OPENROUTER_API_KEY: "API_KEY",
+  DEEPSEEK_API_KEY: "API_KEY",
+  MODEL: "MODEL_ID",
+  PROVIDERS: "PROVIDER + MODEL_ID + API_KEY",
+};
+
+/** Removed-in-v4 inputs that were no-ops and have no replacement. */
+const REMOVED_DROPPED = ["MERGE_STRATEGY", "FALLBACK_MODEL", "REVIEW_MODE", "ENFORCE_JSON_SCHEMA"];
 
 /**
- * Resolve the effective {model, apiKey, enforceJsonSchema, maxTokens} from the
- * PROVIDERS array (first entry wins) or the legacy single-provider inputs.
- * Emits the deprecation warnings build_providers_list() emits: extra PROVIDERS
- * entries (>1), and the legacy/multi conflict.
+ * Warn for each removed-in-v4 input that is still being passed, pointing at its
+ * replacement. A v4 upgrader who kept the old inputs would otherwise hit a bare
+ * "API_KEY is required" (or silent no-op) with no hint that the contract changed.
  */
-function resolveProvider(
-  providers: ProviderEntry[] | null,
-  legacyKey: string,
-  legacyModel: string,
-  legacyEnforce: boolean,
-  legacyMaxTokens: number,
-): { model: string; apiKey: string; enforceJsonSchema: boolean; maxTokens: number } {
-  if (providers !== null) {
-    if (legacyKey !== "") {
-      core.warning(
-        "OPENROUTER_API_KEY (and other legacy single-provider inputs) ignored; using PROVIDERS",
-      );
+function warnRemovedInputs(): void {
+  for (const [name, replacement] of Object.entries(REMOVED_REPLACED)) {
+    if (core.getInput(name).trim() !== "") {
+      core.warning(`${name} was removed in v4; use ${replacement} instead.`);
     }
-    if (providers.length > 1) {
-      core.warning(
-        `PROVIDERS carries ${providers.length} entries, but this action reviews with a single model; ` +
-          "only the first entry is used. The remaining entries are a no-op.",
-      );
-    }
-    const first = providers[0] ?? {};
-    // A non-positive PROVIDERS[0].max_tokens (e.g. a `max_tokens: 0` typo) would
-    // 400 the request → silent abstain; clamp it to the default with a warning.
-    const providerMaxTokens =
-      typeof first.max_tokens === "number"
-        ? validateTokenBudget(first.max_tokens, "PROVIDERS[0].max_tokens")
-        : legacyMaxTokens;
-    return {
-      model: first.model && first.model !== "" ? first.model : DEFAULT_MODEL,
-      apiKey: first.api_key ?? "",
-      enforceJsonSchema: first.enforce_json_schema ?? true,
-      maxTokens: providerMaxTokens,
-    };
   }
-
-  // Legacy single-provider path.
-  return {
-    model: legacyModel !== "" ? legacyModel : DEFAULT_MODEL,
-    apiKey: legacyKey,
-    enforceJsonSchema: legacyEnforce,
-    maxTokens: legacyMaxTokens,
-  };
+  for (const name of REMOVED_DROPPED) {
+    if (core.getInput(name).trim() !== "") {
+      core.warning(
+        `${name} was removed in v4 and has no effect (one model per review; the JSON schema is always enforced).`,
+      );
+    }
+  }
 }
 
-/** Warn for each deprecated no-op input that the caller still set. */
-function warnDeprecated(legacyEnforce: boolean): void {
-  if (core.getInput("MERGE_STRATEGY").trim() !== "") {
-    core.warning("MERGE_STRATEGY is a no-op; this action reviews with a single model.");
-  }
-  if (core.getInput("FALLBACK_MODEL").trim() !== "") {
-    core.warning("FALLBACK_MODEL is dropped; configure the model via MODEL or PROVIDERS.");
-  }
-  const reviewMode = core.getInput("REVIEW_MODE").trim();
-  if (reviewMode !== "" && reviewMode !== "single") {
-    core.warning("REVIEW_MODE is a no-op; the single-model review replaces per-dimension fan-out.");
-  }
-  if (!legacyEnforce) {
+/** Warn when a deepseek model id looks like an OpenRouter id (slash namespace) — it will 400. */
+function warnSuspiciousModel(provider: ProviderId, model: string): void {
+  if (provider === "deepseek" && model.includes("/")) {
     core.warning(
-      "ENFORCE_JSON_SCHEMA=false is a no-op; the single-model path always enforces the JSON schema.",
+      `MODEL_ID "${model}" looks like an OpenRouter id (contains "/") but PROVIDER is "deepseek"; ` +
+        'the native DeepSeek API will reject it. Use a native id like "deepseek-v4-flash".',
     );
   }
 }
@@ -262,46 +205,38 @@ function warnDeprecated(legacyEnforce: boolean): void {
 /**
  * Read every action.yml input and resolve it into a typed {@link ActionInputs}.
  *
- * Collapses the legacy single-provider inputs and the multi-provider PROVIDERS
- * array into one effective model/api_key, and emits a `core.warning` for each
- * deprecated no-op input that was set. Throws when PROVIDERS is present but not a
- * non-empty JSON array (the bash "No providers configured" failure).
+ * Resolves the flat PROVIDER/MODEL_ID/API_KEY contract: PROVIDER defaults to
+ * "openrouter" (unsupported values throw), MODEL_ID defaults per provider, and an
+ * empty API_KEY throws (a keyless review would abstain on every call).
  */
 export function readInputs(): ActionInputs {
-  const legacyKey =
-    core.getInput("OPENROUTER_API_KEY").trim() || (process.env["OPENROUTER_API_KEY"] ?? "").trim();
-  const legacyModel = core.getInput("MODEL").trim();
-  const legacyEnforce = readBool("ENFORCE_JSON_SCHEMA", true);
+  warnRemovedInputs();
+  const provider = resolveProviderId(core.getInput("PROVIDER"));
+  const model = core.getInput("MODEL_ID").trim() || defaultModelFor(provider);
+  warnSuspiciousModel(provider, model);
+
+  const apiKey = core.getInput("API_KEY").trim();
+  if (apiKey === "") {
+    throw new Error(`API_KEY is required (the ${provider} API key).`);
+  }
+
   // MAX_TOKENS must be a positive budget; MAX_TOKENS="0"/"-1" is a typo that would
-  // 400 → silent abstain, so clamp it to the default with a warning (FIX 8).
-  const legacyMaxTokens = validateTokenBudget(
-    intInput("MAX_TOKENS", DEFAULT_MAX_TOKENS),
-    "MAX_TOKENS",
-  );
-
-  const providers = parseProviders(core.getInput("PROVIDERS"));
-  const effective = resolveProvider(
-    providers,
-    legacyKey,
-    legacyModel,
-    legacyEnforce,
-    legacyMaxTokens,
-  );
-
-  warnDeprecated(legacyEnforce);
+  // 400 → silent abstain, so clamp it to the default with a warning.
+  const maxTokens = validateTokenBudget(intInput("MAX_TOKENS", DEFAULT_MAX_TOKENS), "MAX_TOKENS");
 
   return {
-    model: effective.model,
-    apiKey: effective.apiKey,
-    maxTokens: effective.maxTokens,
-    enforceJsonSchema: effective.enforceJsonSchema,
+    provider,
+    model,
+    apiKey,
+    maxTokens,
+    // The single-model path always enforces the JSON schema; no longer an input.
+    enforceJsonSchema: true,
     minConfidence: readMinConfidence(),
     inlineComments: readBool("INLINE_COMMENTS", true),
     manageLabels: readBool("MANAGE_LABELS", true),
     baseBranch: core.getInput("BASE_BRANCH").trim() || "main",
-    // Trim both: prompt.ts treats only "" as "use default", so an untrimmed
-    // whitespace/newline value (a YAML block scalar) would become a bogus prompt
-    // path → readFileSync ENOENT crash. Every other string input here is trimmed.
+    // Trim: prompt.ts treats only "" as "use default", so an untrimmed whitespace value
+    // (a YAML block scalar) would become a bogus prompt path → readFileSync ENOENT crash.
     reviewPromptFile: core.getInput("REVIEW_PROMPT_FILE").trim(),
     codebaseOverview: core.getInput("CODEBASE_OVERVIEW").trim(),
     checkProjectRules: readBool("CHECK_PROJECT_RULES", true),
