@@ -8,7 +8,7 @@ import {
   defaultModelFor,
   isSupportedProvider,
   resolveModel,
-} from "../providers.js";
+} from "@/llm/providers.js";
 
 describe("provider factory", () => {
   it("exposes the per-provider default model ids", () => {

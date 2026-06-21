@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as core from "@actions/core";
-import { readInputs } from "../inputs.js";
+import { readInputs } from "@/inputs.js";
 
 /** Set an action input as @actions/core reads it (process.env.INPUT_<NAME>). */
 function setInput(name: string, value: string): void {

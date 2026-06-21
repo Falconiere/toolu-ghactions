@@ -36,7 +36,7 @@ const FIXTURE = join(HERE, "fixtures", "success.json");
 // "RESULT:changes"; if the process exits early during the backoff it prints NOTHING.
 const HARNESS = `
 import { readFileSync } from "node:fs";
-import { reviewWithModel } from "@/llm/openrouter.js";
+import { reviewWithModel } from "@/llm/review.js";
 
 void (async () => {
   const success = JSON.parse(readFileSync(process.argv[2], "utf8"));

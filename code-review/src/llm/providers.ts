@@ -9,7 +9,7 @@
 // (the prior bug — every provider hit OpenRouter regardless of the `provider` field).
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { createDeepSeek } from "@ai-sdk/deepseek";
-import type { LanguageModelV1 } from "ai";
+import type { LanguageModel } from "ai";
 
 /** Providers with a real native backend wired in this action. */
 export type ProviderId = "openrouter" | "deepseek";
@@ -66,11 +66,11 @@ export interface ResolveModelOptions {
 
 /**
  * Construct the AI SDK model object for `opts.provider`, applying that provider's
- * request-body extras inside the factory. The returned {@link LanguageModelV1} is what
+ * request-body extras inside the factory. The returned {@link LanguageModel} is what
  * generateObject consumes. Throws on an unsupported provider — a backstop, since
  * callers resolve the provider via {@link isSupportedProvider} before reaching here.
  */
-export function resolveModel(opts: ResolveModelOptions): LanguageModelV1 {
+export function resolveModel(opts: ResolveModelOptions): LanguageModel {
   const { provider, model, apiKey } = opts;
   const fetchOpt = opts.fetch ? { fetch: opts.fetch } : {};
   switch (provider) {

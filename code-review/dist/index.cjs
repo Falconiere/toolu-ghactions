@@ -38364,7 +38364,7 @@ var PartialVerdict = external_exports.object({
   findings: external_exports.array(external_exports.unknown()).optional()
 });
 
-// src/llm/openrouter.ts
+// src/llm/review.ts
 var REQUEST_TIMEOUT_MS = 18e4;
 var MAX_ATTEMPTS = 3;
 var MAX_TOKEN_CEILING = 32768;

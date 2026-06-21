@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { fetchDiff } from "@/git/diff.js";
 import type { DiffData } from "@/git/diff.js";
 import { reviewChunked } from "@/review/chunked.js";
-import type { ProviderResult } from "@/llm/openrouter.js";
+import type { ProviderResult } from "@/llm/review.js";
 import type { MechanicalFinding } from "@/mechanical/sarif.js";
 import type { Envelope } from "@/prompt.js";
 import { git, setupGitRepo, writeFile, removeRepo } from "@/git/__tests__/helpers.js";

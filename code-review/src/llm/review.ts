@@ -1,9 +1,8 @@
-// llm/openrouter.ts — the provider-agnostic review LLM call, via the Vercel AI SDK.
+// llm/review.ts — the provider-agnostic review LLM call, via the Vercel AI SDK.
 // One model, structured output (generateObject + the Zod Verdict schema), temperature 0.
 // The backend (OpenRouter or native DeepSeek) is chosen by resolveModel() in
 // providers.ts; this file owns only the provider-agnostic review loop (timeout/abort,
-// retries, budget escalation, salvage, abstain). NOTE: the filename predates the
-// multi-provider split — the export is reviewWithModel().
+// retries, budget escalation, salvage, abstain). The export is reviewWithModel().
 //
 // REASONING-OFF / require_parameters: the OpenRouter-only request-body extras that
 // disable hidden reasoning and force schema honoring now live in providers.ts
