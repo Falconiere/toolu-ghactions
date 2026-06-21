@@ -69,6 +69,6 @@ opengrep scan --sarif --output "$TMPDIR/opengrep.sarif" --config p/typescript .
 Fixture files live under `code-review/src/llm/__tests__/fixtures/` and must be **real recorded API responses** (the action runs a single OpenRouter model via the Vercel AI SDK). To record:
 
 1. Get a real OpenRouter API key.
-2. Make a request matching the wire format the action sends (see `src/llm/openrouter.ts` for the endpoint, headers, and `response_format`).
+2. Make a request matching the wire format the action sends (see `src/llm/review.ts` and `src/llm/providers.ts` for the endpoint, headers, and `response_format`).
 3. Save the raw JSON response to `src/llm/__tests__/fixtures/success.json`. For error fixtures, use a deliberately bad key to trigger a 401.
 4. Sanitize — remove any token/secret from the response body before committing.
