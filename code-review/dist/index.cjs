@@ -31723,21 +31723,19 @@ function gitattributesGenerated(paths, cwd) {
   if (paths.length === 0) return out;
   let res;
   try {
-    res = (0, import_node_child_process.execFileSync)("git", ["check-attr", "linguist-generated", "--stdin"], {
+    res = (0, import_node_child_process.execFileSync)("git", ["check-attr", "-z", "linguist-generated", "--stdin"], {
       cwd,
-      input: paths.join("\n"),
+      input: paths.join("\0"),
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024
     });
   } catch {
     return out;
   }
-  for (const line of res.split("\n")) {
-    const idx = line.lastIndexOf(": linguist-generated: ");
-    if (idx === -1) continue;
-    if (line.slice(idx + ": linguist-generated: ".length).trim() === "set") {
-      out.add(line.slice(0, idx));
-    }
+  const fields = res.split("\0");
+  for (let i = 0; i + 2 < fields.length; i += 3) {
+    const path = fields[i];
+    if (path !== void 0 && fields[i + 2] === "set") out.add(path);
   }
   return out;
 }
