@@ -19739,10 +19739,10 @@ Support boolean input list: \`true | True | TRUE | false | False | FALSE\``);
       (0, command_1.issueCommand)("error", (0, utils_1.toCommandProperties)(properties), message instanceof Error ? message.toString() : message);
     }
     exports2.error = error;
-    function warning2(message, properties = {}) {
+    function warning3(message, properties = {}) {
       (0, command_1.issueCommand)("warning", (0, utils_1.toCommandProperties)(properties), message instanceof Error ? message.toString() : message);
     }
-    exports2.warning = warning2;
+    exports2.warning = warning3;
     function notice(message, properties = {}) {
       (0, command_1.issueCommand)("notice", (0, utils_1.toCommandProperties)(properties), message instanceof Error ? message.toString() : message);
     }
@@ -24136,11 +24136,11 @@ var require_fast_content_type_parse = __commonJS({
 });
 
 // src/main.ts
-var core2 = __toESM(require_core(), 1);
+var core3 = __toESM(require_core(), 1);
 var github = __toESM(require_github(), 1);
 
 // src/inputs.ts
-var core = __toESM(require_core(), 1);
+var core2 = __toESM(require_core(), 1);
 
 // node_modules/@ai-sdk/provider/dist/index.mjs
 var marker = "vercel.ai.error";
@@ -31228,34 +31228,58 @@ function resolveModel(opts) {
   }
 }
 
+// src/review/gate.ts
+var core = __toESM(require_core(), 1);
+var RECOGNIZED = /* @__PURE__ */ new Set(["none", "changes", "error"]);
+function parseFailOn(raw) {
+  const result = /* @__PURE__ */ new Set();
+  const unknown = [];
+  for (const part of raw.split(",")) {
+    const token = part.trim().toLowerCase();
+    if (token === "") continue;
+    if (token === "changes" || token === "error") result.add(token);
+    else if (!RECOGNIZED.has(token)) unknown.push(token);
+  }
+  if (unknown.length > 0) {
+    core.warning(
+      `FAIL_ON: ignoring unrecognized verdict(s) ${unknown.join(", ")} \u2014 valid values are 'changes', 'error', or 'none'.`
+    );
+  }
+  return result;
+}
+function shouldBlock(verdict, failOn) {
+  if (verdict === "changes" || verdict === "error") return failOn.has(verdict);
+  return false;
+}
+
 // src/inputs.ts
 var DEFAULT_MAX_TOKENS = 8192;
 var DEFAULT_REQUEST_TIMEOUT_MS = 18e4;
 function intInput(name17, fallback) {
-  const raw = core.getInput(name17).trim();
+  const raw = core2.getInput(name17).trim();
   if (raw === "") return fallback;
   const n = Number.parseInt(raw, 10);
   return Number.isFinite(n) ? n : fallback;
 }
 function validateTokenBudget(value, source) {
   if (Number.isFinite(value) && value > 0) return value;
-  core.warning(
+  core2.warning(
     `${source}=${value} is not a positive token budget; falling back to ${DEFAULT_MAX_TOKENS}.`
   );
   return DEFAULT_MAX_TOKENS;
 }
 function validateTimeout(value, source) {
   if (Number.isFinite(value) && value > 0) return value;
-  core.warning(
+  core2.warning(
     `${source}=${value} is not a positive timeout; falling back to ${DEFAULT_REQUEST_TIMEOUT_MS}ms.`
   );
   return DEFAULT_REQUEST_TIMEOUT_MS;
 }
 function readMinConfidence() {
-  return core.getInput("MIN_CONFIDENCE").trim().toLowerCase() === "medium" ? "medium" : "high";
+  return core2.getInput("MIN_CONFIDENCE").trim().toLowerCase() === "medium" ? "medium" : "high";
 }
 function readMinTriggerPermission() {
-  return core.getInput("MIN_TRIGGER_PERMISSION").trim().toLowerCase() === "admin" ? "admin" : "write";
+  return core2.getInput("MIN_TRIGGER_PERMISSION").trim().toLowerCase() === "admin" ? "admin" : "write";
 }
 function resolveProviderId(raw) {
   const p = raw.trim().toLowerCase();
@@ -31269,16 +31293,16 @@ function resolveProviderId(raw) {
 }
 function warnSuspiciousModel(provider, model) {
   if (provider === "deepseek" && model.includes("/")) {
-    core.warning(
+    core2.warning(
       `MODEL_ID "${model}" looks like an OpenRouter id (contains "/") but PROVIDER is "deepseek"; the native DeepSeek API will reject it. Use a native id like "deepseek-v4-flash".`
     );
   }
 }
 function readInputs() {
-  const provider = resolveProviderId(core.getInput("PROVIDER"));
-  const model = core.getInput("MODEL_ID").trim() || defaultModelFor(provider);
+  const provider = resolveProviderId(core2.getInput("PROVIDER"));
+  const model = core2.getInput("MODEL_ID").trim() || defaultModelFor(provider);
   warnSuspiciousModel(provider, model);
-  const apiKey = core.getInput("API_KEY").trim();
+  const apiKey = core2.getInput("API_KEY").trim();
   if (apiKey === "") {
     throw new Error(`API_KEY is required (the ${provider} API key).`);
   }
@@ -31293,13 +31317,13 @@ function readInputs() {
     minConfidence: readMinConfidence(),
     inlineComments: readBool("INLINE_COMMENTS", true),
     manageLabels: readBool("MANAGE_LABELS", true),
-    baseBranch: core.getInput("BASE_BRANCH").trim() || "main",
+    baseBranch: core2.getInput("BASE_BRANCH").trim() || "main",
     // Trim: prompt.ts treats only "" as "use default", so an untrimmed whitespace value
     // (a YAML block scalar) would become a bogus prompt path → readFileSync ENOENT crash.
-    reviewPromptFile: core.getInput("REVIEW_PROMPT_FILE").trim(),
-    codebaseOverview: core.getInput("CODEBASE_OVERVIEW").trim(),
+    reviewPromptFile: core2.getInput("REVIEW_PROMPT_FILE").trim(),
+    codebaseOverview: core2.getInput("CODEBASE_OVERVIEW").trim(),
     checkProjectRules: readBool("CHECK_PROJECT_RULES", true),
-    rulesGlob: core.getInput("RULES_GLOB"),
+    rulesGlob: core2.getInput("RULES_GLOB"),
     rulesMaxBytes: intInput("RULES_MAX_BYTES", 32768),
     maxFiles: intInput("MAX_FILES", 0),
     maxDiffLines: intInput("MAX_DIFF_LINES", 0),
@@ -31309,19 +31333,20 @@ function readInputs() {
       intInput("REQUEST_TIMEOUT_MS", DEFAULT_REQUEST_TIMEOUT_MS),
       "REQUEST_TIMEOUT_MS"
     ),
-    token: core.getInput("TOKEN") || (process.env["GITHUB_TOKEN"] ?? ""),
-    appId: core.getInput("APP_ID").trim(),
-    appPrivateKey: core.getInput("APP_PRIVATE_KEY"),
-    triggerPhrase: core.getInput("TRIGGER_PHRASE").trim() || "@toolu",
+    token: core2.getInput("TOKEN") || (process.env["GITHUB_TOKEN"] ?? ""),
+    appId: core2.getInput("APP_ID").trim(),
+    appPrivateKey: core2.getInput("APP_PRIVATE_KEY"),
+    triggerPhrase: core2.getInput("TRIGGER_PHRASE").trim() || "@toolu",
     minTriggerPermission: readMinTriggerPermission(),
-    botName: core.getInput("BOT_NAME") || "Toolu \u2014 Code Review",
-    botLogoUrl: core.getInput("BOT_LOGO_URL") || "https://raw.githubusercontent.com/falconiere/toolu-ghactions/main/code-review/assets/logo.png",
-    reviewMemory: readBool("REVIEW_MEMORY", true)
+    botName: core2.getInput("BOT_NAME") || "Toolu \u2014 Code Review",
+    botLogoUrl: core2.getInput("BOT_LOGO_URL") || "https://raw.githubusercontent.com/falconiere/toolu-ghactions/main/code-review/assets/logo.png",
+    reviewMemory: readBool("REVIEW_MEMORY", true),
+    failOn: parseFailOn(core2.getInput("FAIL_ON") || "changes")
   };
 }
 function readBool(name17, fallback) {
-  if (core.getInput(name17).trim() === "") return fallback;
-  return core.getBooleanInput(name17);
+  if (core2.getInput(name17).trim() === "") return fallback;
+  return core2.getBooleanInput(name17);
 }
 
 // src/pipeline.ts
@@ -43804,7 +43829,7 @@ async function resolveToken(inputs) {
     })
   }).catch(() => null);
   if (minted) {
-    core2.info("Using GitHub App identity for PR comments");
+    core3.info("Using GitHub App identity for PR comments");
     return minted;
   }
   return inputs.token;
@@ -43865,22 +43890,27 @@ async function main() {
       // The composite SAST steps write gitleaks/opengrep SARIF here; the pipeline reads it.
       ...process.env["TOOLU_SARIF_DIR"] ? { sarifDir: process.env["TOOLU_SARIF_DIR"] } : {}
     });
-    core2.setOutput("verdict", result.verdict);
-    core2.setOutput("findings-count", result.findingsCount);
-    core2.setOutput("comment-url", result.commentUrl);
-    core2.info(
+    core3.setOutput("verdict", result.verdict);
+    core3.setOutput("findings-count", result.findingsCount);
+    core3.setOutput("comment-url", result.commentUrl);
+    core3.info(
       `Review complete: ${result.verdict} (${result.findingsCount} findings) \u2014 ${result.commentUrl}`
     );
+    if (shouldBlock(result.verdict, inputs.failOn)) {
+      core3.setFailed(
+        `Code review verdict '${result.verdict}' is in FAIL_ON \u2014 failing the job (the review was still posted). Set FAIL_ON: none to keep the review advisory.`
+      );
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    core2.setOutput("verdict", "error");
-    core2.setOutput("findings-count", 0);
+    core3.setOutput("verdict", "error");
+    core3.setOutput("findings-count", 0);
     const url = await postErrorComment(octokit, message).catch(() => "");
-    if (url !== "") core2.setOutput("comment-url", url);
-    core2.setFailed(`AI Code Review failed: ${message}`);
+    if (url !== "") core3.setOutput("comment-url", url);
+    core3.setFailed(`AI Code Review failed: ${message}`);
   }
 }
 main().catch((err) => {
-  core2.setOutput("verdict", "error");
-  core2.setFailed(err instanceof Error ? err.stack ?? err.message : String(err));
+  core3.setOutput("verdict", "error");
+  core3.setFailed(err instanceof Error ? err.stack ?? err.message : String(err));
 });

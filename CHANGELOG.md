@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+
+### ⚠ BREAKING CHANGES
+
+* **code-review:** the new `FAIL_ON` input defaults to `changes`, so the action now **fails its own job** (red check) when the bot's verdict is `changes`. PRs that were green-with-changes are blocked once this check is marked Required in branch protection. Set `FAIL_ON: none` to restore the previous advisory-only behavior.
+
+### Features
+
+* **code-review:** add `FAIL_ON` merge gate — fail the job on a blocking verdict (`changes` and/or `error`) so a required status check can block the PR. Defaults to `changes` (on by default); `changes,error` also blocks on a provider error; `none` keeps the review advisory.
+
 ## [4.0.0](https://github.com/Falconiere/toolu-ghactions/compare/v3.5.1...v4.0.0) (2026-06-21)
 
 

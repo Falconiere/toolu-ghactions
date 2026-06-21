@@ -111,6 +111,10 @@ inputs:
     description: 'When true, recap what changed since the last review (resolved / still-open / new) and keep a collapsed history, using a hidden state marker in the sticky comment. Set false to disable memory.'
     required: false
     default: 'true'
+  FAIL_ON:
+    description: 'Comma-separated verdicts that FAIL the job (turning this check red so branch protection can block the PR): changes, error, or both. Defaults to "changes" — the job goes red when the bot requests changes. Set "none" to keep the job green on every verdict (advisory only), or "changes,error" to also block when the review could not run. The comment, label, and outputs are posted regardless; only the exit code changes. This governs the verdict-driven gate only; a thrown infra error still fails the job regardless of FAIL_ON. Mark this check Required in branch protection for the red to block.'
+    required: false
+    default: 'changes'
   RUN_SECRET_SCAN:
     description: 'Run the deterministic secret scan (gitleaks) before the LLM review. Its findings feed the LLM as triage context and upload to the Code Scanning tab. Set false to skip.'
     required: false
@@ -222,6 +226,7 @@ runs:
         INPUT_BOT_NAME: ${{ inputs.BOT_NAME }}
         INPUT_BOT_LOGO_URL: ${{ inputs.BOT_LOGO_URL }}
         INPUT_REVIEW_MEMORY: ${{ inputs.REVIEW_MEMORY }}
+        INPUT_FAIL_ON: ${{ inputs.FAIL_ON }}
         # Where the scanner steps wrote their SARIF — the node action reads + triages it.
         TOOLU_SARIF_DIR: ${{ runner.temp }}
         # The default GITHUB_TOKEN for the @actions/github client (TOKEN input overrides downstream).

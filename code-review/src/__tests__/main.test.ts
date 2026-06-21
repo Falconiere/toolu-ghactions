@@ -85,6 +85,23 @@ describe("main — entry wiring", () => {
     expect(process.exitCode === undefined || process.exitCode === 0).toBe(true);
   });
 
+  it("AC-9: FAIL_ON=changes + non-trigger skip stays green (gate wired, does not over-fire)", async () => {
+    // The merge gate is wired in main(); skip is never blockable, so even with
+    // FAIL_ON=changes a non-trigger event must keep the job green. Hermetic: a
+    // non-trigger push returns verdict=skip before any model/network call.
+    process.env["INPUT_API_KEY"] = "sk-test";
+    process.env["INPUT_TOKEN"] = "ghs_token";
+    process.env["INPUT_FAIL_ON"] = "changes";
+    process.env["GITHUB_SHA"] = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+    setEvent("push", { ref: "refs/heads/feature" });
+
+    await runMain();
+
+    const outputs = readOutputs();
+    expect(outputs["verdict"]).toBe("skip");
+    expect(process.exitCode === undefined || process.exitCode === 0).toBe(true);
+  });
+
   it("infra failure (unsupported PROVIDER) → verdict=error output and the job is failed", async () => {
     // readInputs() throws on an unsupported PROVIDER. This trips the last-resort
     // main().catch BEFORE any octokit/network call — proving the top-level guard sets
