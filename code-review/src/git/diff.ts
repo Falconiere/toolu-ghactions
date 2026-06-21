@@ -314,7 +314,7 @@ export function fetchDiff(opts: DiffOptions): DiffData {
       ...emptyResult(baseSha),
       total_files: totalFiles,
       max_files: maxFiles,
-      error: `PR exceeds file limit (${text.length} files to review > ${maxFiles} max). Raise MAX_FILES to review it.`,
+      error: `PR exceeds file limit: ${text.length} reviewable files (of ${totalFiles} changed) > ${maxFiles} max. Raise MAX_FILES to review it.`,
     };
   }
 
