@@ -1,5 +1,24 @@
 # Changelog
 
+## [4.0.0](https://github.com/Falconiere/toolu-ghactions/compare/v3.5.1...v4.0.0) (2026-06-21)
+
+
+### ⚠ BREAKING CHANGES
+
+* **code-review:** removes PROVIDERS, OPENROUTER_API_KEY, MODEL, MERGE_STRATEGY, FALLBACK_MODEL, REVIEW_MODE, ENFORCE_JSON_SCHEMA. Migrate to PROVIDER + MODEL_ID + API_KEY.
+
+### Features
+
+* **code-review:** native DeepSeek provider via flat PROVIDER/MODEL_ID/API_KEY contract ([1c5a430](https://github.com/Falconiere/toolu-ghactions/commit/1c5a430ecddb7c05f0a471647d9f50ba5c70eb80))
+
+
+### Bug Fixes
+
+* **code-review:** address PR review feedback ([4ddf612](https://github.com/Falconiere/toolu-ghactions/commit/4ddf612a7ce76f3d868567950ea7acf888b1c4e3))
+* **code-review:** address review round 2 ([99be353](https://github.com/Falconiere/toolu-ghactions/commit/99be353b19757ad53772328bb0e658067c35e6f9))
+* **code-review:** clean dist bundle + migrate dogfood workflow to v4 inputs ([63daa16](https://github.com/Falconiere/toolu-ghactions/commit/63daa16241cc5461afaf2753f9d0a155d13d0e8a))
+* **code-review:** repair injection-probe import after openrouter.ts-&gt;review.ts rename ([f9bf584](https://github.com/Falconiere/toolu-ghactions/commit/f9bf584295bbbb8f89b11411c1307b0ded056665))
+
 ## [3.5.1](https://github.com/Falconiere/toolu-ghactions/compare/v3.5.0...v3.5.1) (2026-06-20)
 
 
