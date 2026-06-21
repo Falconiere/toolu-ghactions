@@ -55,6 +55,26 @@ describe("REQUEST_TIMEOUT_MS", () => {
   });
 });
 
+describe("FAIL_ON", () => {
+  it("defaults to blocking on 'changes' when unset (gate on by default)", () => {
+    const failOn = readInputs().failOn;
+    expect(failOn.has("changes")).toBe(true);
+    expect(failOn.has("error")).toBe(false);
+  });
+
+  it("FAIL_ON=none disables the gate", () => {
+    setInput("FAIL_ON", "none");
+    expect([...readInputs().failOn]).toEqual([]);
+  });
+
+  it("FAIL_ON=changes,error blocks on both verdicts", () => {
+    setInput("FAIL_ON", "changes,error");
+    const failOn = readInputs().failOn;
+    expect(failOn.has("changes")).toBe(true);
+    expect(failOn.has("error")).toBe(true);
+  });
+});
+
 describe("MAX_TOKENS", () => {
   it("defaults to 8192", () => {
     expect(readInputs().maxTokens).toBe(8192);

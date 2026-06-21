@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { runReview } from "@/pipeline.js";
 import type { GithubContext, PipelineOctokit, ReviewDeps } from "@/pipeline.js";
 import type { ActionInputs } from "@/inputs.js";
+import { parseFailOn, shouldBlock, type BlockableVerdict } from "@/review/gate.js";
 import { encodeMarker, fingerprint, type ReviewState } from "@/state.js";
 import { appendFpMarker } from "@/review/fpmarker.js";
 import { git, setupGitRepo, writeFile, removeRepo } from "@/git/__tests__/helpers.js";
@@ -234,6 +235,7 @@ function baseInputs(overrides: Partial<ActionInputs> = {}): ActionInputs {
     botName: "Toolu — Code Review",
     botLogoUrl: "https://example.com/logo.png",
     reviewMemory: true,
+    failOn: new Set<BlockableVerdict>(),
     ...overrides,
   };
 }
@@ -794,5 +796,46 @@ describe("runReview — thread-aware inline reconciliation", () => {
     expect(rec.reviews[0]?.comments).toBe(2);
     expect(rec.replies).toEqual([]);
     expect(rec.resolved).toEqual([]);
+  });
+});
+
+// FAIL_ON merge gate composed with a REAL pipeline verdict (recorded fixtures, no
+// network) — proves shouldBlock fires on a genuinely-produced verdict. The gate
+// itself is wired in main.ts; here we assert the decision against the real verdict.
+describe("FAIL_ON merge gate (real pipeline verdict + shouldBlock)", () => {
+  it("AC-7: a real 'changes' verdict blocks under FAIL_ON=changes, not under none", async () => {
+    const { dir, headSha } = track(featureRepoWithChange());
+    const { octokit } = fakeOctokit();
+
+    const result = await runReview({
+      inputs: baseInputs(),
+      octokit,
+      context: prContext(headSha),
+      fetch: replayFetch("success"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    expect(result.verdict).toBe("changes");
+    expect(shouldBlock(result.verdict, parseFailOn("changes"))).toBe(true);
+    expect(shouldBlock(result.verdict, parseFailOn("none"))).toBe(false);
+  });
+
+  it("AC-8: a real normal-return 'error' verdict blocks only when FAIL_ON includes error", async () => {
+    const { dir, headSha } = track(featureRepoWithChange());
+    const { octokit } = fakeOctokit();
+
+    const result = await runReview({
+      inputs: baseInputs(),
+      octokit,
+      context: prContext(headSha),
+      fetch: replayFetch("empty-content"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    expect(result.verdict).toBe("error");
+    expect(shouldBlock(result.verdict, parseFailOn("changes,error"))).toBe(true);
+    expect(shouldBlock(result.verdict, parseFailOn("changes"))).toBe(false);
   });
 });

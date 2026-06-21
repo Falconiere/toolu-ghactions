@@ -441,6 +441,7 @@ Thread reads/writes are best-effort: a GitHub API hiccup degrades to the previou
 | `MIN_CONFIDENCE` | no | `high` | Drop findings below this confidence unless severity is blocker/high (`high` or `medium`) |
 | `INLINE_COMMENTS` | no | `true` | Post per-line review comments with committable code suggestions (Reviews API), in addition to the summary comment |
 | `MANAGE_LABELS` | no | `true` | Set a real PR label chip matching the verdict (`merge-approved` / `request-changes`) and remove the opposite one. Requires `issues: write`. |
+| `FAIL_ON` | no | `changes` | Comma-separated verdicts that **fail the job** (turn this check red so branch protection can block the PR): `changes`, `error`, or both. **Defaults to `changes`** — the job goes red when the bot requests changes. Set `none` to keep the job green on every verdict (advisory only), or `changes,error` to also block when the review could not run (`error`). The comment, label, and outputs are still posted; only the exit code changes. Governs the verdict-driven gate only — a thrown infra error fails the job regardless. **Mark this check Required in branch protection** for the red to actually block a merge. See [Blocking merges](#blocking-merges). |
 | `BASE_BRANCH` | no | `main` | Base branch for diff comparison. Falls back to `GITHUB_BASE_REF` if unset. |
 | `REVIEW_PROMPT_FILE` | no | *(8-dimension checklist)* | Path to a markdown file (relative to repo root) with a custom review prompt. Overrides the default checklist. Project conventions are still gathered and injected, but a custom prompt supplies its own dimensions. |
 | `CODEBASE_OVERVIEW` | no | — | High-level context about the codebase (framework, patterns, architecture) injected into the review prompt. |
@@ -485,16 +486,26 @@ mapping.
 | `findings-count` | Number of findings reported |
 | `comment-url` | URL of the posted verdict comment |
 
-Use outputs in downstream workflow steps:
+Use outputs in downstream workflow steps. Note that once the action **fails** the job (see [Blocking merges](#blocking-merges)), later steps that read these outputs need `if: always()` to run at all:
 
 ```yaml
 - uses: falconiere/toolu-ghactions/code-review@v4
   id: review
   with:
     API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-- if: steps.review.outputs.verdict == 'changes'
+- if: always() && steps.review.outputs.verdict == 'changes'
   run: echo "PR needs work — ${{ steps.review.outputs.findings-count }} findings"
 ```
+
+## Blocking merges
+
+By default (`FAIL_ON: changes`) the action **fails its own job** when the bot's verdict is `changes` — the check turns red, the verdict comment and label are still posted. To make that red check actually **block a merge**, mark this action's check as a **required status check** in the repository's branch-protection rules (Settings → Branches). Without that, the red check is visible but advisory.
+
+- `FAIL_ON: changes` (default) — block when the bot requests changes.
+- `FAIL_ON: changes,error` — also block when the review could not run (provider error/timeout). Safer, but a transient failure reds the check until re-run.
+- `FAIL_ON: none` — never fail on a verdict; the review stays purely advisory (the pre-4.x behavior). You can still gate yourself with `if: steps.review.outputs.verdict == 'changes'`.
+
+The gate governs the verdict only; a thrown infra error fails the job regardless of `FAIL_ON`. A `skip` (non-trigger event) never blocks.
 
 ## Packaging (v2)
 

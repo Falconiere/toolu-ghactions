@@ -12,6 +12,7 @@ import { readInputs } from "./inputs.js";
 import type { ActionInputs } from "./inputs.js";
 import { runReview } from "./pipeline.js";
 import type { GithubContext } from "./pipeline.js";
+import { shouldBlock } from "./review/gate.js";
 import { mintAppToken } from "./github/appToken.js";
 import { createAppAuth } from "@octokit/auth-app";
 import type { EventPayload } from "./github/event.js";
@@ -131,6 +132,14 @@ async function main(): Promise<void> {
     core.info(
       `Review complete: ${result.verdict} (${result.findingsCount} findings) — ${result.commentUrl}`,
     );
+    // Verdict-driven merge gate: turn this check red when the verdict is in FAIL_ON
+    // so branch protection can block the PR. The comment/label/outputs are already
+    // posted above; only the exit code changes. Infra-thrown errors fail via catch.
+    if (shouldBlock(result.verdict, inputs.failOn)) {
+      core.setFailed(
+        `Code review verdict '${result.verdict}' is in FAIL_ON — failing the job (the review was still posted). Set FAIL_ON: none to keep the review advisory.`,
+      );
+    }
   } catch (err) {
     // True infra failure: surface verdict=error, post a best-effort comment, fail the job.
     const message = err instanceof Error ? err.message : String(err);

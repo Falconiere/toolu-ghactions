@@ -15,6 +15,7 @@ import {
   isSupportedProvider,
   defaultModelFor,
 } from "./llm/providers.js";
+import { parseFailOn, type BlockableVerdict } from "./review/gate.js";
 
 /** Minimum confidence floor for the validate gate (high|medium). */
 export type MinConfidence = "high" | "medium";
@@ -75,6 +76,8 @@ export interface ActionInputs {
   botLogoUrl: string;
   /** When true, recap changes since the last review via the hidden state marker. */
   reviewMemory: boolean;
+  /** Verdicts that should fail the job (parsed from FAIL_ON; defaults to blocking on "changes"). */
+  failOn: ReadonlySet<BlockableVerdict>;
 }
 
 /**
@@ -231,6 +234,7 @@ export function readInputs(): ActionInputs {
       core.getInput("BOT_LOGO_URL") ||
       "https://raw.githubusercontent.com/falconiere/toolu-ghactions/main/code-review/assets/logo.png",
     reviewMemory: readBool("REVIEW_MEMORY", true),
+    failOn: parseFailOn(core.getInput("FAIL_ON") || "changes"),
   };
 }
 
