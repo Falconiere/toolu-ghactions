@@ -28,4 +28,6 @@ jobs:
       # in-repo build reviews this repo's own PRs before it ships in a release.
       - uses: ./code-review
         with:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # v4 flat contract: PROVIDER defaults to openrouter, MODEL_ID to
+          # deepseek/deepseek-v4-pro; API_KEY is the OpenRouter key.
+          API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
