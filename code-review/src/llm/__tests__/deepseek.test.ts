@@ -69,8 +69,8 @@ describe("native DeepSeek provider", () => {
     expect(body.max_tokens).toBe(4096);
     // The OpenRouter-only extras must NOT ride on the native DeepSeek request — the
     // native API rejects them and deepseek-v4-flash is non-thinking by default.
-    expect("reasoning" in body).toBe(false);
-    expect("provider" in body).toBe(false);
+    expect(body).not.toHaveProperty("reasoning");
+    expect(body).not.toHaveProperty("provider");
   });
 
   it("AC-7: parses the real recorded DeepSeek response into a ProviderResult", async () => {

@@ -31267,27 +31267,6 @@ function resolveProviderId(raw) {
   }
   return p;
 }
-var REMOVED_REPLACED = {
-  OPENROUTER_API_KEY: "API_KEY",
-  DEEPSEEK_API_KEY: "API_KEY",
-  MODEL: "MODEL_ID",
-  PROVIDERS: "PROVIDER + MODEL_ID + API_KEY"
-};
-var REMOVED_DROPPED = ["MERGE_STRATEGY", "FALLBACK_MODEL", "REVIEW_MODE", "ENFORCE_JSON_SCHEMA"];
-function warnRemovedInputs() {
-  for (const [name17, replacement] of Object.entries(REMOVED_REPLACED)) {
-    if (core.getInput(name17).trim() !== "") {
-      core.warning(`${name17} was removed in v4; use ${replacement} instead.`);
-    }
-  }
-  for (const name17 of REMOVED_DROPPED) {
-    if (core.getInput(name17).trim() !== "") {
-      core.warning(
-        `${name17} was removed in v4 and has no effect (one model per review; the JSON schema is always enforced).`
-      );
-    }
-  }
-}
 function warnSuspiciousModel(provider, model) {
   if (provider === "deepseek" && model.includes("/")) {
     core.warning(
@@ -31296,7 +31275,6 @@ function warnSuspiciousModel(provider, model) {
   }
 }
 function readInputs() {
-  warnRemovedInputs();
   const provider = resolveProviderId(core.getInput("PROVIDER"));
   const model = core.getInput("MODEL_ID").trim() || defaultModelFor(provider);
   warnSuspiciousModel(provider, model);
