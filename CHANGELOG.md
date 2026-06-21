@@ -1,5 +1,19 @@
 # Changelog
 
+## [5.1.0](https://github.com/Falconiere/toolu-ghactions/compare/v5.0.0...v5.1.0) (2026-06-21)
+
+
+### Features
+
+* **code-review:** exclude generated artifacts from review + rename manifest ([9aab335](https://github.com/Falconiere/toolu-ghactions/commit/9aab335d5ba9ae23b179955d0694263496cdf746))
+
+
+### Bug Fixes
+
+* **code-review:** address PR review feedback ([96ae194](https://github.com/Falconiere/toolu-ghactions/commit/96ae1941d3972fdfb767cf110007689a5d909f7b))
+* **code-review:** clarify codegen regex intent + negative-coverage tests ([d1cb807](https://github.com/Falconiere/toolu-ghactions/commit/d1cb807880d5e476adedfdd1b834778119ecf03f))
+* **code-review:** NUL-delimit check-attr for generated detection ([9fa7bcc](https://github.com/Falconiere/toolu-ghactions/commit/9fa7bcc65bc1f5ba5abe22107a905d1287fab0ab))
+
 ## [5.0.0](https://github.com/Falconiere/toolu-ghactions/compare/v4.0.0...v5.0.0) (2026-06-21)
 
 
