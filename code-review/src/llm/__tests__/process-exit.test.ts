@@ -16,7 +16,7 @@
 // keeps the event loop alive, masking the premature exit. The bug only manifests
 // in a bare Node process — exactly what the GitHub Action runs — so this test
 // bundles reviewWithModel with esbuild (no mocks of our code) and runs it under a
-// real `node` child. Real fetch seam, real openrouter.ts, real process lifecycle.
+// real `node` child. Real fetch seam, real review.ts, real process lifecycle.
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
