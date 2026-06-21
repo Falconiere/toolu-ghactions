@@ -158,6 +158,8 @@ function resolveProviderId(raw: string): ProviderId {
         `To use "${p}" models, set PROVIDER:"openrouter" and MODEL_ID:"${p}/<model>" to route through OpenRouter.`,
     );
   }
+  // isSupportedProvider is a `s is ProviderId` type guard, so p is narrowed to
+  // ProviderId here — returned without a cast.
   return p;
 }
 
