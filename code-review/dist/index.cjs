@@ -31511,7 +31511,7 @@ function isVendored(path) {
   return /(^|\/)(node_modules|vendor|third_party|Pods|Carthage|bower_components)\//.test(path) || /(^|\/)\.yarn\/(releases|plugins|unplugged)\//.test(path);
 }
 function isGeneratedCode(path) {
-  if (/\.(pb\.go|generated\.tsx?|designer\.cs|g\.cs|g\.dart|freezed\.dart|gr\.dart|bundle\.js|chunk\.js)$/.test(
+  if (/(\.pb\.go|\.generated\.tsx?|\.designer\.cs|\.g\.cs|\.g\.dart|\.freezed\.dart|\.gr\.dart|\.bundle\.js|\.chunk\.js)$/.test(
     path
   )) {
     return true;
