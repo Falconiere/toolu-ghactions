@@ -363,22 +363,24 @@ function gitattributesGenerated(paths: readonly string[], cwd: string): Set<stri
   if (paths.length === 0) return out;
   let res: string;
   try {
-    res = execFileSync("git", ["check-attr", "linguist-generated", "--stdin"], {
+    // -z makes both input and output NUL-delimited. Git paths may legally
+    // contain newlines, so a newline-delimited --stdin would split one path
+    // across two records and misclassify it. NUL can never appear in a path.
+    res = execFileSync("git", ["check-attr", "-z", "linguist-generated", "--stdin"], {
       cwd,
-      input: paths.join("\n"),
+      input: paths.join("\0"),
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
     });
   } catch {
     return out; // check-attr unavailable / no .gitattributes → skip this layer
   }
-  for (const line of res.split("\n")) {
-    // Format: "<path>: linguist-generated: set" (or ": unspecified" / ": unset").
-    const idx = line.lastIndexOf(": linguist-generated: ");
-    if (idx === -1) continue;
-    if (line.slice(idx + ": linguist-generated: ".length).trim() === "set") {
-      out.add(line.slice(0, idx));
-    }
+  // -z output is a flat NUL-separated stream of <path>\0<attr>\0<value> triples.
+  const fields = res.split("\0");
+  for (let i = 0; i + 2 < fields.length; i += 3) {
+    const path = fields[i];
+    // <value> is "set" / "unset" / "unspecified"; only "set" marks generated.
+    if (path !== undefined && fields[i + 2] === "set") out.add(path);
   }
   return out;
 }
