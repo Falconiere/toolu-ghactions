@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { reviewWithModel } from "@/llm/review.js";
-import type { ProviderResult } from "@/llm/review.js";
+import { reviewWithModel } from "@/llm/reviewWithModel.js";
+import type { ProviderResult } from "@/llm/reviewWithModel.js";
 import { mergeResults } from "@/llm/merge.js";
 import type { Envelope } from "@/prompt.js";
 

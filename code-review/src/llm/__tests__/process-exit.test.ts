@@ -16,7 +16,7 @@
 // keeps the event loop alive, masking the premature exit. The bug only manifests
 // in a bare Node process — exactly what the GitHub Action runs — so this test
 // bundles reviewWithModel with esbuild (no mocks of our code) and runs it under a
-// real `node` child. Real fetch seam, real review.ts, real process lifecycle.
+// real `node` child. Real fetch seam, real reviewWithModel.ts, real process lifecycle.
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -36,7 +36,7 @@ const FIXTURE = join(HERE, "fixtures", "success.json");
 // "RESULT:changes"; if the process exits early during the backoff it prints NOTHING.
 const HARNESS = `
 import { readFileSync } from "node:fs";
-import { reviewWithModel } from "@/llm/review.js";
+import { reviewWithModel } from "@/llm/reviewWithModel.js";
 
 void (async () => {
   const success = JSON.parse(readFileSync(process.argv[2], "utf8"));

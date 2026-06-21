@@ -1,4 +1,4 @@
-// llm/review.ts — the provider-agnostic review LLM call, via the Vercel AI SDK.
+// llm/reviewWithModel.ts — the provider-agnostic review LLM call, via the Vercel AI SDK.
 // One model, structured output (generateObject + the Zod Verdict schema), temperature 0.
 // The backend (OpenRouter or native DeepSeek) is chosen by resolveModel() in
 // providers.ts; this file owns only the provider-agnostic review loop (timeout/abort,

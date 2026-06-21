@@ -8,7 +8,7 @@
 // model call failed. Only when EVERY chunk errored does the merged verdict stay
 // "error". Results must arrive in chunk-index order (the caller preserves it) so
 // the merged output is deterministic regardless of completion order.
-import type { ProviderResult } from "./review.js";
+import type { ProviderResult } from "./reviewWithModel.js";
 
 /** Max entries kept when unioning per-chunk `top_must_fix` lists. */
 const TOP_MUST_FIX_CAP = 10;
