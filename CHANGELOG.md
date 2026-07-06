@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.1.1](https://github.com/Falconiere/toolu-ghactions/compare/v5.1.0...v5.1.1) (2026-07-06)
+
+
+### Bug Fixes
+
+* **code-review:** keep module context whole in chunks, honest partial verdicts ([7cd2fcf](https://github.com/Falconiere/toolu-ghactions/commit/7cd2fcf5aa67b9061129e3b0af55029738ec6323))
+
 ## [5.1.0](https://github.com/Falconiere/toolu-ghactions/compare/v5.0.0...v5.1.0) (2026-06-21)
 
 
