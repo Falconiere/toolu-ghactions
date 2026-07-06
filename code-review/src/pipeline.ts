@@ -214,6 +214,19 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
         timeoutMs: inputs.requestTimeoutMs,
         ...(deps.fetch ? { fetch: deps.fetch } : {}),
       }),
+    // Full post-change content for oversized-chunk context — read UNTRIMMED (the
+    // trimming gitOrNull above would alter file bytes).
+    readFile: (path) => {
+      try {
+        return execFileSync("git", ["show", `${reviewHead}:${path}`], {
+          cwd,
+          encoding: "utf8",
+          maxBuffer: 1024 * 1024 * 1024,
+        });
+      } catch {
+        return null;
+      }
+    },
   });
 
   // --- Validate findings against the diff's changed lines (anti-hallucination,

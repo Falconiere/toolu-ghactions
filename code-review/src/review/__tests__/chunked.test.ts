@@ -153,6 +153,147 @@ describe("reviewChunked", () => {
     expect(omega?.mech).toEqual(["omega/big.ts"]);
   });
 
+  it("keeps a #[path] module parent and child in ONE chunk (never split apart)", async () => {
+    // The real failure shape: parent declares the child via #[path]; packed into
+    // different chunks, the child's reviewer reported the parent deleted.
+    const dir = setupGitRepo();
+    repos.push(dir);
+    git(dir, "checkout", "-b", "feature", "--quiet");
+    const filler = Array.from({ length: 30 }, (_, n) => `pub fn f${n}() {}`).join("\n");
+    writeFile(
+      dir,
+      "tests/helpers/live_harness.rs",
+      `#[path = "live_harness_api.rs"]\nmod api;\npub struct LiveHarness;\n${filler}\n`,
+    );
+    writeFile(dir, "tests/helpers/live_harness_api.rs", `use super::LiveHarness;\n${filler}\n`);
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "c", "--quiet");
+    const diff = fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 0 });
+
+    const calls: Array<{ paths: string[]; mech: string[] }> = [];
+    await reviewChunked({
+      diff,
+      maxChunkLines: 40, // each file ~35 lines: ungrouped packing would split the pair.
+      maxChunks: 20,
+      mechanical: [],
+      buildEnvelope: recordingEnvelope(calls),
+      review: async () => APPROVED,
+    });
+    const parentCall = calls.find((c) => c.paths.includes("tests/helpers/live_harness.rs"));
+    expect(parentCall?.paths).toContain("tests/helpers/live_harness_api.rs");
+  });
+
+  it("attaches the FULL file content to an over-budget chunk (raw string never truncated)", async () => {
+    const dir = setupGitRepo();
+    repos.push(dir);
+    git(dir, "checkout", "-b", "feature", "--quiet");
+    const filler = (tag: string): string =>
+      Array.from({ length: 20 }, (_, n) => `pub fn ${tag}${n}() {}`).join("\n");
+    // A multi-line raw string whose closing delimiter sits far from its opener.
+    const content = `${filler("a")}\nconst BODY: &str = r#"\n${filler("b")}\n"#;\n${filler("c")}\n`;
+    writeFile(dir, "tests/live_e2e.rs", content);
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "c", "--quiet");
+    const diff = fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 0 });
+
+    const seen: DiffData[] = [];
+    await reviewChunked({
+      diff,
+      maxChunkLines: 10, // far below the file's diff size → oversized chunk rides alone.
+      maxChunks: 20,
+      mechanical: [],
+      buildEnvelope: (subDiff) => {
+        seen.push(subDiff);
+        return STUB_ENVELOPE;
+      },
+      review: async () => APPROVED,
+      readFile: (path) => (path === "tests/live_e2e.rs" ? content : null),
+    });
+    const attached = seen.find((d) => (d.context_files ?? []).length > 0);
+    const ctx = attached?.context_files?.find((f) => f.path === "tests/live_e2e.rs");
+    // The full content — including the raw string's CLOSING delimiter — is present.
+    expect(ctx?.content).toContain('r#"');
+    expect(ctx?.content).toContain('"#;');
+    expect(ctx?.content).toBe(content);
+  });
+
+  it("skips unreadable files (readFile → null) when attaching full-file context", async () => {
+    const diff = diffWithFiles([
+      { path: "alpha/big.ts", lines: 30 },
+      { path: "omega/big.ts", lines: 30 },
+    ]);
+    const seen: DiffData[] = [];
+    await reviewChunked({
+      diff,
+      maxChunkLines: 10, // both chunks oversized → both try to attach context.
+      maxChunks: 20,
+      mechanical: [],
+      buildEnvelope: (subDiff) => {
+        seen.push(subDiff);
+        return STUB_ENVELOPE;
+      },
+      review: async () => APPROVED,
+      readFile: (path) => (path === "alpha/big.ts" ? "alpha content" : null),
+    });
+    const alpha = seen.find((d) => d.changed_files.includes("alpha/big.ts"));
+    const omega = seen.find((d) => d.changed_files.includes("omega/big.ts"));
+    expect(alpha?.context_files).toEqual([{ path: "alpha/big.ts", content: "alpha content" }]);
+    // The unreadable file attaches nothing — and does not crash the chunk.
+    expect(omega?.context_files).toBeUndefined();
+  });
+
+  it("retries an abstained chunk once and merges the retry's success", async () => {
+    const diff = diffWithFiles([
+      { path: "alpha/big.ts", lines: 30 },
+      { path: "omega/big.ts", lines: 30 },
+    ]);
+    let omegaCalls = 0;
+    await reviewChunked({
+      diff,
+      maxChunkLines: 20,
+      maxChunks: 20,
+      mechanical: [],
+      buildEnvelope: (subDiff) => ({ ...STUB_ENVELOPE, user: subDiff.changed_files.join(",") }),
+      review: async (env) => {
+        if (!env.user.includes("omega")) return APPROVED;
+        omegaCalls++;
+        return omegaCalls === 1
+          ? { verdict: "error", findings: [], error: "schema mismatch" }
+          : APPROVED;
+      },
+    }).then((result) => {
+      expect(result.verdict).toBe("approved");
+      expect(result.error).toBeUndefined();
+    });
+    expect(omegaCalls).toBe(2);
+  });
+
+  it("marks the review inconclusive (error, partial) when a chunk fails even after retry", async () => {
+    const diff = diffWithFiles([
+      { path: "alpha/big.ts", lines: 30 },
+      { path: "omega/big.ts", lines: 30 },
+    ]);
+    let omegaCalls = 0;
+    const result = await reviewChunked({
+      diff,
+      maxChunkLines: 20,
+      maxChunks: 20,
+      mechanical: [],
+      buildEnvelope: (subDiff) => ({ ...STUB_ENVELOPE, user: subDiff.changed_files.join(",") }),
+      review: async (env) => {
+        if (!env.user.includes("omega")) return APPROVED;
+        omegaCalls++;
+        return { verdict: "error", findings: [], error: "schema mismatch" };
+      },
+    });
+    expect(omegaCalls).toBe(2); // first pass + exactly one retry
+    // All survivors approved, but a chunk went unreviewed — never a confident approval.
+    expect(result.verdict).toBe("error");
+    expect(result.partial).toBe(true);
+    expect(result.error).toContain("1/2 chunks failed");
+    expect(result.error).toContain("NOT reviewed");
+  });
+
   it("notes files dropped by the chunk cap in other_checks", async () => {
     const diff = diffWithFiles([
       { path: "a/big.ts", lines: 30 },

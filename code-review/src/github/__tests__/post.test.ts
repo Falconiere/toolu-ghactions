@@ -105,6 +105,134 @@ describe("postInlineReview", () => {
   });
 });
 
+/** A recording client WITH listFiles — exercises GitHub-side anchor validation.
+ *  `failFirst` makes createReview 422 once (the unanchorable-line failure mode). */
+function fakeValidatingClient(
+  files: { filename: string; patch?: string }[],
+  opts: { failFirst?: boolean } = {},
+): {
+  client: ReviewClient;
+  calls: { comments: ReviewComment[] }[];
+} {
+  const calls: { comments: ReviewComment[] }[] = [];
+  let failures = opts.failFirst ? 1 : 0;
+  const client: ReviewClient = {
+    rest: {
+      pulls: {
+        createReview: async (p) => {
+          if (failures > 0) {
+            failures--;
+            throw new Error("422 Unprocessable Entity: Line could not be resolved");
+          }
+          calls.push({ comments: p.comments });
+          return {
+            data: { html_url: "https://github.com/test-org/test-repo/pull/42#pullrequestreview-2" },
+          };
+        },
+        listFiles: async () => ({ data: files }),
+      },
+    },
+  };
+  return { client, calls };
+}
+
+// GitHub's patch for src/a.ts showing new-side lines 10..14 (context + additions).
+const PATCH_10_TO_14 = "@@ -8,3 +10,5 @@\n line-a\n+line-b\n+line-c\n+line-d\n line-e";
+
+describe("postInlineReview — anchor validation against GitHub's diff", () => {
+  it("degrades an unmappable line to a file-level comment; the rest still post", async () => {
+    const { client, calls } = fakeValidatingClient([
+      { filename: "src/a.ts", patch: PATCH_10_TO_14 },
+    ]);
+    const findings: Finding[] = [
+      { path: "src/a.ts", line: 10, severity: "high", text: "anchored fine" },
+      {
+        path: "src/a.ts",
+        line: 99, // NOT in GitHub's diff — would 422 the whole batch unvalidated.
+        severity: "blocker",
+        text: "line off the diff",
+        suggestion: "let x = 1;",
+      },
+    ];
+    const r = await postInlineReview(client, findings, REVIEW_TARGET);
+
+    expect(r.posted).toBe(true);
+    expect(r.count).toBe(2);
+    expect(r.degraded).toBe(1);
+    expect(calls).toHaveLength(1);
+    const [anchored, fileLevel] = calls[0]!.comments;
+    expect(anchored).toMatchObject({ path: "src/a.ts", line: 10, side: "RIGHT" });
+    expect(fileLevel).toMatchObject({ path: "src/a.ts", subject_type: "file" });
+    expect(fileLevel?.line).toBeUndefined();
+    // A suggestion cannot commit without a line anchor — stripped on degrade.
+    expect(fileLevel?.body).not.toContain("```suggestion");
+    expect(fileLevel?.body).toContain("line off the diff");
+  });
+
+  it("drops findings on paths GitHub's diff does not show; the rest still post", async () => {
+    const { client, calls } = fakeValidatingClient([
+      { filename: "src/a.ts", patch: PATCH_10_TO_14 },
+    ]);
+    const findings: Finding[] = [
+      { path: "src/a.ts", line: 11, severity: "high", text: "kept" },
+      { path: "ghost.ts", line: 1, severity: "high", text: "path not in the PR" },
+    ];
+    const r = await postInlineReview(client, findings, REVIEW_TARGET);
+    expect(r.posted).toBe(true);
+    expect(r.count).toBe(1);
+    expect(calls[0]?.comments.map((c) => c.path)).toEqual(["src/a.ts"]);
+  });
+
+  it("collapses a span whose start is off the diff to its valid end line", async () => {
+    const { client, calls } = fakeValidatingClient([
+      // Only lines 13..14 exist on GitHub's side.
+      { filename: "src/a.ts", patch: "@@ -12,1 +13,2 @@\n line-x\n+line-y" },
+    ]);
+    const findings: Finding[] = [
+      { path: "src/a.ts", line: 11, end_line: 14, severity: "high", text: "span" },
+    ];
+    const r = await postInlineReview(client, findings, REVIEW_TARGET);
+    expect(r.posted).toBe(true);
+    const only = calls[0]?.comments[0];
+    expect(only).toMatchObject({ path: "src/a.ts", line: 14 });
+    expect(only?.start_line).toBeUndefined();
+  });
+
+  it("collapses a span whose END is off the diff to its valid start line", async () => {
+    const { client, calls } = fakeValidatingClient([
+      // Only lines 10..11 exist on GitHub's side; the finding spans 10..14.
+      { filename: "src/a.ts", patch: "@@ -9,1 +10,2 @@\n line-x\n+line-y" },
+    ]);
+    const findings: Finding[] = [
+      { path: "src/a.ts", line: 10, end_line: 14, severity: "high", text: "span" },
+    ];
+    const r = await postInlineReview(client, findings, REVIEW_TARGET);
+    expect(r.posted).toBe(true);
+    const only = calls[0]?.comments[0];
+    expect(only).toMatchObject({ path: "src/a.ts", line: 10 });
+    expect(only?.start_line).toBeUndefined();
+  });
+
+  it("retries ONCE with everything file-level when the batch still 422s", async () => {
+    const { client, calls } = fakeValidatingClient(
+      [{ filename: "src/a.ts", patch: PATCH_10_TO_14 }],
+      { failFirst: true },
+    );
+    const findings: Finding[] = [
+      { path: "src/a.ts", line: 10, severity: "high", text: "first" },
+      { path: "src/a.ts", line: 12, severity: "low", text: "second" },
+    ];
+    const r = await postInlineReview(client, findings, REVIEW_TARGET);
+    expect(r.posted).toBe(true);
+    expect(r.degraded).toBe(2);
+    expect(calls).toHaveLength(1); // the throwing attempt recorded nothing
+    for (const c of calls[0]!.comments) {
+      expect(c.subject_type).toBe("file");
+      expect(c.line).toBeUndefined();
+    }
+  });
+});
+
 /** A recording labels client capturing add/remove/create operations. */
 function fakeLabelClient(opts: { failAdd?: boolean } = {}): {
   client: LabelClient;

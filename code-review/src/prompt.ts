@@ -211,9 +211,9 @@ export function buildPrompt(opts: PromptOptions): Envelope {
 
   if (renames.length > 0) {
     user +=
-      "\n\n## Renamed Files (the diff shows each as a delete + add because rename detection " +
-      "is off — treat these as MOVES, not a deletion plus a brand-new file; the target path " +
-      "exists and its imports resolve)\n" +
+      "\n\n## Renamed Files (each is a MOVE — the diff shows `rename from`/`rename to` " +
+      "plus only the real edits. NOT a deletion plus a brand-new file: the target path " +
+      "exists, its content carried over, and its imports resolve)\n" +
       renames.map((r) => `- ${r.from} → ${r.to}`).join("\n");
   }
 
@@ -246,6 +246,25 @@ export function buildPrompt(opts: PromptOptions): Envelope {
   }
 
   user += `\n\n## Diff\n\`\`\`diff\n${diffText}\n\`\`\``;
+
+  // Full post-change files for oversized single-file chunks (see review/chunked.ts):
+  // read-only context so a construct spanning past a hunk boundary — a multi-line
+  // raw string, a long function — is judged from the real file, not a truncated view.
+  const contextFiles = diff.context_files ?? [];
+  if (contextFiles.length > 0) {
+    user +=
+      "\n\n## Full file contents (read-only context)\n" +
+      "The complete post-change content of the large file(s) above. Use this to resolve " +
+      "anything that appears cut off in the diff (unclosed strings, brackets, or blocks " +
+      "continue here). Report findings ONLY against lines shown in the diff.";
+    for (const f of contextFiles) {
+      // The fence must be longer than any backtick run INSIDE the content, or the
+      // file would close its own fence and leak the rest as prompt text.
+      const longestRun = (f.content.match(/`+/g) ?? []).reduce((n, r) => Math.max(n, r.length), 0);
+      const fence = "`".repeat(Math.max(4, longestRun + 1));
+      user += `\n\n### ${f.path}\n${fence}\n${f.content}\n${fence}`;
+    }
+  }
 
   if (reviewInstruction !== "") {
     user +=
