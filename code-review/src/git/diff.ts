@@ -21,6 +21,15 @@ export interface RenamedFile {
   to: string;
 }
 
+/** Full post-change file content attached as read-only context (see review/chunked.ts:
+ *  when a single file's diff overflows the chunk budget, the model gets the whole file
+ *  so a construct spanning past a hunk boundary — e.g. a multi-line raw string — is
+ *  never judged from a truncated view). */
+export interface ContextFile {
+  path: string;
+  content: string;
+}
+
 /**
  * Result of fetchDiff. `error` is set ONLY on the MAX_FILES skip (a non-throwing
  * signal main reads to post a skip comment); a skip result also carries
@@ -39,6 +48,8 @@ export interface DiffData {
   base_sha: string;
   error?: string;
   max_files?: number;
+  /** Full-file read-only context for oversized chunks (set by review/chunked.ts only). */
+  context_files?: ContextFile[];
 }
 
 /**
@@ -175,15 +186,21 @@ function classifyFiles(
   cwd: string,
   excludeGlobs: readonly string[],
   generatedPaths: ReadonlySet<string>,
+  deletedPaths: ReadonlySet<string>,
+  mergeBase: string,
 ): { binary: string[]; text: string[]; dropped: DroppedFile[] } {
   const binary: string[] = [];
   const text: string[] = [];
   const dropped: DroppedFile[] = [];
 
+  // A deleted path has no blob at the review head — `git show HEAD:<path>` dies
+  // with `fatal: path … does not exist in 'HEAD'` (once per deleted file, straight
+  // into the job log). Read deleted paths from the merge-base, where they DO exist.
+  const refFor = (path: string): string => (deletedPaths.has(path) ? mergeBase : reviewHead);
   const readBlob = (path: string): string | null =>
-    gitOrNull(["show", `${reviewHead}:${path}`], cwd);
+    gitOrNull(["show", `${refFor(path)}:${path}`], cwd);
   const blobSize = (path: string): number => {
-    const out = gitOrNull(["cat-file", "-s", `${reviewHead}:${path}`], cwd);
+    const out = gitOrNull(["cat-file", "-s", `${refFor(path)}:${path}`], cwd);
     return out === null ? 0 : Number.parseInt(out.trim(), 10) || 0;
   };
 
@@ -282,8 +299,10 @@ export function fetchDiff(opts: DiffOptions): DiffData {
   // base-branch TIP (not the merge-base): project-rules are read at the tip of
   // the branch we merge into, so rules added after this PR branched still apply.
   const baseSha = gitOrNull(["rev-parse", remoteBase], cwd)?.trim() ?? "";
-  // --no-renames on EVERY diff below: default rename detection emits an "old =>
-  // new" arrow path that breaks the pathspec'd diff; off, a rename is delete + add.
+  // --no-renames on the CLASSIFICATION diffs (name-only/numstat/name-status):
+  // rename detection would emit an "old => new" arrow path that breaks path
+  // handling, while --no-renames lists BOTH real sides of a move. The final
+  // REVIEW diff below runs WITH -M so a move renders as a rename, not delete+add.
   const changedFiles =
     gitOrNull(["diff", "--no-renames", "--name-only", mergeBase, reviewHead], cwd) ?? "";
   const changedPaths = changedFiles.split("\n").filter((l) => l.trim() !== "");
@@ -295,6 +314,7 @@ export function fetchDiff(opts: DiffOptions): DiffData {
 
   const numstat =
     gitOrNull(["diff", "--no-renames", "--numstat", mergeBase, reviewHead], cwd) ?? "";
+  const deletedPaths = deletedInRange(mergeBase, reviewHead, cwd);
   // Exclusion (EXCLUDE_GLOBS → .gitattributes linguist-generated → static noise) runs
   // BEFORE the file-count gate, so a PR dominated by generated/vendored files is
   // reviewed on its few real files instead of being skipped wholesale.
@@ -305,6 +325,8 @@ export function fetchDiff(opts: DiffOptions): DiffData {
     cwd,
     excludeGlobs,
     generatedPaths,
+    deletedPaths,
+    mergeBase,
   );
 
   // The file-count limit gates the POST-EXCLUSION reviewed set (opt-in: >0). Non-throwing
@@ -323,8 +345,13 @@ export function fetchDiff(opts: DiffOptions): DiffData {
   let diff = "";
   let files: ShapedFile[] = [];
   if (text.length > 0) {
-    const rawDiff =
-      gitOrNull(["diff", "--no-renames", mergeBase, reviewHead, "--", ...text], cwd) ?? "";
+    // -M (rename detection) on the REVIEW diff: a moved file renders as a rename
+    // (`rename from`/`rename to` + only its real edits), not a full delete + add.
+    // Both sides of a move are in `text` (classification ran --no-renames), so the
+    // pathspec covers the pair and detection works. This also keeps our anchorable
+    // lines aligned with GitHub's own rename-aware PR diff — a finding on a moved
+    // file's unchanged line would otherwise 422 at inline-review time.
+    const rawDiff = gitOrNull(["diff", "-M", mergeBase, reviewHead, "--", ...text], cwd) ?? "";
     const shaped = shapeDiff(rawDiff);
     diff = stripTrailingNewlines(shaped.diff);
     files = shaped.files;
@@ -386,8 +413,27 @@ function gitattributesGenerated(paths: readonly string[], cwd: string): Set<stri
 }
 
 /**
- * Renames in the diff range, detected WITH rename detection (`-M`) — separate from the
- * `--no-renames` review diff. Filtered to renames whose target survives exclusion, so the
+ * Paths DELETED in the diff range (status D under --no-renames, so a move's old
+ * side counts too). These have no blob at the review head — blob reads for them
+ * must target the merge-base instead.
+ */
+function deletedInRange(mergeBase: string, reviewHead: string, cwd: string): Set<string> {
+  const raw =
+    gitOrNull(["diff", "--no-renames", "--name-status", mergeBase, reviewHead], cwd) ?? "";
+  const out = new Set<string>();
+  for (const line of raw.split("\n")) {
+    if (!line.startsWith("D")) continue;
+    const tab = line.indexOf("\t");
+    if (tab === -1) continue;
+    const path = line.slice(tab + 1);
+    if (path !== "") out.add(path);
+  }
+  return out;
+}
+
+/**
+ * Renames in the diff range, detected WITH rename detection (`-M`), matching the
+ * -M review diff. Filtered to renames whose target survives exclusion, so the
  * prompt manifest never advertises a move into a generated/excluded path.
  */
 function detectRenames(

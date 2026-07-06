@@ -191,6 +191,36 @@ describe("buildPrompt — envelope and inputs", () => {
     const env = buildPrompt({ diff: sampleDiff(), checklistPath: CHECKLIST_PATH });
     expect(env.user).not.toContain("Renamed Files");
   });
+
+  it("renders full-file read-only context (oversized chunks) after the diff", () => {
+    const env = buildPrompt({
+      diff: sampleDiff({
+        context_files: [{ path: "tests/live_e2e.rs", content: 'let s = r#"\nbody\n"#;' }],
+      }),
+      checklistPath: CHECKLIST_PATH,
+    });
+    expect(env.user).toContain("## Full file contents (read-only context)");
+    expect(env.user).toContain("### tests/live_e2e.rs");
+    expect(env.user).toContain('"#;'); // the construct's CLOSING delimiter is visible
+    expect(env.user.indexOf("## Full file contents")).toBeGreaterThan(env.user.indexOf("## Diff"));
+  });
+
+  it("omits the full-file context section when none is attached", () => {
+    const env = buildPrompt({ diff: sampleDiff(), checklistPath: CHECKLIST_PATH });
+    expect(env.user).not.toContain("Full file contents");
+  });
+
+  it("outgrows backtick runs inside attached content so the fence cannot be closed early", () => {
+    // Content carrying a 5-backtick run: a fixed 4-backtick fence would end at the
+    // run and leak the remainder of the file as prompt text.
+    const content = "docs:\n`````\ninner fence\n`````\ntail";
+    const env = buildPrompt({
+      diff: sampleDiff({ context_files: [{ path: "README.md", content }] }),
+      checklistPath: CHECKLIST_PATH,
+    });
+    const fenced = env.user.slice(env.user.indexOf("### README.md"));
+    expect(fenced).toContain(`\`\`\`\`\`\`\n${content}\n\`\`\`\`\`\``);
+  });
 });
 
 describe("buildPrompt — deterministic findings triage", () => {

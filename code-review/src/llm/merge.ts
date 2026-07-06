@@ -16,9 +16,12 @@ const TOP_MUST_FIX_CAP = 10;
 /**
  * Merge per-chunk {@link ProviderResult}s into one. Findings concatenate in input
  * order (files never repeat across chunks → no dedup). Verdict: "changes" if any
- * non-error chunk requests changes; "approved" iff all non-error chunks approve;
- * "error" only if every chunk errored. On partial failure the surviving verdict is
- * kept and `error` records "M/N chunks failed". An empty input is a defensive
+ * non-error chunk requests changes; "approved" ONLY when every chunk approved —
+ * a failed chunk means unreviewed files, and an "approved" over unreviewed files
+ * is a confident verdict the review cannot honestly make, so a would-be approval
+ * with failed chunks degrades to "error" (review incomplete; never auto-merges).
+ * "changes" findings from surviving chunks are always kept, with `error`
+ * recording "M/N chunks failed" and `partial` set. An empty input is a defensive
  * "error" result (the pipeline's fast path means it is never reached in practice).
  */
 export function mergeResults(results: ProviderResult[]): ProviderResult {
@@ -37,7 +40,9 @@ export function mergeResults(results: ProviderResult[]): ProviderResult {
       ? "error"
       : succeeded.some((r) => r.verdict === "changes")
         ? "changes"
-        : "approved";
+        : errored.length > 0
+          ? "error" // all survivors approved, but files went unreviewed — inconclusive.
+          : "approved";
 
   const merged: ProviderResult = {
     verdict,
@@ -47,10 +52,12 @@ export function mergeResults(results: ProviderResult[]): ProviderResult {
     top_must_fix: capUnion(results.flatMap((r) => r.top_must_fix ?? [])),
   };
 
-  if (partials.length > 0) merged.partial = true;
+  if (partials.length > 0 || errored.length > 0) merged.partial = true;
   if (errored.length > 0) {
     const first = errored[0]!;
-    merged.error = `${errored.length}/${results.length} chunks failed: ${first.error ?? "unknown error"}`;
+    merged.error =
+      `${errored.length}/${results.length} chunks failed (after a retry) — the files in ` +
+      `those chunks were NOT reviewed: ${first.error ?? "unknown error"}`;
     if (first.finishReason !== undefined) merged.finishReason = first.finishReason;
   } else if (partials.length > 0) {
     merged.error =

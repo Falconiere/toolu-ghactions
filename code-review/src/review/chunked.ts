@@ -6,10 +6,11 @@
 // PR no longer overwhelms a single structured-output call and abstains. Mechanical
 // (SAST) findings are partitioned to the chunk holding their file; orphans ride
 // with chunk[0]. Files dropped by the MAX_CHUNKS cap are noted in the comment.
-import { splitDiffByFile, packChunks } from "@/git/chunk.js";
+import { splitDiffByFile, packGroups } from "@/git/chunk.js";
 import type { FileSegment } from "@/git/chunk.js";
+import { groupRelatedSegments } from "@/git/relate.js";
 import { countLines } from "@/git/diff.js";
-import type { DiffData } from "@/git/diff.js";
+import type { ContextFile, DiffData } from "@/git/diff.js";
 import { mapWithConcurrency } from "@/concurrency.js";
 import { mergeResults } from "@/llm/merge.js";
 import type { ProviderResult } from "@/llm/reviewWithModel.js";
@@ -18,6 +19,11 @@ import type { MechanicalFinding } from "@/mechanical/sarif.js";
 
 /** Max model calls in flight at once — an OpenRouter rate-limit guard. */
 export const CHUNK_CONCURRENCY = 4;
+
+/** Full-file context attach ceiling (lines). A file bigger than this is skipped —
+ *  an oversized prompt stalls the provider past its deadline, which is worse than
+ *  reviewing from the diff alone. */
+export const MAX_CONTEXT_FILE_LINES = 5000;
 
 /** Inputs for {@link reviewChunked}: the diff, the chunk budget, and test seams. */
 export interface ChunkedReviewOptions {
@@ -32,13 +38,20 @@ export interface ChunkedReviewOptions {
   buildEnvelope: (subDiff: DiffData, mechanical: MechanicalFinding[]) => Envelope;
   /** Run one model review of a built envelope (never throws — it abstains). */
   review: (envelope: Envelope) => Promise<ProviderResult>;
+  /** Read a file's full post-change content (git show <head>:<path>), or null when
+   *  unreadable (deleted/binary). Powers the oversized-chunk full-file context. */
+  readFile?: (path: string) => string | null;
 }
 
 /**
  * Review the diff, chunking it when it exceeds the per-chunk budget. Fast path:
  * a within-budget diff (or chunking disabled) is one call on the whole diff. Else
- * split into whole-file chunks, review each in its own call, and merge into one
- * {@link ProviderResult} so everything downstream is unchanged.
+ * split into whole-file chunks — grouping module-coupled files (parent + `#[path]`
+ * child) into the SAME chunk — review each in its own call, retry any chunk whose
+ * call abstained, and merge into one {@link ProviderResult} so everything
+ * downstream is unchanged. A chunk whose single file overflows the budget carries
+ * the file's FULL content as read-only context, so the model never judges a
+ * construct (multi-line raw string, long function) from a truncated view.
  */
 export async function reviewChunked(opts: ChunkedReviewOptions): Promise<ProviderResult> {
   const { diff, maxChunkLines, maxChunks, mechanical, buildEnvelope, review } = opts;
@@ -48,14 +61,37 @@ export async function reviewChunked(opts: ChunkedReviewOptions): Promise<Provide
     return review(buildEnvelope(diff, mechanical));
   }
 
-  const { chunks, dropped } = packChunks(splitDiffByFile(diff.diff), maxChunkLines, maxChunks);
+  const groups = groupRelatedSegments(splitDiffByFile(diff.diff));
+  const { chunks, dropped } = packGroups(groups, maxChunkLines, maxChunks);
   // Degenerate (e.g. nothing parsed) — fall back to the whole diff rather than skip.
   if (chunks.length === 0) return review(buildEnvelope(diff, mechanical));
 
   const partitions = partitionMechanical(mechanical, chunks);
-  const results = await mapWithConcurrency(chunks, CHUNK_CONCURRENCY, (chunk, i) =>
-    review(buildEnvelope(chunkDiffData(diff, chunk), partitions[i] ?? [])),
+  const envelopeFor = (i: number): Envelope => {
+    const chunk = chunks[i] ?? [];
+    return buildEnvelope(
+      chunkDiffData(diff, chunk, maxChunkLines, opts.readFile),
+      partitions[i] ?? [],
+    );
+  };
+  const results = await mapWithConcurrency(chunks, CHUNK_CONCURRENCY, (_chunk, i) =>
+    review(envelopeFor(i)),
   );
+
+  // Retry each abstained chunk ONCE with a fresh call: the dominant abstain cause
+  // (structured output not matching the schema) is provider-side nondeterminism, so
+  // a clean retry usually lands. Chunks that fail again stay "error" and merge marks
+  // the review partial — never a confident verdict over unreviewed files.
+  const failed = results.flatMap((r, i) => (r.verdict === "error" ? [i] : []));
+  if (failed.length > 0) {
+    const retried = await mapWithConcurrency(failed, CHUNK_CONCURRENCY, (i) =>
+      review(envelopeFor(i)),
+    );
+    retried.forEach((r, k) => {
+      const i = failed[k];
+      if (i !== undefined && r.verdict !== "error") results[i] = r;
+    });
+  }
 
   const merged = mergeResults(results);
   if (dropped.length > 0) {
@@ -65,16 +101,52 @@ export async function reviewChunked(opts: ChunkedReviewOptions): Promise<Provide
 }
 
 /** A sub-DiffData scoped to one chunk: its files + diff, but the GLOBAL file count. */
-function chunkDiffData(diff: DiffData, chunk: FileSegment[]): DiffData {
-  return {
+function chunkDiffData(
+  diff: DiffData,
+  chunk: FileSegment[],
+  maxChunkLines: number,
+  readFile: ((path: string) => string | null) | undefined,
+): DiffData {
+  const totalLines = chunk.reduce((n, s) => n + s.lines, 0);
+  const sub: DiffData = {
     ...diff,
     diff: chunk.map((s) => s.diff).join(""),
     changed_files: chunk.map((s) => s.path),
-    total_lines: chunk.reduce((n, s) => n + s.lines, 0),
+    total_lines: totalLines,
     // total_files stays global so the model knows it is seeing a slice; binary_files,
     // dropped_files, base_sha, and files are inherited (buildPrompt ignores files).
     truncated: false,
   };
+  // Oversized chunk (a group too big to share a chunk rode alone): the diff alone
+  // may cut through a construct, so attach each file's full post-change content.
+  if (totalLines > maxChunkLines && readFile !== undefined) {
+    const context = contextFilesFor(chunk, readFile);
+    if (context.length > 0) sub.context_files = context;
+  }
+  return sub;
+}
+
+/** Full post-change content for a chunk's files: unreadable (deleted/binary) or
+ *  over-ceiling files are skipped with a log line, never attached truncated. */
+function contextFilesFor(
+  chunk: FileSegment[],
+  readFile: (path: string) => string | null,
+): ContextFile[] {
+  const out: ContextFile[] = [];
+  for (const seg of chunk) {
+    if (seg.path === "") continue;
+    const content = readFile(seg.path);
+    if (content === null) continue;
+    if (countLines(content) > MAX_CONTEXT_FILE_LINES) {
+      process.stderr.write(
+        `  Note: ${seg.path} exceeds ${MAX_CONTEXT_FILE_LINES} lines; ` +
+          "reviewing from the diff without full-file context\n",
+      );
+      continue;
+    }
+    out.push({ path: seg.path, content });
+  }
+  return out;
 }
 
 /** Map each mechanical finding to its file's chunk; orphans (no chunk) go to chunk[0]. */

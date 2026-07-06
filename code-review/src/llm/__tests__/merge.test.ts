@@ -74,6 +74,18 @@ describe("mergeResults", () => {
     expect(merged.error).toContain("1/2 chunks failed");
   });
 
+  it("never emits a confident approval over unreviewed files: approved + error → error", async () => {
+    const good = await resultFrom("approved");
+    const bad = await resultFrom("empty-content"); // verdict:"error"
+
+    const merged = mergeResults([good, bad]);
+    // The surviving chunks approved, but a chunk's files went unreviewed — the merged
+    // verdict must be inconclusive (error → "review incomplete", request-changes label).
+    expect(merged.verdict).toBe("error");
+    expect(merged.partial).toBe(true);
+    expect(merged.error).toContain("1/2 chunks failed");
+  });
+
   it("stays error only when every chunk errored", async () => {
     const merged = mergeResults([
       await resultFrom("empty-content"),

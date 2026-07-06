@@ -56,20 +56,47 @@ export function packChunks(
   maxLines: number,
   maxChunks: number,
 ): PackResult {
-  const sorted = [...segments].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return packGroups(
+    segments.map((s) => [s]),
+    maxLines,
+    maxChunks,
+  );
+}
+
+/**
+ * Pack ATOMIC groups of segments (see git/relate.ts groupRelatedSegments) into
+ * chunks of ≤ maxLines primed lines. A group never splits across chunks — module
+ * parent + child always share one — so a group over the budget rides alone as one
+ * oversized chunk. Groups are packed in order of their first segment's path
+ * (groupRelatedSegments emits them path-sorted); singleton groups reproduce
+ * {@link packChunks} exactly.
+ */
+export function packGroups(
+  groups: FileSegment[][],
+  maxLines: number,
+  maxChunks: number,
+): PackResult {
+  const ordered = [...groups]
+    .filter((g) => g.length > 0)
+    .sort((a, b) => {
+      const pa = a[0]?.path ?? "";
+      const pb = b[0]?.path ?? "";
+      return pa < pb ? -1 : pa > pb ? 1 : 0;
+    });
   const chunks: FileSegment[][] = [];
   let current: FileSegment[] = [];
   let currentLines = 0;
-  for (const seg of sorted) {
-    // Start a new chunk when adding this file would exceed the budget and the
-    // current chunk already holds something (a single over-budget file rides alone).
-    if (current.length > 0 && currentLines + seg.lines > maxLines) {
+  for (const group of ordered) {
+    const groupLines = group.reduce((n, s) => n + s.lines, 0);
+    // Start a new chunk when adding this group would exceed the budget and the
+    // current chunk already holds something (a single over-budget group rides alone).
+    if (current.length > 0 && currentLines + groupLines > maxLines) {
       chunks.push(current);
       current = [];
       currentLines = 0;
     }
-    current.push(seg);
-    currentLines += seg.lines;
+    current.push(...group);
+    currentLines += groupLines;
   }
   if (current.length > 0) chunks.push(current);
 
