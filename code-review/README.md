@@ -165,9 +165,11 @@ The action runs a shape → review → post pipeline:
 **1 — Shape the diff.** Resolves the merge-base (deepening a shallow checkout if
 needed), strips noise so the model reviews only human-authored changes, drops
 binaries, and line-primes every diff line with its real source line number so
-findings anchor to actual lines. A renamed file is surfaced to the model as a
-**move** (a `## Renamed Files` manifest), so a `git mv` isn't misread as a
-deletion plus a brand-new file.
+findings anchor to actual lines. The diff runs with rename detection (`-M`), so
+a `git mv` appears as a **rename** (`rename from`/`rename to` plus only its real
+edits, backed by a `## Renamed Files` manifest) instead of being misread as a
+deletion plus a brand-new file. Deleted files are classified from the base
+commit, where their content still exists.
 
 The noise filter (each dropped file is reported in the comment) covers:
 - **Lockfiles** across ecosystems — `*.lock`, `*-lock.json`, `go.sum`,
@@ -236,7 +238,7 @@ the cap are dropped with a notice. Two guarantees worth calling out:
 
 ### Inline comments & suggestions
 
-With `INLINE_COMMENTS: true` (default), findings are posted as inline review comments anchored to the exact file and line. When the model has a concrete, high-confidence fix it attaches a ` ```suggestion ` block you can commit straight from the PR. Set `INLINE_COMMENTS: false` for a summary-comment-only review.
+With `INLINE_COMMENTS: true` (default), findings are posted as inline review comments anchored to the exact file and line. When the model has a concrete, high-confidence fix it attaches a ` ```suggestion ` block you can commit straight from the PR. Anchors are validated against GitHub's own view of the PR diff before posting: a finding GitHub cannot anchor degrades to a **file-level** comment instead of failing the whole batch (the summary comment always carries every finding regardless). Set `INLINE_COMMENTS: false` for a summary-comment-only review.
 
 The verdict comment is compatible with [`parse-verdict.sh`](https://github.com/Falconiere/toolu/blob/main/plugins/pr-babysit/scripts/parse-verdict.sh) and the [`pr-babysit`](https://github.com/Falconiere/toolu/tree/main/plugins/pr-babysit) automation loop, so toolu users can drop this into CI and their existing babysit workflow consumes the verdict without changes.
 
@@ -472,7 +474,7 @@ Thread reads/writes are best-effort: a GitHub API hiccup degrades to the previou
 | `RULES_MAX_BYTES` | no | `32768` | Byte cap on the gathered rules. Files are added in priority order until the cap; whole files past it are dropped with a truncation notice. |
 | `MAX_FILES` | no | `0` (unlimited) | Maximum changed files (counted **after** generated/vendored/excluded files are dropped) before the action skips. `0` reviews any number of files — the only ceiling is your OpenRouter billing balance. Set a positive value to opt into a hard skip on huge PRs. |
 | `MAX_DIFF_LINES` | no | `0` (unlimited) | Maximum diff lines before truncation, applied **before** chunking. `0` reviews the whole diff. Set a positive value to keep the first N lines (lexicographic by file path) and append a truncation notice. |
-| `MAX_CHUNK_LINES` | no | `1500` | Per-chunk diff-line budget. When the diff exceeds this, it is split into chunks of **whole files** (≤ this many primed lines each), each reviewed in its own model call and the results merged — so a large PR no longer overwhelms a single call and abstains. `0` disables chunking (always one call). |
+| `MAX_CHUNK_LINES` | no | `1500` | Per-chunk diff-line budget. When the diff exceeds this, it is split into chunks of **whole files** (≤ this many primed lines each), each reviewed in its own model call and the results merged — so a large PR no longer overwhelms a single call and abstains. Module-coupled files (e.g. a Rust `#[path]`/`mod` parent and its child) always share a chunk, and a single file over the budget rides alone **with its full post-change content attached** as read-only context, so the model never judges a construct from a truncated view. A chunk whose call fails is retried once; if it still fails the merged verdict is marked **incomplete** (never a confident approval over unreviewed files). `0` disables chunking (always one call). |
 | `MAX_CHUNKS` | no | `20` | Maximum chunks (= model calls) per review, bounding cost and wall-clock on very large PRs. Files beyond the limit are not reviewed and the comment says so. `0` = unlimited. |
 | `REQUEST_TIMEOUT_MS` | no | `180000` (3 min) | Per-attempt model deadline in milliseconds. Each chunk gets up to this long per attempt (retried a few times) before it is aborted and the chunk abstains (`This operation was aborted`). Raise it for slow/large models, lower it to fail faster. A non-positive value falls back to the default. |
 | `TOKEN` | no | `${{ github.token }}` | GitHub token for posting and editing comments. |
