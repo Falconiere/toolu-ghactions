@@ -1,5 +1,21 @@
 # Changelog
 
+## [6.0.0](https://github.com/Falconiere/toolu-ghactions/compare/v5.1.1...v6.0.0) (2026-07-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **code-review:** cut verdict-comment verbosity, add VERBOSITY input
+
+### Features
+
+* **code-review:** cut verdict-comment verbosity, add VERBOSITY input ([38734ff](https://github.com/Falconiere/toolu-ghactions/commit/38734ff489b416e643952d4f6288b49980001ecc))
+
+
+### Bug Fixes
+
+* **code-review:** address PR [#70](https://github.com/Falconiere/toolu-ghactions/issues/70) review feedback ([6d12306](https://github.com/Falconiere/toolu-ghactions/commit/6d12306a5ad43fe3ff8cb0284031b039afb79a4c))
+
 ## [5.1.1](https://github.com/Falconiere/toolu-ghactions/compare/v5.1.0...v5.1.1) (2026-07-06)
 
 
