@@ -52,7 +52,7 @@ export interface VerdictOptions {
    *  "full" restores the multi-line checklist. Only the checklist differs — the dedup /
    *  empty-section fixes apply in both modes. */
   verbosity?: "compact" | "full";
-  /** Number of changed files reviewed — shown in the compact checklist line (default 0). */
+  /** File count of the reviewed diff — shown in the compact checklist line (default 0). */
   changedFiles?: number;
 }
 

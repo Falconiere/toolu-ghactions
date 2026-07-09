@@ -168,7 +168,7 @@ describe("formatVerdict — verbosity (compact vs full) + dedup", () => {
   it("compact (default): single-line checklist, keeps the parse-verdict contract", () => {
     const { body } = formatVerdict(base, { changedFiles: 3, historyMarker: MARKER });
     // Single compact checklist line replaces the 5-line static list.
-    expect(body).toContain("- [x] Reviewed 3 changed files — verdict set");
+    expect(body).toContain("- [x] Reviewed 3-file diff — verdict set");
     expect(body).not.toContain("- [x] Read repository context and PR diff");
     // parse-verdict.sh contract: ≥1 checked box, the ### Code Review heading, ### Findings block.
     expect(body).toMatch(/^[ \t]*- \[x\] /m);
@@ -178,16 +178,16 @@ describe("formatVerdict — verbosity (compact vs full) + dedup", () => {
     expect(lastLine(body)).toBe(MARKER);
   });
 
-  it("compact singularizes the file count", () => {
+  it("compact names the diff size regardless of count", () => {
     const { body } = formatVerdict(base, { changedFiles: 1 });
-    expect(body).toContain("- [x] Reviewed 1 changed file — verdict set");
+    expect(body).toContain("- [x] Reviewed 1-file diff — verdict set");
   });
 
   it("full: restores the multi-line static checklist", () => {
     const { body } = formatVerdict(base, { verbosity: "full", changedFiles: 3 });
     expect(body).toContain("- [x] Read repository context and PR diff");
     expect(body).toContain("- [x] Set verdict label");
-    expect(body).not.toContain("Reviewed 3 changed files");
+    expect(body).not.toContain("Reviewed 3-file diff");
   });
 
   it("omits empty Review Plan / Other checks / Top-N sections (no filler)", () => {
@@ -220,8 +220,11 @@ describe("formatVerdict — verbosity (compact vs full) + dedup", () => {
     ];
     const snapshot = [...findings];
     const { body } = formatVerdict({ ...base, findings }, {});
-    // Blocker renders before the nit even though it was second in the input.
-    expect(body.indexOf("src/blk.ts")).toBeLessThan(body.indexOf("src/nit.ts"));
+    // Blocker renders before the nit even though it was second in the input. Assert
+    // on the extracted finding-line path sequence, not indexOf over the whole body,
+    // so surrounding text (severity summary, headings) can't mask a bad sort.
+    const orderedPaths = [...body.matchAll(/^`(src\/[^`:]+):\d+`/gm)].map((m) => m[1]);
+    expect(orderedPaths).toEqual(["src/blk.ts", "src/nit.ts"]);
     // The caller's array is untouched (reconcile/inline posting reuse it downstream).
     expect(findings).toEqual(snapshot);
   });

@@ -39036,7 +39036,7 @@ ${body.marker}
 function buildChecklist(body) {
   if (body.compact) {
     const n = body.changedFiles;
-    return `- [x] Reviewed ${n} changed file${n === 1 ? "" : "s"} \u2014 verdict set
+    return `- [x] Reviewed ${n}-file diff \u2014 verdict set
 
 `;
   }
@@ -39184,7 +39184,7 @@ function dedupKey(f) {
 var RECAP_LIST_CAP = 8;
 function renderRecapSection(diff, opts) {
   if (opts.hasPrior === false) return "";
-  const compact = opts.compact ?? false;
+  const compact = opts.compact === true;
   const lines = [];
   lines.push("### Changes since last review");
   lines.push("");
