@@ -43,7 +43,7 @@ export interface ReviewBody {
   topMustFix: string[];
   /** All findings (after validation). */
   findings: Finding[];
-  /** Number of changed files reviewed — shown in the compact checklist line. */
+  /** File count of the reviewed diff — shown in the compact checklist line. */
   changedFiles: number;
   /**
    * Compact mode: collapse the multi-line static checklist to a single checked line.
@@ -113,8 +113,11 @@ export function renderBody(body: ReviewBody, findingsSection: string): string {
  */
 function buildChecklist(body: ReviewBody): string {
   if (body.compact) {
+    // "N-file diff", not "N changed files reviewed": on a scoped review
+    // (full_review=false) the model is focus-directed but still receives the whole
+    // diff, so the diff size is the only count this line can honestly claim.
     const n = body.changedFiles;
-    return `- [x] Reviewed ${n} changed file${n === 1 ? "" : "s"} — verdict set\n\n`;
+    return `- [x] Reviewed ${n}-file diff — verdict set\n\n`;
   }
   return (
     "- [x] Read repository context and PR diff\n" +
@@ -199,11 +202,10 @@ export function buildMechanicalSection(
 
 /**
  * The Top-N must-fix section body — the model's EXPLICIT `top_must_fix` only, deduped
- * and capped at 3 (parity with coordinate-findings.sh `unique | .[0:3]`; insertion
- * order is kept since the model lists these worst-first, unlike jq's alphabetical
- * `unique`). Returns "" when the model gave no explicit list — the caller then omits
- * the heading. It is NEVER auto-generated from findings: that produced a verbatim
- * duplicate of the (now severity-sorted) Findings list.
+ * and capped at 3. Insertion order is kept: the model lists these worst-first, so
+ * priority must survive the dedupe. Returns "" when the model gave no explicit list —
+ * the caller then omits the heading. It is NEVER auto-generated from findings: that
+ * produced a verbatim duplicate of the (now severity-sorted) Findings list.
  */
 function buildTopMustFixSection(topMustFix: string[]): string {
   const capped = dedupeCap(topMustFix, TOP_MUST_FIX_MAX);

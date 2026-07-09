@@ -58,7 +58,7 @@ export function renderRecap(diff: DiffResult, opts: RecapOptions): string {
 export function renderRecapSection(diff: DiffResult, opts: RecapOptions): string {
   if (opts.hasPrior === false) return "";
 
-  const compact = opts.compact ?? false;
+  const compact = opts.compact === true;
   const lines: string[] = [];
   lines.push("### Changes since last review");
   lines.push("");

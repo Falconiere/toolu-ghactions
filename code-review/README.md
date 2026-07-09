@@ -251,7 +251,7 @@ The default **compact** shape — a single checklist line, findings sorted worst
 
 ### Code Review — `feat/add-login`
 
-- [x] Reviewed 4 changed files — verdict set
+- [x] Reviewed 4-file diff — verdict set
 
 **Verdict:** ✅ Approved   🔵 2 low
 
