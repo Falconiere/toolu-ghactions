@@ -69,6 +69,35 @@ describe("renderRecap", () => {
     expect(md).not.toContain("✅ Resolved");
   });
 
+  it("compact mode renders `path:line` refs only, dropping the — text tail", () => {
+    // Same real diff as the full-mode test: A still open, B new, C resolved.
+    const diff = diffState({
+      prior,
+      current_findings: [
+        { path: "src/a.ts", line: 10, text: "finding A", category: "correctness" },
+        { path: "src/b.ts", line: 7, text: "finding B", category: "correctness" },
+      ],
+      scope: { in_scope_paths: ["src/a.ts", "src/b.ts", "src/c.ts"], full_review: true },
+      head_sha: "deadbeefcafe",
+      verdict: "changes",
+    });
+
+    const md = renderRecap(diff, {
+      history: diff.next_state.history,
+      fullReview: true,
+      compact: true,
+    });
+
+    // Counts + refs still present, but the finding text is dropped from every bucket.
+    expect(md).toContain("⚠️ New (1)");
+    expect(md).toContain("- `src/b.ts:7`");
+    expect(md).toContain("- `src/a.ts:10`");
+    expect(md).toContain("- `src/c.ts:3`");
+    expect(md).not.toContain("— finding B");
+    expect(md).not.toContain("finding A");
+    expect(md).not.toContain("finding C");
+  });
+
   it("renders nothing for history when there are no passes", () => {
     expect(renderHistorySection([])).toBe("");
   });

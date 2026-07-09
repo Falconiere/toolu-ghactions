@@ -14,6 +14,18 @@ import type { ProviderResult } from "./reviewWithModel.js";
 const TOP_MUST_FIX_CAP = 10;
 
 /**
+ * Char caps on the MERGED narrative fields. Per-chunk each field is already soft-capped
+ * by the schema (review_plan ≤ 280, other_checks ≤ 600), but a chunked review joins one
+ * per chunk with blank-line separators, so a 20-chunk PR concatenates 20 plans / 20
+ * check blurbs uncapped — the exact verbosity this merge is meant to bound. The joined
+ * result is clipped here so the comment carries a bounded narrative regardless of chunk
+ * count. review_plan is the tighter cap (it is orientation, not findings); other_checks
+ * gets more room for genuine cross-chunk observations.
+ */
+const MERGED_REVIEW_PLAN_CAP = 280;
+const MERGED_OTHER_CHECKS_CAP = 1000;
+
+/**
  * Merge per-chunk {@link ProviderResult}s into one. Findings concatenate in input
  * order (files never repeat across chunks → no dedup). Verdict: "changes" if any
  * non-error chunk requests changes; "approved" ONLY when every chunk approved —
@@ -47,8 +59,11 @@ export function mergeResults(results: ProviderResult[]): ProviderResult {
   const merged: ProviderResult = {
     verdict,
     findings: results.flatMap((r) => r.findings),
-    review_plan: joinNonEmpty(results.map((r) => r.review_plan)),
-    other_checks: joinNonEmpty(results.map((r) => r.other_checks)),
+    review_plan: capText(joinNonEmpty(results.map((r) => r.review_plan)), MERGED_REVIEW_PLAN_CAP),
+    other_checks: capText(
+      joinNonEmpty(results.map((r) => r.other_checks)),
+      MERGED_OTHER_CHECKS_CAP,
+    ),
     top_must_fix: capUnion(results.flatMap((r) => r.top_must_fix ?? [])),
   };
 
@@ -72,6 +87,15 @@ export function mergeResults(results: ProviderResult[]): ProviderResult {
 /** Join the defined, non-empty strings with a blank-line separator. */
 function joinNonEmpty(parts: Array<string | undefined>): string {
   return parts.filter((p): p is string => p !== undefined && p !== "").join("\n\n");
+}
+
+/**
+ * Clip `s` to at most `max` chars, appending a `…` marker when it was truncated so the
+ * reader (and any downstream parser) can tell the narrative was cut. The first `max`
+ * chars are preserved verbatim; the marker is extra, not counted against the budget.
+ */
+function capText(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max)}…` : s;
 }
 
 /** Dedupe (order-preserving) and cap a flattened list of must-fix strings. */

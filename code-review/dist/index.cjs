@@ -31306,6 +31306,13 @@ function validateTimeout(value, source) {
 function readMinConfidence() {
   return core2.getInput("MIN_CONFIDENCE").trim().toLowerCase() === "medium" ? "medium" : "high";
 }
+function readVerbosity() {
+  const raw = core2.getInput("VERBOSITY").trim().toLowerCase();
+  if (raw === "" || raw === "compact") return "compact";
+  if (raw === "full") return "full";
+  core2.warning(`VERBOSITY="${raw}" is not "compact" or "full"; falling back to compact.`);
+  return "compact";
+}
 function readMinTriggerPermission() {
   return core2.getInput("MIN_TRIGGER_PERMISSION").trim().toLowerCase() === "admin" ? "admin" : "write";
 }
@@ -31370,7 +31377,8 @@ function readInputs() {
     botName: core2.getInput("BOT_NAME") || "Toolu \u2014 Code Review",
     botLogoUrl: core2.getInput("BOT_LOGO_URL") || "https://raw.githubusercontent.com/falconiere/toolu-ghactions/main/code-review/assets/logo.png",
     reviewMemory: readBool("REVIEW_MEMORY", true),
-    failOn: parseFailOn(core2.getInput("FAIL_ON") || "changes")
+    failOn: parseFailOn(core2.getInput("FAIL_ON") || "changes"),
+    verbosity: readVerbosity()
   };
 }
 function readBool(name17, fallback) {
@@ -38484,7 +38492,12 @@ var Verdict = external_exports.object({
   review_plan: external_exports.string().max(280).catch(({ input }) => typeof input === "string" ? input.slice(0, 280) : ""),
   verdict: external_exports.enum(["approved", "changes"]),
   findings: external_exports.array(Finding),
-  other_checks: external_exports.string().default(""),
+  // Soft-capped like review_plan: other_checks is emitted AFTER findings, so in JSON
+  // mode its maxLength is a prompt nudge only, never enforced during decoding. The
+  // .catch TRUNCATES an over-length blurb to 600 rather than rejecting the whole (valid)
+  // review, and ALSO handles the absent-key case (a length-truncated response cut before
+  // this field) → "", preserving the prior .default("") truncation-resilience semantics.
+  other_checks: external_exports.string().max(600).catch(({ input }) => typeof input === "string" ? input.slice(0, 600) : ""),
   top_must_fix: external_exports.array(external_exports.string()).default([])
 });
 var PartialVerdict = external_exports.object({
@@ -38815,6 +38828,8 @@ async function mapWithConcurrency(items, limit, fn) {
 
 // src/llm/merge.ts
 var TOP_MUST_FIX_CAP = 10;
+var MERGED_REVIEW_PLAN_CAP = 280;
+var MERGED_OTHER_CHECKS_CAP = 1e3;
 function mergeResults(results) {
   if (results.length === 0) {
     return { verdict: "error", findings: [], error: "no chunks reviewed" };
@@ -38826,8 +38841,11 @@ function mergeResults(results) {
   const merged = {
     verdict,
     findings: results.flatMap((r) => r.findings),
-    review_plan: joinNonEmpty(results.map((r) => r.review_plan)),
-    other_checks: joinNonEmpty(results.map((r) => r.other_checks)),
+    review_plan: capText(joinNonEmpty(results.map((r) => r.review_plan)), MERGED_REVIEW_PLAN_CAP),
+    other_checks: capText(
+      joinNonEmpty(results.map((r) => r.other_checks)),
+      MERGED_OTHER_CHECKS_CAP
+    ),
     top_must_fix: capUnion(results.flatMap((r) => r.top_must_fix ?? []))
   };
   if (partials.length > 0 || errored.length > 0) merged.partial = true;
@@ -38843,6 +38861,9 @@ function mergeResults(results) {
 }
 function joinNonEmpty(parts) {
   return parts.filter((p) => p !== void 0 && p !== "").join("\n\n");
+}
+function capText(s, max) {
+  return s.length > max ? `${s.slice(0, max)}\u2026` : s;
 }
 function capUnion(items) {
   const seen = /* @__PURE__ */ new Set();
@@ -38972,13 +38993,7 @@ function renderBody(body, findingsSection) {
   main2 += `### Code Review \u2014 \`${body.branch}\`
 
 `;
-  main2 += "- [x] Read repository context and PR diff\n";
-  main2 += "- [x] Review changed files\n";
-  main2 += "- [x] Analyze correctness, security, performance\n";
-  main2 += "- [x] Post findings\n";
-  main2 += `- [x] Set verdict label (${body.verdictLabel})
-
-`;
+  main2 += buildChecklist(body);
   main2 += `**Verdict:** ${body.verdictBadge}   ${buildSeveritySummary(body.findings)}`;
   if (body.errorDetail !== "") main2 += `
 
@@ -38988,8 +39003,8 @@ function renderBody(body, findingsSection) {
 ${body.recap}
 `);
   let section = "\n";
-  section += "### Review Plan\n";
-  section += `${body.reviewPlan !== "" ? body.reviewPlan : "_No review plan provided._"}
+  if (body.reviewPlan !== "") section += `### Review Plan
+${body.reviewPlan}
 
 `;
   section += `### Findings (${body.findings.length})
@@ -38999,12 +39014,13 @@ ${body.recap}
 
 `;
   section += buildMechanicalSection(body.mechanical, body.errorDetail !== "");
-  section += "### Other checks\n";
-  section += `${body.otherChecks !== "" ? body.otherChecks : "_No additional checks performed._"}
+  if (body.otherChecks !== "") section += `### Other checks
+${body.otherChecks}
 
 `;
-  section += "### Top-N must-fix\n";
-  section += buildTopMustFixSection(body);
+  const topMustFix = buildTopMustFixSection(body.topMustFix);
+  if (topMustFix !== "") section += `### Top-N must-fix
+${topMustFix}`;
   parts.push(section);
   if (body.history !== "") parts.push(`
 ${body.history}
@@ -39017,9 +39033,27 @@ ${body.marker}
 `);
   return parts.join("");
 }
+function buildChecklist(body) {
+  if (body.compact) {
+    const n = body.changedFiles;
+    return `- [x] Reviewed ${n} changed file${n === 1 ? "" : "s"} \u2014 verdict set
+
+`;
+  }
+  return `- [x] Read repository context and PR diff
+- [x] Review changed files
+- [x] Analyze correctness, security, performance
+- [x] Post findings
+- [x] Set verdict label (${body.verdictLabel})
+
+`;
+}
 function buildFindingsSection(findings) {
   if (findings.length === 0) return "_No findings._";
-  return findings.map(findingLine).join("\n");
+  const ordered = [...findings].sort(
+    (a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]
+  );
+  return ordered.map(findingLine).join("\n");
 }
 function buildTruncatedFindingsSection(findings, keep, jobUrl2) {
   const ordered = [...findings].sort(
@@ -39054,13 +39088,9 @@ function buildMechanicalSection(mechanical, llmErrored) {
   return `${out}
 `;
 }
-function buildTopMustFixSection(body) {
-  const capped = dedupeCap(body.topMustFix, TOP_MUST_FIX_MAX);
-  if (capped.length > 0) return capped.join("\n");
-  const highSev = body.findings.filter((f) => f.severity === "blocker" || f.severity === "high");
-  if (highSev.length > 0) return highSev.map(mustFixLine).join("\n");
-  if (body.findings.length > 0) return body.findings.slice(0, 3).map(mustFixLine).join("\n");
-  return "_None._";
+function buildTopMustFixSection(topMustFix) {
+  const capped = dedupeCap(topMustFix, TOP_MUST_FIX_MAX);
+  return capped.length > 0 ? capped.join("\n") : "";
 }
 function dedupeCap(items, max) {
   const seen = /* @__PURE__ */ new Set();
@@ -39072,10 +39102,6 @@ function dedupeCap(items, max) {
     if (out.length === max) break;
   }
   return out;
-}
-function mustFixLine(f) {
-  const loc = f.line !== void 0 && f.line !== null ? `:${f.line}` : "";
-  return `**\`${f.path}${loc}\`** \u2014 ${f.text}`;
 }
 function buildSeveritySummary(findings) {
   const counts = { blocker: 0, high: 0, medium: 0, low: 0, nit: 0 };
@@ -39158,19 +39184,20 @@ function dedupKey(f) {
 var RECAP_LIST_CAP = 8;
 function renderRecapSection(diff, opts) {
   if (opts.hasPrior === false) return "";
+  const compact = opts.compact ?? false;
   const lines = [];
   lines.push("### Changes since last review");
   lines.push("");
   if (opts.fullReview) {
-    lines.push(renderBucket("\u2705 Resolved", diff.counts.resolved, diff.resolved));
+    lines.push(renderBucket("\u2705 Resolved", diff.counts.resolved, diff.resolved, compact));
     lines.push("");
   } else {
     lines.push("_scoped review \u2014 resolutions not recomputed_");
     lines.push("");
   }
-  lines.push(renderBucket("\u{1F501} Still open", diff.counts.open, diff.open));
+  lines.push(renderBucket("\u{1F501} Still open", diff.counts.open, diff.open, compact));
   lines.push("");
-  lines.push(renderBucket("\u26A0\uFE0F New", diff.counts.new, diff.new));
+  lines.push(renderBucket("\u26A0\uFE0F New", diff.counts.new, diff.new, compact));
   lines.push("");
   return lines.join("\n");
 }
@@ -39191,12 +39218,13 @@ function renderHistorySection(history) {
   lines.push("</details>");
   return lines.join("\n");
 }
-function renderBucket(label, count, items) {
+function renderBucket(label, count, items, compact) {
   const lines = [`${label} (${count})`];
   if (count === 0) return lines.join("\n");
   for (const f of items.slice(0, RECAP_LIST_CAP)) {
     const loc = f.line !== void 0 && f.line !== null ? `:${f.line}` : "";
-    lines.push(`- \`${f.path ?? ""}${loc}\` \u2014 ${f.text ?? ""}`);
+    const ref = `\`${f.path ?? ""}${loc}\``;
+    lines.push(compact ? `- ${ref}` : `- ${ref} \u2014 ${f.text ?? ""}`);
   }
   const extra = count - RECAP_LIST_CAP;
   if (extra > 0) lines.push(`_\u2026 ${extra} more_`);
@@ -39234,6 +39262,9 @@ function formatVerdict(result, opts) {
     otherChecks: result.other_checks ?? "",
     topMustFix: result.top_must_fix ?? [],
     findings,
+    changedFiles: opts.changedFiles ?? 0,
+    // Default compact: only an explicit "full" restores the multi-line checklist.
+    compact: opts.verbosity !== "full",
     recap: opts.recap ?? "",
     history: opts.history ?? "",
     marker: marker17,
@@ -40115,7 +40146,12 @@ async function runReview(deps) {
     });
     const hadPrior = (prior?.findings?.length ?? 0) > 0 || (prior?.history?.length ?? 0) > 0;
     if (hadPrior) {
-      recap = renderRecapSection(state, { history: [], fullReview, hasPrior: true });
+      recap = renderRecapSection(state, {
+        history: [],
+        fullReview,
+        hasPrior: true,
+        compact: inputs.verbosity === "compact"
+      });
     }
     history = renderHistorySection(state.next_state.history);
     marker17 = encodeMarker(state.next_state);
@@ -40130,7 +40166,9 @@ async function runReview(deps) {
     recap,
     history,
     historyMarker: marker17,
-    mechanical
+    mechanical,
+    verbosity: inputs.verbosity,
+    changedFiles: diff.total_files
   });
   const commentUrl = await upsertComment(octokit, target, body, stickyId);
   await setVerdictLabel(octokit, verdict, target, { manageLabels: inputs.manageLabels });

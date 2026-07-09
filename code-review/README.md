@@ -240,21 +240,24 @@ the cap are dropped with a notice. Two guarantees worth calling out:
 
 With `INLINE_COMMENTS: true` (default), findings are posted as inline review comments anchored to the exact file and line. When the model has a concrete, high-confidence fix it attaches a ` ```suggestion ` block you can commit straight from the PR. Anchors are validated against GitHub's own view of the PR diff before posting: a finding GitHub cannot anchor degrades to a **file-level** comment instead of failing the whole batch (the summary comment always carries every finding regardless). Set `INLINE_COMMENTS: false` for a summary-comment-only review.
 
-The verdict comment is compatible with [`parse-verdict.sh`](https://github.com/Falconiere/toolu/blob/main/plugins/pr-babysit/scripts/parse-verdict.sh) and the [`pr-babysit`](https://github.com/Falconiere/toolu/tree/main/plugins/pr-babysit) automation loop, so toolu users can drop this into CI and their existing babysit workflow consumes the verdict without changes.
+The verdict comment is compatible with [`parse-verdict.sh`](https://github.com/Falconiere/toolu/blob/main/plugins/pr-babysit/scripts/parse-verdict.sh) and the [`pr-babysit`](https://github.com/Falconiere/toolu/tree/main/plugins/pr-babysit) automation loop, so toolu users can drop this into CI and their existing babysit workflow consumes the verdict without changes. The elements that contract depends on — the `### Code Review` heading, at least one checked `- [x]` box, the `### Findings` block, and the machine-readable label — are present in **both** verbosity modes (below).
 
 ## Example verdict
+
+The default **compact** shape — a single checklist line, findings sorted worst-severity-first, and sections omitted when empty:
 
 ```markdown
 **AI Code Review finished in 2m 15s** —— [View job](https://github.com/...)
 
 ### Code Review — `feat/add-login`
 
+- [x] Reviewed 4 changed files — verdict set
+
 **Verdict:** ✅ Approved   🔵 2 low
 
 ### Review Plan
-Reviewing 4 files: 1 correctness-critical (format.ts), 1 test-quality
-(format.test.ts), 1 config (settings.json), 1 security-sensitive (login.ts).
-Skipping PERFORMANCE — no hot-path changes.
+Reviewing 4 files: 1 correctness-critical (format.ts), 1 test-quality, 1 config,
+1 security-sensitive (login.ts).
 
 ### Findings (2)
 `src/utils/format.ts:17`: low: Comment says 'Temporary workaround' with no
@@ -262,12 +265,18 @@ removal date or tracking issue.
 `src/utils/__tests__/format.test.ts:6`: low: Test assertion uses loose suffix
 match. Tighten to assert full identity.
 
-### Top-N must-fix
-**`src/utils/format.ts:17`** — Add a removal date or tracking issue.
-**`src/utils/__tests__/format.test.ts:6`** — Tighten test assertion.
-
 `merge-approved`
 ```
+
+**Comment verbosity.** `VERBOSITY` (default `compact`) controls the comment shape:
+
+- **`compact`** (default) — the checklist collapses to one line, and the review-memory recap lists changed findings as `` `path:line` `` refs (the full text already lives once in `### Findings`).
+- **`full`** — restores the five-line static checklist and the inline recap text.
+
+These changes apply in **both** modes, independent of `VERBOSITY`:
+
+- The auto-generated `### Top-N must-fix` section is gone — it was a verbatim duplicate of the (now worst-first-sorted) Findings list. The section renders only when the model supplies an explicit `top_must_fix`.
+- `### Review Plan` and `### Other checks` are omitted entirely when the model returns nothing for them (no `_No … provided._` filler).
 
 The verdict label at the bottom is machine-readable: `` `merge-approved` `` or `` `request-changes` ``. `pr-babysit` parses it to decide whether the PR is ready to merge. Unless `MANAGE_LABELS` is `false`, the same verdict is also applied as a real PR **label chip** (the opposite one is removed), so PRs are filterable in the GitHub UI — this needs `issues: write` in the workflow's `permissions` block.
 
@@ -485,6 +494,7 @@ Thread reads/writes are best-effort: a GitHub API hiccup degrades to the previou
 | `BOT_NAME` | no | `Toolu — Code Review` | Display name shown in the comment body header. |
 | `BOT_LOGO_URL` | no | `…/code-review/assets/logo.png` | Logo image shown in the comment body header. |
 | `REVIEW_MEMORY` | no | `true` | Recap what changed since the last review (resolved / still-open / new) and keep a collapsed history, using a hidden state marker in the sticky comment. Set `false` to disable. See [Review memory](#review-memory). |
+| `VERBOSITY` | no | `compact` | Verdict-comment shape: `compact` (default) collapses the checklist to one line and renders recap buckets as `path:line` refs; `full` restores the multi-line checklist and inline recap text. Findings, the `### Findings` heading, and the state marker are identical in both. An unrecognized value warns and falls back to `compact`. See [Example verdict](#example-verdict). |
 | `RUN_SECRET_SCAN` | no | `true` | Run the deterministic secret scan (gitleaks) before the LLM review; its findings feed the LLM as triage context and upload to Code Scanning. See [Deterministic checks](#deterministic-checks). |
 | `RUN_SAST` | no | `true` | Run the deterministic SAST pass (Opengrep) before the LLM review; same flow as above. |
 | `SAST_RULES` | no | `p/typescript` | Opengrep rule config(s) for the SAST pass (comma-separated). |

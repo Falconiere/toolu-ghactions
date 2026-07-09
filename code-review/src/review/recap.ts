@@ -26,6 +26,13 @@ export interface RecapOptions {
    * is absent). Defaults to true.
    */
   hasPrior?: boolean;
+  /**
+   * Compact mode (VERBOSITY input): bucket items render as `path:line` refs ONLY,
+   * dropping the ` — text` tail. The full finding text already lives once in the
+   * ### Findings block, so repeating it per bucket (a 4th copy on re-runs) is noise.
+   * Defaults to false (full text).
+   */
+  compact?: boolean;
 }
 
 /**
@@ -51,19 +58,20 @@ export function renderRecap(diff: DiffResult, opts: RecapOptions): string {
 export function renderRecapSection(diff: DiffResult, opts: RecapOptions): string {
   if (opts.hasPrior === false) return "";
 
+  const compact = opts.compact ?? false;
   const lines: string[] = [];
   lines.push("### Changes since last review");
   lines.push("");
   if (opts.fullReview) {
-    lines.push(renderBucket("✅ Resolved", diff.counts.resolved, diff.resolved));
+    lines.push(renderBucket("✅ Resolved", diff.counts.resolved, diff.resolved, compact));
     lines.push("");
   } else {
     lines.push("_scoped review — resolutions not recomputed_");
     lines.push("");
   }
-  lines.push(renderBucket("🔁 Still open", diff.counts.open, diff.open));
+  lines.push(renderBucket("🔁 Still open", diff.counts.open, diff.open, compact));
   lines.push("");
-  lines.push(renderBucket("⚠️ New", diff.counts.new, diff.new));
+  lines.push(renderBucket("⚠️ New", diff.counts.new, diff.new, compact));
   lines.push("");
   return lines.join("\n");
 }
@@ -92,17 +100,19 @@ export function renderHistorySection(history: HistoryEntry[]): string {
 }
 
 /**
- * Render one bucket: a labelled count line plus a capped `path:line — text` list.
- * Mirrors render-recap.sh's render_bucket: nothing but the label when count is 0,
- * at most RECAP_LIST_CAP items inlined, then a "_… N more_" note for the rest.
+ * Render one bucket: a labelled count line plus a capped item list. Mirrors
+ * render-recap.sh's render_bucket: nothing but the label when count is 0, at most
+ * RECAP_LIST_CAP items inlined, then a "_… N more_" note for the rest. In full mode
+ * each item is `path:line — text`; in compact mode it is the `path:line` ref only.
  */
-function renderBucket(label: string, count: number, items: Finding[]): string {
+function renderBucket(label: string, count: number, items: Finding[], compact: boolean): string {
   const lines: string[] = [`${label} (${count})`];
   if (count === 0) return lines.join("\n");
 
   for (const f of items.slice(0, RECAP_LIST_CAP)) {
     const loc = f.line !== undefined && f.line !== null ? `:${f.line}` : "";
-    lines.push(`- \`${f.path ?? ""}${loc}\` — ${f.text ?? ""}`);
+    const ref = `\`${f.path ?? ""}${loc}\``;
+    lines.push(compact ? `- ${ref}` : `- ${ref} — ${f.text ?? ""}`);
   }
   const extra = count - RECAP_LIST_CAP;
   if (extra > 0) lines.push(`_… ${extra} more_`);

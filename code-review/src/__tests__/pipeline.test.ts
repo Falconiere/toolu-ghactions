@@ -237,6 +237,7 @@ function baseInputs(overrides: Partial<ActionInputs> = {}): ActionInputs {
     botLogoUrl: "https://example.com/logo.png",
     reviewMemory: true,
     failOn: new Set<BlockableVerdict>(),
+    verbosity: "compact",
     ...overrides,
   };
 }

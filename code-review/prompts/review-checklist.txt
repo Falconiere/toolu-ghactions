@@ -91,7 +91,10 @@ Output your review as a JSON object with:
   output budget from them.
 - verdict: ("approved"|"changes") — overall verdict
 - findings[]: ({path, line, quoted_line, severity, text, suggestion?}) — issues
-  found during Phase 2. `quoted_line` is the verbatim text of the cited `Lnnn:`
-  line. `suggestion` (optional) is replacement code only — see the rule above.
-- other_checks: (string, markdown) — non-finding observations
+  found during Phase 2. `text` is 1–3 terse sentences naming the specific failure;
+  do NOT restate the diff or quote the code back. `quoted_line` is the verbatim text
+  of the cited `Lnnn:` line. `suggestion` (optional) is replacement code only — see
+  the rule above.
+- other_checks: (string, markdown) — non-finding observations, AT MOST 2 short
+  sentences; empty string when nothing notable. The findings are what matter.
 - top_must_fix[]: (string[]) — the 1-3 most critical items from findings
