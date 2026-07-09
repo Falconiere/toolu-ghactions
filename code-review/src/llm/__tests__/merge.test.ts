@@ -101,4 +101,32 @@ describe("mergeResults", () => {
     expect(merged.findings).toEqual([]);
     expect(merged.error).toBeTruthy();
   });
+
+  it("caps the merged review_plan (280) and other_checks (1000) with a … marker", async () => {
+    // Each chunk's fields are already within the per-chunk schema caps, but joining one
+    // per chunk with blank-line separators overruns the merged caps — the exact chunked
+    // verbosity this bounds. Three copies push both fields past their ceilings.
+    const chunk = await resultFrom("verbose");
+    expect((chunk.review_plan ?? "").length).toBeLessThanOrEqual(280);
+    expect((chunk.other_checks ?? "").length).toBeLessThanOrEqual(600);
+
+    const merged = mergeResults([chunk, chunk, chunk]);
+
+    // review_plan clipped to 280 chars + the marker; the first 280 are verbatim.
+    expect(merged.review_plan).toHaveLength(281);
+    expect(merged.review_plan?.endsWith("…")).toBe(true);
+    const joinedPlan = [chunk.review_plan, chunk.review_plan, chunk.review_plan].join("\n\n");
+    expect(merged.review_plan).toBe(`${joinedPlan.slice(0, 280)}…`);
+
+    // other_checks clipped to 1000 chars + the marker.
+    expect(merged.other_checks).toHaveLength(1001);
+    expect(merged.other_checks?.endsWith("…")).toBe(true);
+  });
+
+  it("leaves within-budget merged narrative fields unclipped (no spurious marker)", async () => {
+    // A single chunk under both caps must pass through untouched — no … appended.
+    const merged = mergeResults([await resultFrom("verbose")]);
+    expect(merged.review_plan?.endsWith("…")).toBe(false);
+    expect(merged.other_checks?.endsWith("…")).toBe(false);
+  });
 });

@@ -48,6 +48,12 @@ export interface VerdictOptions {
   historyMarker?: string;
   /** Deterministic findings (gitleaks/opengrep) for the Mechanical-checks summary. */
   mechanical?: MechanicalFinding[];
+  /** Comment verbosity (VERBOSITY input). "compact" (default) collapses the checklist;
+   *  "full" restores the multi-line checklist. Only the checklist differs — the dedup /
+   *  empty-section fixes apply in both modes. */
+  verbosity?: "compact" | "full";
+  /** Number of changed files reviewed — shown in the compact checklist line (default 0). */
+  changedFiles?: number;
 }
 
 /** Thrown when the body cannot fit under the size cap without dropping the marker. */
@@ -99,6 +105,9 @@ export function formatVerdict(
     otherChecks: result.other_checks ?? "",
     topMustFix: result.top_must_fix ?? [],
     findings,
+    changedFiles: opts.changedFiles ?? 0,
+    // Default compact: only an explicit "full" restores the multi-line checklist.
+    compact: opts.verbosity !== "full",
     recap: opts.recap ?? "",
     history: opts.history ?? "",
     marker,

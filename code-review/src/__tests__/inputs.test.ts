@@ -93,6 +93,29 @@ describe("MAX_TOKENS", () => {
   });
 });
 
+describe("VERBOSITY", () => {
+  it("defaults to compact when unset", () => {
+    expect(readInputs().verbosity).toBe("compact");
+  });
+
+  it("honors an explicit full", () => {
+    setInput("VERBOSITY", "full");
+    expect(readInputs().verbosity).toBe("full");
+  });
+
+  it("is case-insensitive and trims", () => {
+    setInput("VERBOSITY", "  Full  ");
+    expect(readInputs().verbosity).toBe("full");
+  });
+
+  it("falls back to compact on an unrecognized value, with a warning", () => {
+    setInput("VERBOSITY", "verbose");
+    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+    expect(readInputs().verbosity).toBe("compact");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('is not "compact" or "full"'));
+  });
+});
+
 describe("string inputs are trimmed", () => {
   it("trims REVIEW_PROMPT_FILE and CODEBASE_OVERVIEW", () => {
     setInput("REVIEW_PROMPT_FILE", "  ./custom-prompt.md  ");

@@ -153,6 +153,89 @@ describe("formatVerdict", () => {
   });
 });
 
+describe("formatVerdict — verbosity (compact vs full) + dedup", () => {
+  const base: ProviderResult = {
+    verdict: "changes",
+    findings: [
+      { path: "src/a.ts", line: 10, severity: "blocker", text: "auth bypass", confidence: "high" },
+      { path: "src/b.ts", line: 4, severity: "nit", text: "spacing", confidence: "high" },
+    ],
+    review_plan: "Reviewed 2 files.",
+    other_checks: "Tests look adequate.",
+    top_must_fix: [],
+  };
+
+  it("compact (default): single-line checklist, keeps the parse-verdict contract", () => {
+    const { body } = formatVerdict(base, { changedFiles: 3, historyMarker: MARKER });
+    // Single compact checklist line replaces the 5-line static list.
+    expect(body).toContain("- [x] Reviewed 3 changed files — verdict set");
+    expect(body).not.toContain("- [x] Read repository context and PR diff");
+    // parse-verdict.sh contract: ≥1 checked box, the ### Code Review heading, ### Findings block.
+    expect(body).toMatch(/^[ \t]*- \[x\] /m);
+    expect(body).toContain("### Code Review —");
+    expect(body).toContain("### Findings (2)");
+    // The state marker is still the last line under the compact shape.
+    expect(lastLine(body)).toBe(MARKER);
+  });
+
+  it("compact singularizes the file count", () => {
+    const { body } = formatVerdict(base, { changedFiles: 1 });
+    expect(body).toContain("- [x] Reviewed 1 changed file — verdict set");
+  });
+
+  it("full: restores the multi-line static checklist", () => {
+    const { body } = formatVerdict(base, { verbosity: "full", changedFiles: 3 });
+    expect(body).toContain("- [x] Read repository context and PR diff");
+    expect(body).toContain("- [x] Set verdict label");
+    expect(body).not.toContain("Reviewed 3 changed files");
+  });
+
+  it("omits empty Review Plan / Other checks / Top-N sections (no filler)", () => {
+    const bare: ProviderResult = {
+      verdict: "changes",
+      findings: [{ path: "src/a.ts", line: 1, severity: "high", text: "bug", confidence: "high" }],
+      review_plan: "",
+      other_checks: "",
+      top_must_fix: [],
+    };
+    const { body } = formatVerdict(bare, {});
+    expect(body).not.toContain("### Review Plan");
+    expect(body).not.toContain("_No review plan provided._");
+    expect(body).not.toContain("### Other checks");
+    expect(body).not.toContain("_No additional checks performed._");
+    // Top-N is no longer auto-generated from findings.
+    expect(body).not.toContain("### Top-N must-fix");
+  });
+
+  it("never auto-duplicates findings into Top-N: each finding text appears exactly once", () => {
+    const { body } = formatVerdict(base, {});
+    expect(body.split("auth bypass").length - 1).toBe(1);
+    expect(body.split("spacing").length - 1).toBe(1);
+  });
+
+  it("severity-sorts the Findings list worst-first without mutating the input array", () => {
+    const findings: Finding[] = [
+      { path: "src/nit.ts", line: 1, severity: "nit", text: "n", confidence: "high" },
+      { path: "src/blk.ts", line: 2, severity: "blocker", text: "b", confidence: "high" },
+    ];
+    const snapshot = [...findings];
+    const { body } = formatVerdict({ ...base, findings }, {});
+    // Blocker renders before the nit even though it was second in the input.
+    expect(body.indexOf("src/blk.ts")).toBeLessThan(body.indexOf("src/nit.ts"));
+    // The caller's array is untouched (reconcile/inline posting reuse it downstream).
+    expect(findings).toEqual(snapshot);
+  });
+
+  it("renders the model's explicit Top-N list in BOTH modes", () => {
+    const withTop: ProviderResult = { ...base, top_must_fix: ["Fix the auth bypass now"] };
+    for (const verbosity of ["compact", "full"] as const) {
+      const { body } = formatVerdict(withTop, { verbosity, changedFiles: 2 });
+      expect(body).toContain("### Top-N must-fix");
+      expect(body).toContain("Fix the auth bypass now");
+    }
+  });
+});
+
 describe("formatVerdict — mechanical findings + graceful degradation", () => {
   const secret: MechanicalFinding = {
     tool: "gitleaks",

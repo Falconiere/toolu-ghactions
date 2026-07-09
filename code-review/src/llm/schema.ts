@@ -64,7 +64,15 @@ export const Verdict = z.object({
     .catch(({ input }) => (typeof input === "string" ? input.slice(0, 280) : "")),
   verdict: z.enum(["approved", "changes"]),
   findings: z.array(Finding),
-  other_checks: z.string().default(""),
+  // Soft-capped like review_plan: other_checks is emitted AFTER findings, so in JSON
+  // mode its maxLength is a prompt nudge only, never enforced during decoding. The
+  // .catch TRUNCATES an over-length blurb to 600 rather than rejecting the whole (valid)
+  // review, and ALSO handles the absent-key case (a length-truncated response cut before
+  // this field) → "", preserving the prior .default("") truncation-resilience semantics.
+  other_checks: z
+    .string()
+    .max(600)
+    .catch(({ input }) => (typeof input === "string" ? input.slice(0, 600) : "")),
   top_must_fix: z.array(z.string()).default([]),
 });
 

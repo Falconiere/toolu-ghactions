@@ -81,6 +81,9 @@ export interface ActionInputs {
   reviewMemory: boolean;
   /** Verdicts that should fail the job (parsed from FAIL_ON; defaults to blocking on "changes"). */
   failOn: ReadonlySet<BlockableVerdict>;
+  /** Comment verbosity: "compact" (default) collapses the checklist and renders recap
+   *  buckets as refs; "full" restores the multi-line checklist and recap text. */
+  verbosity: "compact" | "full";
 }
 
 /**
@@ -141,6 +144,19 @@ function validateTimeout(value: number, source: string): number {
 /** Read MIN_CONFIDENCE, defaulting to "high"; only "medium" relaxes the floor. */
 function readMinConfidence(): MinConfidence {
   return core.getInput("MIN_CONFIDENCE").trim().toLowerCase() === "medium" ? "medium" : "high";
+}
+
+/**
+ * Read VERBOSITY, defaulting to "compact"; only an explicit "full" restores the
+ * multi-line comment shape. An unrecognized non-empty value is a config typo: warn and
+ * fall back to compact rather than silently picking a shape the user did not ask for.
+ */
+function readVerbosity(): "compact" | "full" {
+  const raw = core.getInput("VERBOSITY").trim().toLowerCase();
+  if (raw === "" || raw === "compact") return "compact";
+  if (raw === "full") return "full";
+  core.warning(`VERBOSITY="${raw}" is not "compact" or "full"; falling back to compact.`);
+  return "compact";
 }
 
 /** Read MIN_TRIGGER_PERMISSION, defaulting to "write"; only "admin" tightens it. */
@@ -239,6 +255,7 @@ export function readInputs(): ActionInputs {
       "https://raw.githubusercontent.com/falconiere/toolu-ghactions/main/code-review/assets/logo.png",
     reviewMemory: readBool("REVIEW_MEMORY", true),
     failOn: parseFailOn(core.getInput("FAIL_ON") || "changes"),
+    verbosity: readVerbosity(),
   };
 }
 

@@ -117,4 +117,23 @@ describe("Verdict schema", () => {
       expect(parsed.data.review_plan).toBe(longPlan.slice(0, 280));
     }
   });
+
+  // other_checks has the same soft cap as review_plan: the provider does not enforce
+  // maxLength in JSON mode, so a valid review can carry a >600-char blurb. The .catch
+  // must TRUNCATE it to 600 rather than reject the whole (complete) review.
+  it("truncates an over-length other_checks instead of rejecting the whole verdict", () => {
+    const longChecks = "y".repeat(900);
+    const verbose = {
+      review_plan: "plan",
+      verdict: "approved",
+      findings: [],
+      other_checks: longChecks,
+    };
+    const parsed = Verdict.safeParse(verbose);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.other_checks).toHaveLength(600);
+      expect(parsed.data.other_checks).toBe(longChecks.slice(0, 600));
+    }
+  });
 });

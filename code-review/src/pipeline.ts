@@ -267,7 +267,12 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     // not throw (asReviewState only guarantees the "findings" key is present).
     const hadPrior = (prior?.findings?.length ?? 0) > 0 || (prior?.history?.length ?? 0) > 0;
     if (hadPrior) {
-      recap = renderRecapSection(state, { history: [], fullReview, hasPrior: true });
+      recap = renderRecapSection(state, {
+        history: [],
+        fullReview,
+        hasPrior: true,
+        compact: inputs.verbosity === "compact",
+      });
     }
     history = renderHistorySection(state.next_state.history);
     marker = encodeMarker(state.next_state);
@@ -285,6 +290,8 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     history,
     historyMarker: marker,
     mechanical,
+    verbosity: inputs.verbosity,
+    changedFiles: diff.total_files,
   });
 
   // --- Post the verdict comment (a failure here IS an infra error → propagate). ---
