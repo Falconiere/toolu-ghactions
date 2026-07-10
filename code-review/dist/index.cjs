@@ -39839,6 +39839,15 @@ function authorHasLastWord(thread) {
   if (last.author === "" || thread.botLogin === "") return false;
   return last.author !== thread.botLogin;
 }
+function dropResolved(findings, priorThreads) {
+  const resolved = priorThreads.filter((t) => t.isResolved);
+  const kept = [];
+  const suppressed = [];
+  for (const f of findings) {
+    (resolved.some((t) => matches(f, t)) ? suppressed : kept).push(f);
+  }
+  return { kept, suppressed };
+}
 function reconcile(findings, priorThreads) {
   const covered = /* @__PURE__ */ new Set();
   const open = /* @__PURE__ */ new Set();
@@ -40057,7 +40066,7 @@ async function runReview(deps) {
   } catch {
     process.stderr.write("  Warning: could not post in-progress comment\n");
   }
-  const priorThreads = inputs.inlineComments ? await fetchReviewThreads(octokit, target) : [];
+  const priorThreads = await fetchReviewThreads(octokit, target);
   const headSha = resolveHeadSha(reviewHead, context2.sha, cwd);
   target.headSha = headSha;
   const projectRules = gatherRules({
@@ -40123,14 +40132,26 @@ async function runReview(deps) {
       new Map(Object.entries(f.line_text).map(([n, text2]) => [Number(n), text2]))
     ])
   );
-  const findings = validateFindings(
+  const anchored = validateFindings(
     result.findings,
     changedLinesByPath,
     inputs.minConfidence,
     lineTextByPath
   );
+  const stamped = anchored.map((f) => ({ ...f, fp: fingerprint(f) }));
+  const { kept: findings, suppressed } = dropResolved(stamped, priorThreads);
+  if (suppressed.length > 0) {
+    process.stdout.write(
+      `  Suppressed ${suppressed.length} finding(s) already resolved on existing threads
+`
+    );
+  }
   const validated = { ...result, findings };
-  const verdict = resolveVerdict(validated.verdict, findings.length);
+  let verdict = resolveVerdict(validated.verdict, findings.length);
+  if (verdict === "changes" && findings.length === 0 && suppressed.length > 0) {
+    verdict = "approved";
+    validated.verdict = "approved";
+  }
   let recap = "";
   let history = "";
   let marker17 = "";
@@ -40174,8 +40195,7 @@ async function runReview(deps) {
   await setVerdictLabel(octokit, verdict, target, { manageLabels: inputs.manageLabels });
   if (inputs.inlineComments) {
     const reviewTarget = { ...target, headSha: context2.headSha ?? headSha };
-    const withFp = findings.map((f) => ({ ...f, fp: fingerprint(f) }));
-    const plan = reconcile(withFp, priorThreads);
+    const plan = reconcile(findings, priorThreads);
     const r = await postInlineReview(octokit, plan.toCreate, reviewTarget);
     if (!r.posted && r.reason !== "no anchored findings") {
       process.stderr.write(`  Warning: inline review step failed: ${r.reason ?? "unknown"}
