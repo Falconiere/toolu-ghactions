@@ -61,7 +61,9 @@ teardown() { common_teardown; }
     [[ "$path" == "$RUNNER_TEMP"/expo-builder.*/release.keystore ]]
     [ -s "$path" ]
     cmp -s "$path" "$BATS_TEST_TMPDIR/release.keystore"
-    grep -q '^EXPO_BUILDER_KEYSTORE_PASSWORD=password1$' "$GITHUB_ENV"
-    grep -q '^EXPO_BUILDER_KEY_ALIAS=release$' "$GITHUB_ENV"
-    grep -q '^EXPO_BUILDER_KEY_PASSWORD=password1$' "$GITHUB_ENV"
+    # Secrets must NOT persist in job-wide GITHUB_ENV — the Build step gets
+    # them step-scoped from the action inputs.
+    ! grep -q 'password1' "$GITHUB_ENV"
+    ! grep -q 'EXPO_BUILDER_KEYSTORE_PASSWORD' "$GITHUB_ENV"
+    ! grep -q 'EXPO_BUILDER_KEY_PASSWORD' "$GITHUB_ENV"
 }

@@ -113,6 +113,11 @@ runs:
         EXPO_BUILDER_WORKING_DIR: ${{ inputs.working-directory }}
         EXPO_BUILDER_FORMAT: ${{ inputs.format }}
         EXPO_BUILDER_INIT_SCRIPT: ${{ github.action_path }}/src/signing.init.gradle
+        # Step-scoped on purpose: passwords never enter job-wide GITHUB_ENV
+        # (readable by every later step); signing.init.gradle reads them here.
+        EXPO_BUILDER_KEYSTORE_PASSWORD: ${{ inputs.keystore-password }}
+        EXPO_BUILDER_KEY_ALIAS: ${{ inputs.key-alias }}
+        EXPO_BUILDER_KEY_PASSWORD: ${{ inputs.key-password }}
       run: '"${{ github.action_path }}/src/build.sh"'
 
     - name: Resolve outputs

@@ -109,10 +109,14 @@ $DIST/app.aab" EXPO_BUILDER_TAG="v9" run "$SCRIPT"
     delim="$(sed -n 's/^uploaded-assets<<//p' "$GITHUB_OUTPUT")"
     [ -n "$delim" ]
     [ "$delim" != "EXPO_BUILDER_EOF" ]
-    # Terminator present and both assets listed inside the block.
+    # Extract exactly the heredoc block (header → terminator) and assert both
+    # assets are INSIDE it — proves the block terminates properly and is not
+    # truncated by the asset named like a delimiter.
+    block="$(awk -v d="$delim" 'f && $0 == d {exit} f {print} $0 == "uploaded-assets<<" d {f=1}' "$GITHUB_OUTPUT")"
+    grep -qx 'EXPO_BUILDER_EOF' <<<"$block"
+    grep -qx 'app.aab' <<<"$block"
+    # Terminator line itself present after the header.
     grep -qx "$delim" "$GITHUB_OUTPUT"
-    grep -qx 'EXPO_BUILDER_EOF' "$GITHUB_OUTPUT"
-    grep -qx 'app.aab' "$GITHUB_OUTPUT"
 }
 
 @test "draft and prerelease flags reach gh release create" {
