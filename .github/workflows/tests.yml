@@ -88,3 +88,35 @@ jobs:
         run: npx --yes @action-validator/cli cloudflare-tunnel/stop/action.yml
       - name: action-validator (wait)
         run: npx --yes @action-validator/cli cloudflare-tunnel/wait/action.yml
+
+  expo-test:
+    name: expo-builder bats (${{ matrix.os }})
+    # expo-builder is a composite-action suite whose scripts run on the runner
+    # host; unit-test them on both Linux and macOS (BSD userland).
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install bats + jq (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bats jq
+      - name: Install bats + jq (macOS)
+        if: runner.os == 'macOS'
+        run: brew install bats-core jq
+      - name: Run expo-builder test suite
+        run: bats expo-builder/build-android/__tests__/*.bats expo-builder/deploy-github-release/__tests__/*.bats
+
+  expo-lint:
+    name: expo-builder shellcheck + action-validator
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: shellcheck
+        run: shellcheck --severity=warning expo-builder/build-android/src/*.sh expo-builder/deploy-github-release/src/*.sh
+      - name: action-validator (build-android)
+        run: npx --yes @action-validator/cli expo-builder/build-android/action.yml
+      - name: action-validator (deploy-github-release)
+        run: npx --yes @action-validator/cli expo-builder/deploy-github-release/action.yml

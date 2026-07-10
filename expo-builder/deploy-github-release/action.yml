@@ -1,0 +1,75 @@
+name: 'Expo Deploy GitHub Release'
+description: >-
+  Publish built app binaries (APK/AAB) to a GitHub Release with sha256
+  checksums — tag defaults to v<app-version> from expo-builder/build-android.
+author: 'Falconiere Barbosa'
+branding:
+  icon: 'upload-cloud'
+  color: 'green'
+
+inputs:
+  files:
+    description: >-
+      Newline-separated glob patterns, one per line; spaces within a line are
+      literal (filenames with spaces supported). A pattern matching nothing
+      fails the step.
+    required: true
+  tag:
+    description: 'Release tag. Defaults to v<app-version>; one of tag/app-version is required.'
+    required: false
+    default: ''
+  app-version:
+    description: 'Pipe from build-android app-version output to derive the default tag.'
+    required: false
+    default: ''
+  release-name:
+    description: 'Release title. Defaults to the tag.'
+    required: false
+    default: ''
+  draft:
+    description: 'Create the release as a draft.'
+    required: false
+    default: 'false'
+  prerelease:
+    description: 'Mark the release as a prerelease.'
+    required: false
+    default: 'false'
+  overwrite:
+    description: 'Existing tag/release: false = fail; true = keep the release and re-upload assets with --clobber.'
+    required: false
+    default: 'false'
+  generate-checksums:
+    description: 'Upload a sha256sums.txt asset covering all uploaded files.'
+    required: false
+    default: 'true'
+  token:
+    description: 'GitHub token with contents: write.'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  release-url:
+    description: 'URL of the release.'
+    value: ${{ steps.release.outputs.release-url }}
+  uploaded-assets:
+    description: 'Newline-separated uploaded asset names.'
+    value: ${{ steps.release.outputs.uploaded-assets }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Create release and upload assets
+      id: release
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        GH_REPO: ${{ github.repository }}
+        EXPO_BUILDER_FILES: ${{ inputs.files }}
+        EXPO_BUILDER_TAG: ${{ inputs.tag }}
+        EXPO_BUILDER_APP_VERSION: ${{ inputs.app-version }}
+        EXPO_BUILDER_RELEASE_NAME: ${{ inputs.release-name }}
+        EXPO_BUILDER_DRAFT: ${{ inputs.draft }}
+        EXPO_BUILDER_PRERELEASE: ${{ inputs.prerelease }}
+        EXPO_BUILDER_OVERWRITE: ${{ inputs.overwrite }}
+        EXPO_BUILDER_CHECKSUMS: ${{ inputs.generate-checksums }}
+      run: '"${{ github.action_path }}/src/create-release.sh"'

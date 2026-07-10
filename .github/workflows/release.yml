@@ -134,6 +134,8 @@ jobs:
             mirror_repo: Falconiere/toolu-code-review
           - action: cloudflare-tunnel
             mirror_repo: Falconiere/toolu-cloudflare-tunnel
+          - action: expo-builder
+            mirror_repo: Falconiere/toolu-expo-builder
     steps:
       - uses: actions/checkout@v5
         with:

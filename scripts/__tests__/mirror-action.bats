@@ -52,6 +52,34 @@ teardown() { common_teardown; }
     grep -qE '^branding:' "$out/action.yml"
 }
 
+@test "expo-builder: root action.yml hoisted from build-android with rewritten src paths; subdirs kept" {
+    ACTION=expo-builder run bash "$SCRIPT" "$WORK"
+    [ "$status" -eq 0 ]
+    out=$(checkout_mirror)
+    [ -f "$out/action.yml" ]
+    [ -d "$out/build-android" ]
+    [ -d "$out/deploy-github-release" ]
+    [ -f "$out/build-android/src/preflight.sh" ]
+    [ -f "$out/deploy-github-release/src/create-release.sh" ]
+    # Hoisted root: script paths gain the build-android/ segment.
+    grep -qF '}}/build-android/src/preflight.sh' "$out/action.yml"
+    ! grep -qF '}}/src/preflight.sh' "$out/action.yml"
+    grep -qF '}}/build-android/src/signing.init.gradle' "$out/action.yml"
+    # Sub-action action.yml is unchanged — its own src/ resolves in place.
+    grep -qF '}}/src/preflight.sh' "$out/build-android/action.yml"
+}
+
+@test "expo-builder: generated root differs from build-android only in src paths, keeps name+branding" {
+    ACTION=expo-builder run bash "$SCRIPT" "$WORK"
+    [ "$status" -eq 0 ]
+    out=$(checkout_mirror)
+    src="$REPO_ROOT/expo-builder/build-android/action.yml"
+    run bash -c "diff '$src' '$out/action.yml' | grep -E '^[<>]' | grep -vF '/src/' || true"
+    [ -z "$output" ]
+    grep -qE '^name:' "$out/action.yml"
+    grep -qE '^branding:' "$out/action.yml"
+}
+
 @test "README: monorepo-relative links repointed, generated banner prepended" {
     ACTION=code-review run bash "$SCRIPT" "$WORK"
     [ "$status" -eq 0 ]

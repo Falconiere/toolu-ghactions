@@ -1,0 +1,124 @@
+name: 'Expo Build Android (no EAS account)'
+description: >-
+  Build a signed Android APK/AAB from an Expo app with expo prebuild + Gradle —
+  no Expo/EAS account, no eas-cli, no EXPO_TOKEN.
+author: 'Falconiere Barbosa'
+branding:
+  icon: 'smartphone'
+  color: 'green'
+
+inputs:
+  working-directory:
+    description: 'App root (monorepo support).'
+    required: false
+    default: '.'
+  format:
+    description: 'Artifact to build: apk | aab | both. One atomic Gradle invocation — both means both succeed or the step fails.'
+    required: false
+    default: 'apk'
+  prebuild:
+    description: 'expo prebuild mode: auto (skip when android/ exists) | always | never.'
+    required: false
+    default: 'auto'
+  prebuild-args:
+    description: 'Extra arguments appended to `npx expo prebuild`.'
+    required: false
+    default: ''
+  node-version:
+    description: 'Node.js version for actions/setup-node.'
+    required: false
+    default: '20'
+  java-version:
+    description: 'JDK version for actions/setup-java (temurin).'
+    required: false
+    default: '17'
+  gradle-cache:
+    description: 'Enable Gradle caching via gradle/actions/setup-gradle.'
+    required: false
+    default: 'true'
+  require-signing:
+    description: 'true: absent keystore inputs are an error instead of debug-keystore fallback.'
+    required: false
+    default: 'false'
+  keystore-base64:
+    description: 'Release keystore, base64-encoded. All four keystore inputs together or none.'
+    required: false
+    default: ''
+  keystore-password:
+    description: 'Release keystore password.'
+    required: false
+    default: ''
+  key-alias:
+    description: 'Release key alias.'
+    required: false
+    default: ''
+  key-password:
+    description: 'Release key password.'
+    required: false
+    default: ''
+
+outputs:
+  apk-path:
+    description: 'Absolute path to the built APK; empty when format=aab.'
+    value: ${{ steps.resolve.outputs.apk-path }}
+  aab-path:
+    description: 'Absolute path to the built AAB; empty when format=apk.'
+    value: ${{ steps.resolve.outputs.aab-path }}
+  app-version:
+    description: 'App version resolved via `npx expo config --json --type public`.'
+    value: ${{ steps.resolve.outputs.app-version }}
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/setup-node@v6
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - uses: actions/setup-java@v5
+      with:
+        distribution: 'temurin'
+        java-version: ${{ inputs.java-version }}
+
+    - uses: gradle/actions/setup-gradle@v6
+      if: ${{ inputs.gradle-cache == 'true' }}
+
+    - name: Preflight
+      shell: bash
+      env:
+        EXPO_BUILDER_WORKING_DIR: ${{ inputs.working-directory }}
+      run: '"${{ github.action_path }}/src/preflight.sh"'
+
+    - name: Prebuild
+      shell: bash
+      env:
+        EXPO_BUILDER_WORKING_DIR: ${{ inputs.working-directory }}
+        EXPO_BUILDER_PREBUILD: ${{ inputs.prebuild }}
+        EXPO_BUILDER_PREBUILD_ARGS: ${{ inputs.prebuild-args }}
+      run: '"${{ github.action_path }}/src/prebuild.sh"'
+
+    - name: Set up signing
+      shell: bash
+      env:
+        EXPO_BUILDER_INPUT_KEYSTORE_BASE64: ${{ inputs.keystore-base64 }}
+        EXPO_BUILDER_INPUT_KEYSTORE_PASSWORD: ${{ inputs.keystore-password }}
+        EXPO_BUILDER_INPUT_KEY_ALIAS: ${{ inputs.key-alias }}
+        EXPO_BUILDER_INPUT_KEY_PASSWORD: ${{ inputs.key-password }}
+        EXPO_BUILDER_REQUIRE_SIGNING: ${{ inputs.require-signing }}
+      run: '"${{ github.action_path }}/src/setup-signing.sh"'
+
+    - name: Build
+      shell: bash
+      env:
+        EXPO_BUILDER_WORKING_DIR: ${{ inputs.working-directory }}
+        EXPO_BUILDER_FORMAT: ${{ inputs.format }}
+        EXPO_BUILDER_INIT_SCRIPT: ${{ github.action_path }}/src/signing.init.gradle
+      run: '"${{ github.action_path }}/src/build.sh"'
+
+    - name: Resolve outputs
+      id: resolve
+      shell: bash
+      env:
+        EXPO_BUILDER_WORKING_DIR: ${{ inputs.working-directory }}
+        EXPO_BUILDER_FORMAT: ${{ inputs.format }}
+      run: '"${{ github.action_path }}/src/resolve-outputs.sh"'
