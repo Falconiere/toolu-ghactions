@@ -54,6 +54,17 @@ layout_cloudflare_tunnel() {
     "$REPO_ROOT/cloudflare-tunnel/start/action.yml" >"$dest/action.yml"
 }
 
+# Copy the expo-builder composite sub-actions and synthesize a root action.yml
+# from `build-android` so the mirror has a listable root action. Unlike the
+# tunnel suite, scripts live per-sub-action, so the hoisted root's paths gain
+# the build-android/ segment instead of dropping a `..`.
+layout_expo_builder() {
+  local dest="$1"
+  cp -R "$REPO_ROOT/expo-builder/." "$dest/"
+  sed 's#}}/src/#}}/build-android/src/#g' \
+    "$REPO_ROOT/expo-builder/build-android/action.yml" >"$dest/action.yml"
+}
+
 # Copy LICENSE to the mirror root, repoint the README's monorepo-relative links,
 # and prepend a "generated" banner so no one hand-edits the mirror.
 rewrite_readmes() {
@@ -123,7 +134,8 @@ main() {
   case "$ACTION" in
     code-review)      layout_code_review "$work_dir" ;;
     cloudflare-tunnel) layout_cloudflare_tunnel "$work_dir" ;;
-    *) die "unknown ACTION: $ACTION (expected code-review | cloudflare-tunnel)" ;;
+    expo-builder)     layout_expo_builder "$work_dir" ;;
+    *) die "unknown ACTION: $ACTION (expected code-review | cloudflare-tunnel | expo-builder)" ;;
   esac
   rewrite_readmes "$work_dir"
   git_sync "$work_dir"

@@ -1,0 +1,26 @@
+// signing.init.gradle — Gradle init script that injects a release signingConfig
+// from EXPO_BUILDER_KEYSTORE_* env into any com.android.application project.
+// Never touches generated native files (prebuild can regenerate them freely).
+// Writes a marker file so build.sh can verify the override actually applied.
+def ksPath = System.getenv('EXPO_BUILDER_KEYSTORE_PATH')
+if (ksPath != null && !ksPath.isEmpty()) {
+    gradle.beforeProject { project ->
+        project.plugins.withId('com.android.application') {
+            // afterEvaluate so this wins over the template's own
+            // `release { signingConfig signingConfigs.debug }` assignment.
+            project.afterEvaluate {
+                def android = project.extensions.getByName('android')
+                def sc = android.signingConfigs.maybeCreate('expoBuilderRelease')
+                sc.storeFile = new File(ksPath)
+                sc.storePassword = System.getenv('EXPO_BUILDER_KEYSTORE_PASSWORD')
+                sc.keyAlias = System.getenv('EXPO_BUILDER_KEY_ALIAS')
+                sc.keyPassword = System.getenv('EXPO_BUILDER_KEY_PASSWORD')
+                android.buildTypes.getByName('release').signingConfig = sc
+
+                def tmp = System.getenv('RUNNER_TEMP') ?: System.getProperty('java.io.tmpdir')
+                new File(tmp, 'expo-builder-signing-applied').text = project.path
+                project.logger.lifecycle("[expo-builder] release signing applied to ${project.path}")
+            }
+        }
+    }
+}

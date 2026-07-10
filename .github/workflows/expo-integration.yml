@@ -1,0 +1,180 @@
+name: expo-integration
+
+# End-to-end proof of the expo-builder suite against a REAL Expo SDK 57 app
+# (create-expo-app@4.0.0), a REAL keytool keystore, and a REAL GitHub release —
+# with zero Expo credentials anywhere (the account-free core promise, AC-5).
+# Covers spec AC-1..AC-6 (docs/toolu/specs/2026-07-10-expo-builder-p1-android-design.md).
+
+on:
+  push:
+    paths:
+      - 'expo-builder/**'
+      - '.github/workflows/expo-integration.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: expo-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-signed:
+    name: signed build (AC-1, AC-2, AC-5)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Assert no Expo credentials in the job (AC-5)
+        run: |
+          set -euo pipefail
+          [[ -z "${EXPO_TOKEN:-}" ]] || { echo "::error::EXPO_TOKEN is set — this suite must build without it"; exit 1; }
+          [[ ! -f ~/.expo/state.json ]] || { echo "::error::an expo login state exists on the runner"; exit 1; }
+
+      - name: Create real fixture app (create-expo-app@4.0.0, SDK 57)
+        run: |
+          set -euo pipefail
+          npx --yes create-expo-app@4.0.0 fixture --no-install
+          cd fixture
+          npm install --no-audit --no-fund
+
+      - name: Generate throwaway release keystore (real keytool)
+        run: |
+          set -euo pipefail
+          keytool -genkeypair -v -keystore "$RUNNER_TEMP/ci.keystore" \
+            -storepass password1 -keypass password1 -alias release \
+            -keyalg RSA -keysize 2048 -validity 1 -dname "CN=expo-builder-ci"
+          echo "KEYSTORE_B64=$(base64 <"$RUNNER_TEMP/ci.keystore" | tr -d '\n')" >>"$GITHUB_ENV"
+
+      - name: Build APK + AAB (format=both, atomic)
+        id: build
+        uses: ./expo-builder/build-android
+        with:
+          working-directory: fixture
+          format: both
+          keystore-base64: ${{ env.KEYSTORE_B64 }}
+          keystore-password: password1
+          key-alias: release
+          key-password: password1
+
+      - name: APK is signed by OUR keystore (AC-1)
+        run: |
+          set -euo pipefail
+          apksigner="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n 1)/apksigner"
+          "$apksigner" verify --print-certs "${{ steps.build.outputs.apk-path }}" | tee certs.txt
+          grep -q 'CN=expo-builder-ci' certs.txt
+
+      - name: AAB contains BundleConfig.pb (AC-2)
+        run: unzip -l "${{ steps.build.outputs.aab-path }}" | grep -q 'BundleConfig.pb'
+
+      - name: Outputs are populated
+        run: |
+          set -euo pipefail
+          [[ -f "${{ steps.build.outputs.apk-path }}" ]]
+          [[ -f "${{ steps.build.outputs.aab-path }}" ]]
+          [[ "${{ steps.build.outputs.app-version }}" == "1.0.0" ]]
+
+      - name: Hand the APK to the deploy job
+        uses: actions/upload-artifact@v7
+        with:
+          name: signed-apk
+          path: ${{ steps.build.outputs.apk-path }}
+          if-no-files-found: error
+
+  debug-fallback:
+    name: debug fallback + prebuild skip (AC-3, AC-4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Create real fixture app (create-expo-app@4.0.0, SDK 57)
+        run: |
+          set -euo pipefail
+          npx --yes create-expo-app@4.0.0 fixture --no-install
+          cd fixture
+          npm install --no-audit --no-fund
+
+      - name: Manual prebuild (bare android/ project)
+        run: |
+          set -euo pipefail
+          cd fixture
+          EXPO_NO_TELEMETRY=1 npx expo prebuild --platform android
+          # Timestamp sentinel: if the action re-runs prebuild, template files
+          # get rewritten and become newer than this marker (AC-4 check below).
+          touch "$RUNNER_TEMP/prebuild-done"
+
+      - name: Build without keystore (prebuild=auto must skip)
+        id: build
+        uses: ./expo-builder/build-android
+        with:
+          working-directory: fixture
+          format: apk
+
+      - name: Prebuild was skipped on the bare project (AC-4)
+        run: |
+          set -euo pipefail
+          rewritten="$(find fixture/android -maxdepth 2 \
+            \( -name 'build.gradle' -o -name 'settings.gradle' -o -name 'gradle.properties' \) \
+            -newer "$RUNNER_TEMP/prebuild-done" | wc -l)"
+          [[ "$rewritten" -eq 0 ]] || { echo "::error::prebuild regenerated template files — auto mode did not skip"; exit 1; }
+          [[ -f "${{ steps.build.outputs.apk-path }}" ]]
+
+      - name: APK is debug-signed (AC-3)
+        run: |
+          set -euo pipefail
+          apksigner="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n 1)/apksigner"
+          "$apksigner" verify --print-certs "${{ steps.build.outputs.apk-path }}" | grep -q 'CN=Android Debug'
+
+  deploy:
+    name: release round-trip (AC-6)
+    needs: [build-signed]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ITEST_TAG: itest-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: signed-apk
+          path: dist
+
+      - name: Deploy to a disposable release
+        id: deploy
+        uses: ./expo-builder/deploy-github-release
+        with:
+          files: dist/*.apk
+          tag: ${{ env.ITEST_TAG }}
+          prerelease: 'true'
+
+      - name: Release exists with APK and matching checksum (AC-6)
+        run: |
+          set -euo pipefail
+          gh release view "$ITEST_TAG" --json assets --jq '.assets[].name' | tee assets.txt
+          grep -q '\.apk$' assets.txt
+          grep -q '^sha256sums.txt$' assets.txt
+          gh release download "$ITEST_TAG" --pattern 'sha256sums.txt' --output sums.txt
+          apk="$(ls dist/*.apk)"
+          want="$(sha256sum "$apk" | awk '{print $1}')"
+          grep -q "^$want  $(basename "$apk")$" sums.txt
+
+      - name: Re-deploy with overwrite=false must fail
+        id: rerun
+        continue-on-error: true
+        uses: ./expo-builder/deploy-github-release
+        with:
+          files: dist/*.apk
+          tag: ${{ env.ITEST_TAG }}
+
+      - name: Overwrite guard held
+        run: |
+          set -euo pipefail
+          [[ "${{ steps.rerun.outcome }}" == "failure" ]] || { echo "::error::re-deploy on an existing tag should have failed"; exit 1; }
+
+      - name: Cleanup disposable release + tag
+        if: always()
+        run: gh release delete "$ITEST_TAG" --yes --cleanup-tag || true

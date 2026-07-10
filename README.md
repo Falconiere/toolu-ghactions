@@ -4,7 +4,7 @@
 
 ### CI quality gates for AI-written code
 
-Two GitHub Actions that carry [toolu](https://github.com/Falconiere/toolu)'s local quality discipline into CI: an **AI code reviewer** that audits every pull request and posts a machine-readable verdict, and a **Cloudflare Tunnel** action that exposes a runner port for live preview review.
+GitHub Actions that carry [toolu](https://github.com/Falconiere/toolu)'s local quality discipline into CI: an **AI code reviewer** that audits every pull request and posts a machine-readable verdict, a **Cloudflare Tunnel** action that exposes a runner port for live preview review, and an **Expo Android builder** that builds and releases Expo apps with no Expo/EAS account.
 
 [![Release](https://img.shields.io/github/v/release/Falconiere/toolu-ghactions?sort=semver&color=d97757)](https://github.com/Falconiere/toolu-ghactions/releases)
 [![Tests](https://img.shields.io/badge/tests-vitest-3fb950)](https://github.com/Falconiere/toolu-ghactions/actions/workflows/tests.yml)
@@ -31,6 +31,7 @@ AI coding agents open pull requests faster than human review scales. The discipl
 |---|---|---|---|
 | 🔍 | [**code-review**](./code-review/README.md) | AI pull-request review against an 8-dimension checklist, running one model via OpenRouter (any OpenAI-compatible id) or the native DeepSeek API, on the Vercel AI SDK. Posts a structured verdict and inline suggestions. | — |
 | 🌐 | [**cloudflare-tunnel**](./cloudflare-tunnel/README.md) | Expose a runner port to the public internet through a Cloudflare Tunnel — quick or named — for live preview and visual review. | `start` · `stop` · `wait` |
+| 📱 | [**expo-builder**](./expo-builder/README.md) | Build signed Expo Android APK/AABs with `expo prebuild` + Gradle — **no Expo/EAS account, no eas-cli** — and publish them to GitHub Releases with checksums. | `build-android` · `deploy-github-release` |
 
 Each action is self-contained and independently versioned; take both or lift one.
 
@@ -76,6 +77,27 @@ Model selection, custom checklists, project-convention scanning, and the full in
 
 Named tunnels, outputs, and troubleshooting → **[`cloudflare-tunnel/README.md`](./cloudflare-tunnel/README.md)**.
 
+### expo-builder
+
+```yaml
+- uses: falconiere/toolu-ghactions/expo-builder/build-android@v6
+  id: build
+  with:
+    format: both
+    keystore-base64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+    keystore-password: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+    key-alias: ${{ secrets.ANDROID_KEY_ALIAS }}
+    key-password: ${{ secrets.ANDROID_KEY_PASSWORD }}
+- uses: falconiere/toolu-ghactions/expo-builder/deploy-github-release@v6
+  with:
+    app-version: ${{ steps.build.outputs.app-version }}
+    files: |
+      ${{ steps.build.outputs.apk-path }}
+      ${{ steps.build.outputs.aab-path }}
+```
+
+All inputs/outputs, signing setup, and the account-free rationale → **[`expo-builder/README.md`](./expo-builder/README.md)**.
+
 ## How it works
 
 `code-review` runs a **shape → review → post** pipeline. One model reviews the diff via OpenRouter (default) or the native DeepSeek API; the SDK returns a Zod-validated verdict, which the action anchors to real lines and posts as a single comment.
@@ -116,6 +138,10 @@ Each action is listed on the GitHub Marketplace from its own mirror repo — [`t
 │   ├── start/ stop/ wait/  # Composite sub-actions (run on the runner host)
 │   ├── src/                # start.sh / stop.sh / wait.sh / install-cloudflared.sh
 │   └── __tests__/          # Hermetic bats test suite
+├── expo-builder/           # Expo Android build + release (no EAS account)
+│   ├── build-android/      # Composite: prebuild → init-script signing → Gradle
+│   ├── deploy-github-release/  # Composite: gh release + sha256sums.txt
+│   └── __tests__/          # Shared bats helpers (per-sub-action suites)
 ├── scripts/                # Shared helpers (parse-verdict.sh, mirror-action.sh)
 └── docs/toolu/             # Design specs and build plans
 ```
@@ -138,13 +164,13 @@ node build.mjs          # bundle src/ → dist/index.cjs (commit the result)
 
 ```bash
 # Run the bash suites (requires bats, jq, git)
-bats cloudflare-tunnel/__tests__/*.bats scripts/__tests__/*.bats
+bats cloudflare-tunnel/__tests__/*.bats scripts/__tests__/*.bats expo-builder/*/__tests__/*.bats
 
 # Lint shell scripts (warnings and above block CI)
-shellcheck --severity=warning cloudflare-tunnel/src/*.sh scripts/*.sh
+shellcheck --severity=warning cloudflare-tunnel/src/*.sh scripts/*.sh expo-builder/*/src/*.sh
 
 # Validate action.yml against GitHub's schema
-npx @action-validator/cli code-review/action.yml cloudflare-tunnel/*/action.yml
+npx @action-validator/cli code-review/action.yml cloudflare-tunnel/*/action.yml expo-builder/*/action.yml
 ```
 
 `code-review` tests use **real recorded fixtures** (OpenRouter + native DeepSeek responses, GitHub API payloads, real git repos) — no mocks, no API key needed. A CI check rebuilds `dist/` and fails if the committed bundle has drifted. See **[CONTRIBUTING.md](./CONTRIBUTING.md)**.
