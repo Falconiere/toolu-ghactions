@@ -59,6 +59,26 @@ function authorHasLastWord(thread: PriorThread): boolean {
  * resolve} plan. See the module header for the rules. Resolved threads are never acted on
  * again but still "cover" a matching finding so it is not re-posted as a duplicate.
  */
+/**
+ * Split this run's findings on whether a RESOLVED prior thread covers them. A human
+ * resolving the bot's thread is a decision — the finding must vanish everywhere
+ * (verdict count, verdict comment, inline posting), not just from re-posting.
+ * Matching mirrors reconcile()'s rules (fingerprint OR exact path+line) so the
+ * verdict never counts a finding the inline path would refuse to post.
+ */
+export function dropResolved<F extends ReconcileFinding>(
+  findings: F[],
+  priorThreads: PriorThread[],
+): { kept: F[]; suppressed: F[] } {
+  const resolved = priorThreads.filter((t) => t.isResolved);
+  const kept: F[] = [];
+  const suppressed: F[] = [];
+  for (const f of findings) {
+    (resolved.some((t) => matches(f, t)) ? suppressed : kept).push(f);
+  }
+  return { kept, suppressed };
+}
+
 export function reconcile<F extends ReconcileFinding>(
   findings: F[],
   priorThreads: PriorThread[],
