@@ -101,6 +101,20 @@ esac'
     [[ "$(grep '^release upload v9 ' "$SHIM_DIR/gh.calls")" == *"--clobber"* ]]
 }
 
+@test "asset named like the heredoc delimiter cannot truncate uploaded-assets" {
+    printf 'x' >"$DIST/EXPO_BUILDER_EOF"
+    EXPO_BUILDER_FILES="$DIST/EXPO_BUILDER_EOF
+$DIST/app.aab" EXPO_BUILDER_TAG="v9" run "$SCRIPT"
+    [ "$status" -eq 0 ]
+    delim="$(sed -n 's/^uploaded-assets<<//p' "$GITHUB_OUTPUT")"
+    [ -n "$delim" ]
+    [ "$delim" != "EXPO_BUILDER_EOF" ]
+    # Terminator present and both assets listed inside the block.
+    grep -qx "$delim" "$GITHUB_OUTPUT"
+    grep -qx 'EXPO_BUILDER_EOF' "$GITHUB_OUTPUT"
+    grep -qx 'app.aab' "$GITHUB_OUTPUT"
+}
+
 @test "draft and prerelease flags reach gh release create" {
     EXPO_BUILDER_FILES="$DIST/app.aab" EXPO_BUILDER_TAG="v9" \
         EXPO_BUILDER_DRAFT="true" EXPO_BUILDER_PRERELEASE="true" run "$SCRIPT"

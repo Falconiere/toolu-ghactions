@@ -80,10 +80,13 @@ fi
 
 gh release upload "$tag" "${assets[@]}" "${upload_args[@]}"
 
+# Unique heredoc delimiter — a static one could be matched by an asset
+# literally named like it, truncating the multiline output.
+delim="EXPO_BUILDER_EOF_$$_${SRANDOM:-$RANDOM}"
 {
   echo "release-url=$url"
-  echo "uploaded-assets<<EXPO_BUILDER_EOF"
+  echo "uploaded-assets<<$delim"
   for f in "${assets[@]}"; do basename "$f"; done
-  echo "EXPO_BUILDER_EOF"
+  echo "$delim"
 } >>"$GITHUB_OUTPUT"
 echo "[expo-builder] released ${#assets[@]} asset(s) to '$tag'"
