@@ -115,8 +115,12 @@ $DIST/app.aab" EXPO_BUILDER_TAG="v9" run "$SCRIPT"
     block="$(awk -v d="$delim" 'f && $0 == d {exit} f {print} $0 == "uploaded-assets<<" d {f=1}' "$GITHUB_OUTPUT")"
     grep -qx 'EXPO_BUILDER_EOF' <<<"$block"
     grep -qx 'app.aab' <<<"$block"
-    # Terminator line itself present after the header.
-    grep -qx "$delim" "$GITHUB_OUTPUT"
+    # Exactly one bare-delimiter line, and it sits AFTER the block header —
+    # i.e. it is the terminator, not a stray match elsewhere in the output.
+    [ "$(grep -cx "$delim" "$GITHUB_OUTPUT")" -eq 1 ]
+    hdr_line="$(grep -n "^uploaded-assets<<$delim\$" "$GITHUB_OUTPUT" | cut -d: -f1)"
+    term_line="$(grep -nx "$delim" "$GITHUB_OUTPUT" | cut -d: -f1)"
+    [ "$term_line" -gt "$hdr_line" ]
 }
 
 @test "draft and prerelease flags reach gh release create" {

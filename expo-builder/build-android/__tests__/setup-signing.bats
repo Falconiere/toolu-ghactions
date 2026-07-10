@@ -62,8 +62,9 @@ teardown() { common_teardown; }
     [ -s "$path" ]
     cmp -s "$path" "$BATS_TEST_TMPDIR/release.keystore"
     # Secrets must NOT persist in job-wide GITHUB_ENV — the Build step gets
-    # them step-scoped from the action inputs.
+    # them step-scoped from the action inputs. The keystore path is the ONLY
+    # line the script may write, so any future leak fails this count.
+    [ "$(grep -c . "$GITHUB_ENV")" -eq 1 ]
+    grep -q '^EXPO_BUILDER_KEYSTORE_PATH=' "$GITHUB_ENV"
     ! grep -q 'password1' "$GITHUB_ENV"
-    ! grep -q 'EXPO_BUILDER_KEYSTORE_PASSWORD' "$GITHUB_ENV"
-    ! grep -q 'EXPO_BUILDER_KEY_PASSWORD' "$GITHUB_ENV"
 }
