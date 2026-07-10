@@ -46,9 +46,14 @@ jobs:
           keytool -genkeypair -v -keystore "$RUNNER_TEMP/ci.keystore" \
             -storepass "$pass" -keypass "$pass" -alias release \
             -keyalg RSA -keysize 2048 -validity 1 -dname "CN=expo-builder-ci"
+          b64="$(base64 <"$RUNNER_TEMP/ci.keystore" | tr -d '\n')"
+          echo "::add-mask::$b64"
+          # Both values are masked. They are ephemeral test credentials (1-day
+          # validity, CN=expo-builder-ci, zero trust value) and this job runs
+          # only first-party steps; job-env residency is an accepted risk here.
           {
             echo "ITEST_KEYSTORE_PASS=$pass"
-            echo "KEYSTORE_B64=$(base64 <"$RUNNER_TEMP/ci.keystore" | tr -d '\n')"
+            echo "KEYSTORE_B64=$b64"
           } >>"$GITHUB_ENV"
 
       - name: Build APK + AAB (format=both, atomic)

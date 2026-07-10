@@ -33,7 +33,14 @@ case "$format" in
     ;;
 esac
 
-app_version="$(npx expo config --json --type public \
+# Capture first so an empty result gets its own explicit error instead of a
+# node JSON.parse stack trace; expo failures still propagate via set -e.
+config_json="$(npx expo config --json --type public)"
+if [ -z "$config_json" ]; then
+  echo "::error::'npx expo config --json --type public' produced no output"
+  exit 1
+fi
+app_version="$(printf '%s' "$config_json" \
   | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version ?? ""')"
 if [ -z "$app_version" ]; then
   echo "::error::could not resolve app version from 'npx expo config --json --type public'"
