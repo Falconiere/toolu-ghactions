@@ -19,7 +19,12 @@ if (ksPath != null && !ksPath.isEmpty()) {
                 sc.keyPassword = System.getenv('EXPO_BUILDER_KEY_PASSWORD')
                 ext.buildTypes.getByName('release').signingConfig = sc
 
-                def tmp = System.getenv('RUNNER_TEMP') ?: System.getProperty('java.io.tmpdir')
+                def tmp = System.getenv('RUNNER_TEMP')
+                if (tmp == null || tmp.isEmpty()) {
+                    // Must match build.sh's marker location exactly — no
+                    // divergent fallbacks between the two.
+                    throw new GradleException('[expo-builder] RUNNER_TEMP is required for the signing marker')
+                }
                 new File(tmp, 'expo-builder-signing-applied').text = project.path
                 project.logger.lifecycle("[expo-builder] release signing applied to ${project.path}")
             }

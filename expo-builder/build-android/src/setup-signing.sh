@@ -26,8 +26,9 @@ if [ "${#missing[@]}" -gt 0 ]; then
   exit 1
 fi
 
-# BSD (macOS) base64 decodes with -D on older systems, -d elsewhere.
-if printf 'x' | base64 | base64 -d >/dev/null 2>&1; then
+# BSD (macOS) base64 decodes with -D on older systems, -d elsewhere. Probe
+# with a known base64 string so the test exercises decode directly.
+if printf 'eA==' | base64 -d >/dev/null 2>&1; then
   decode_flag="-d"
 else
   decode_flag="-D"
@@ -41,10 +42,8 @@ if ! printf '%s' "$EXPO_BUILDER_INPUT_KEYSTORE_BASE64" | base64 "$decode_flag" >
 fi
 chmod 600 "$keystore"
 
-{
-  echo "EXPO_BUILDER_KEYSTORE_PATH=$keystore"
-  echo "EXPO_BUILDER_KEYSTORE_PASSWORD=$EXPO_BUILDER_INPUT_KEYSTORE_PASSWORD"
-  echo "EXPO_BUILDER_KEY_ALIAS=$EXPO_BUILDER_INPUT_KEY_ALIAS"
-  echo "EXPO_BUILDER_KEY_PASSWORD=$EXPO_BUILDER_INPUT_KEY_PASSWORD"
-} >>"$GITHUB_ENV"
+# Only the (non-secret) keystore path goes to GITHUB_ENV — job-wide env is
+# readable by every later step, including third-party actions. The passwords
+# reach the Build step directly from the action inputs as step-scoped env.
+echo "EXPO_BUILDER_KEYSTORE_PATH=$keystore" >>"$GITHUB_ENV"
 echo "[expo-builder] release keystore ready: $keystore"

@@ -38,12 +38,18 @@ jobs:
           npm install --no-audit --no-fund
 
       - name: Generate throwaway release keystore (real keytool)
+        # Password is random per run and masked — never a literal in this file.
         run: |
           set -euo pipefail
+          pass="$(openssl rand -hex 16)"
+          echo "::add-mask::$pass"
           keytool -genkeypair -v -keystore "$RUNNER_TEMP/ci.keystore" \
-            -storepass password1 -keypass password1 -alias release \
+            -storepass "$pass" -keypass "$pass" -alias release \
             -keyalg RSA -keysize 2048 -validity 1 -dname "CN=expo-builder-ci"
-          echo "KEYSTORE_B64=$(base64 <"$RUNNER_TEMP/ci.keystore" | tr -d '\n')" >>"$GITHUB_ENV"
+          {
+            echo "ITEST_KEYSTORE_PASS=$pass"
+            echo "KEYSTORE_B64=$(base64 <"$RUNNER_TEMP/ci.keystore" | tr -d '\n')"
+          } >>"$GITHUB_ENV"
 
       - name: Build APK + AAB (format=both, atomic)
         id: build
@@ -52,9 +58,9 @@ jobs:
           working-directory: fixture
           format: both
           keystore-base64: ${{ env.KEYSTORE_B64 }}
-          keystore-password: password1
+          keystore-password: ${{ env.ITEST_KEYSTORE_PASS }}
           key-alias: release
-          key-password: password1
+          key-password: ${{ env.ITEST_KEYSTORE_PASS }}
 
       - name: APK is signed by OUR keystore (AC-1)
         run: |

@@ -30,7 +30,9 @@ if [ "${EXPO_BUILDER_DRY_RUN:-0}" = "1" ]; then
   exit 0
 fi
 
-marker="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/expo-builder-signing-applied"
+# Must match signing.init.gradle's marker location exactly — both key off
+# RUNNER_TEMP alone, so require it rather than risk divergent fallbacks.
+marker="${RUNNER_TEMP:?RUNNER_TEMP is required (set by the Actions runner)}/expo-builder-signing-applied"
 rm -f "$marker"
 
 cd android
