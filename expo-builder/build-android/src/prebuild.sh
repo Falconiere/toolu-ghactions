@@ -31,9 +31,13 @@ esac
 
 args=(--platform android)
 if [ -n "${EXPO_BUILDER_PREBUILD_ARGS:-}" ]; then
-  # Intentional word-splitting of the user-supplied extra args.
+  # Intentional word-splitting of the user-supplied extra args. Length guard:
+  # whitespace-only input yields an empty array, whose quoted expansion errors
+  # under bash 3.2 (macOS) + set -u.
   read -r -a extra <<<"$EXPO_BUILDER_PREBUILD_ARGS"
-  args+=("${extra[@]}")
+  if [ "${#extra[@]}" -gt 0 ]; then
+    args+=("${extra[@]}")
+  fi
 fi
 
 echo "[expo-builder] npx expo prebuild ${args[*]}"

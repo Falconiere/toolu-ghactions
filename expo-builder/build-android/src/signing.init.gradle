@@ -6,16 +6,18 @@ def ksPath = System.getenv('EXPO_BUILDER_KEYSTORE_PATH')
 if (ksPath != null && !ksPath.isEmpty()) {
     gradle.beforeProject { project ->
         project.plugins.withId('com.android.application') {
-            // afterEvaluate so this wins over the template's own
-            // `release { signingConfig signingConfigs.debug }` assignment.
-            project.afterEvaluate {
-                def android = project.extensions.getByName('android')
-                def sc = android.signingConfigs.maybeCreate('expoBuilderRelease')
+            // finalizeDsl is AGP's sanctioned hook: it runs after the app's
+            // build.gradle DSL (so this wins over the template's
+            // `release { signingConfig signingConfigs.debug }`) but before AGP
+            // seals signing configs — afterEvaluate fails with "It is too late
+            // to add new signing configs".
+            project.extensions.getByName('androidComponents').finalizeDsl { ext ->
+                def sc = ext.signingConfigs.maybeCreate('expoBuilderRelease')
                 sc.storeFile = new File(ksPath)
                 sc.storePassword = System.getenv('EXPO_BUILDER_KEYSTORE_PASSWORD')
                 sc.keyAlias = System.getenv('EXPO_BUILDER_KEY_ALIAS')
                 sc.keyPassword = System.getenv('EXPO_BUILDER_KEY_PASSWORD')
-                android.buildTypes.getByName('release').signingConfig = sc
+                ext.buildTypes.getByName('release').signingConfig = sc
 
                 def tmp = System.getenv('RUNNER_TEMP') ?: System.getProperty('java.io.tmpdir')
                 new File(tmp, 'expo-builder-signing-applied').text = project.path

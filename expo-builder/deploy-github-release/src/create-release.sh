@@ -78,7 +78,8 @@ else
   url="$(gh release create "$tag" "${create_args[@]}")"
 fi
 
-gh release upload "$tag" "${assets[@]}" "${upload_args[@]}"
+# ${arr[@]+...} guard: bash 3.2 (macOS) + set -u errors on expanding an empty array.
+gh release upload "$tag" "${assets[@]}" ${upload_args[@]+"${upload_args[@]}"}
 
 # Unique heredoc delimiter — a static one could be matched by an asset
 # literally named like it, truncating the multiline output.
