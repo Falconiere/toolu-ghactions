@@ -1,5 +1,20 @@
 # Changelog
 
+## [6.1.0](https://github.com/Falconiere/toolu-ghactions/compare/v6.0.2...v6.1.0) (2026-07-11)
+
+
+### Features
+
+* **expo-builder:** add no-EAS Android build + GitHub Releases deploy suite ([bb2be9e](https://github.com/Falconiere/toolu-ghactions/commit/bb2be9e7a494b04976894fbfff758a944819901a))
+
+
+### Bug Fixes
+
+* **expo-builder:** address CI review findings ([147722b](https://github.com/Falconiere/toolu-ghactions/commit/147722baedd4a234fd247531cfe5436f49b79063))
+* **expo-builder:** AGP finalizeDsl signing hook + bash-3.2 empty-array guards ([efa44fc](https://github.com/Falconiere/toolu-ghactions/commit/efa44fc7b91938a74d15c188eb4a6df7f7ef1b57))
+* **expo-builder:** second review round — mask keystore b64, harden assertions ([4b676c5](https://github.com/Falconiere/toolu-ghactions/commit/4b676c508f05726531b3ff4d771abe2313e9f6a4))
+* **expo-builder:** unique heredoc delimiter for uploaded-assets output ([99f8fa9](https://github.com/Falconiere/toolu-ghactions/commit/99f8fa9df2293b5f12e50e7b2acfd545bcebd60c))
+
 ## [6.0.2](https://github.com/Falconiere/toolu-ghactions/compare/v6.0.1...v6.0.2) (2026-07-11)
 
 
