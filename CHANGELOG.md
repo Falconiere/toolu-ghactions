@@ -1,5 +1,12 @@
 # Changelog
 
+## [6.0.2](https://github.com/Falconiere/toolu-ghactions/compare/v6.0.1...v6.0.2) (2026-07-11)
+
+
+### Bug Fixes
+
+* **release:** serialize release runs repo-wide to stop mirror tag races ([f532288](https://github.com/Falconiere/toolu-ghactions/commit/f53228832f1feb8c64af3aca1208a24b959493bf))
+
 ## [6.0.1](https://github.com/Falconiere/toolu-ghactions/compare/v6.0.0...v6.0.1) (2026-07-10)
 
 
