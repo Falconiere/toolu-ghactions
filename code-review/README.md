@@ -455,6 +455,12 @@ earlier inline threads instead of blindly re-posting every finding:
   existing thread** (engaging the author's reasoning), not as a duplicate comment.
 - ⤵️ **dedup** — only genuinely new findings open new threads; leftover duplicate
   threads for the same finding are resolved.
+- 🔒 **respects resolutions** — **resolving a bot thread dismisses that finding**:
+  on later runs it is dropped from the verdict count, the summary comment, and
+  inline posting alike, instead of being re-litigated forever. When every
+  remaining finding was human-resolved, a `request-changes` verdict downgrades to
+  `merge-approved`. This works even with `INLINE_COMMENTS: false` (threads from
+  earlier inline-enabled runs still suppress).
 
 Threads are matched to findings by the same line-independent fingerprint used by
 [Review memory](#review-memory), carried in a hidden marker on each inline comment.

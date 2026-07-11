@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reconcile } from "@/review/reconcile.js";
+import { dropResolved, reconcile } from "@/review/reconcile.js";
 import type { ReconcileFinding } from "@/review/reconcile.js";
 import type { PriorThread, ThreadComment } from "@/github/threads.js";
 
@@ -181,5 +181,48 @@ describe("reconcile", () => {
     expect(plan.toCreate).toEqual([fresh]);
     expect(plan.toReply.map((r) => r.thread.threadId)).toEqual(["T_keep"]);
     expect(plan.toResolve.map((t) => t.threadId)).toEqual(["T_drop"]);
+  });
+});
+
+describe("dropResolved", () => {
+  it("suppresses a finding whose resolved thread matches by fingerprint (line drifted)", () => {
+    const f = finding({ fp: "fp-done", line: 42 });
+    const t = thread({ fp: "fp-done", line: 10, isResolved: true });
+    const { kept, suppressed } = dropResolved([f], [t]);
+    expect(kept).toEqual([]);
+    expect(suppressed).toEqual([f]);
+  });
+
+  it("suppresses a reworded finding whose resolved thread matches by exact path+line", () => {
+    const f = finding({ fp: "fp-reworded", path: "src/a.ts", line: 10 });
+    const t = thread({ fp: "fp-original", path: "src/a.ts", line: 10, isResolved: true });
+    const { kept, suppressed } = dropResolved([f], [t]);
+    expect(kept).toEqual([]);
+    expect(suppressed).toEqual([f]);
+  });
+
+  it("keeps a finding whose matching thread is NOT resolved", () => {
+    const f = finding({ fp: "fp-open" });
+    const t = thread({ fp: "fp-open", isResolved: false });
+    const { kept, suppressed } = dropResolved([f], [t]);
+    expect(kept).toEqual([f]);
+    expect(suppressed).toEqual([]);
+  });
+
+  it("keeps everything when there are no prior threads", () => {
+    const f = finding({ fp: "fp-any" });
+    const { kept, suppressed } = dropResolved([f], []);
+    expect(kept).toEqual([f]);
+    expect(suppressed).toEqual([]);
+  });
+
+  it("splits a mixed run: resolved-covered suppressed, the rest kept", () => {
+    const done = finding({ fp: "fp-done", path: "src/d.ts", line: 3 });
+    const live = finding({ fp: "fp-live", path: "src/l.ts", line: 4 });
+    const resolvedThread = thread({ fp: "fp-done", path: "src/d.ts", line: 3, isResolved: true });
+    const openThread = thread({ fp: "fp-live", path: "src/l.ts", line: 4, isResolved: false });
+    const { kept, suppressed } = dropResolved([done, live], [resolvedThread, openThread]);
+    expect(kept).toEqual([live]);
+    expect(suppressed).toEqual([done]);
   });
 });

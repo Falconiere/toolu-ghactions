@@ -799,6 +799,96 @@ describe("runReview — thread-aware inline reconciliation", () => {
     expect(rec.replies).toEqual([]);
     expect(rec.resolved).toEqual([]);
   });
+
+  it("a RESOLVED thread suppresses its finding everywhere: verdict, comment, count, inline", async () => {
+    const { dir, headSha } = track(featureRepoWithChange());
+    const f0 = fixtureFinding("findings", 0); // src/util.ts:2 — the fixture's only finding
+    const seed: SeedThread = {
+      threadId: "T_done",
+      rootCommentId: 8001,
+      fp: fingerprint(f0),
+      path: f0.path,
+      line: 2,
+      isResolved: true, // a human closed the conversation
+    };
+    const { octokit, rec } = fakeOctokit([], [seed]);
+
+    const result = await runReview({
+      inputs: baseInputs(),
+      octokit,
+      context: prContext(headSha),
+      fetch: replayFetch("findings"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    // The only finding was human-resolved → dropped from the count AND the model's
+    // "changes" verdict is downgraded: nothing concrete is left to request changes for.
+    expect(result.findingsCount).toBe(0);
+    expect(result.verdict).toBe("approved");
+    expect(rec.addedLabels).toContainEqual(["merge-approved"]);
+    // Not re-posted inline, not replied to, and the resolved thread is never re-acted on.
+    expect(rec.reviews).toEqual([]);
+    expect(rec.replies).toEqual([]);
+    expect(rec.resolved).toEqual([]);
+    // The verdict comment no longer carries the suppressed finding's text.
+    const lastBody = rec.updated.at(-1)?.body ?? rec.created.at(-1)?.body ?? "";
+    expect(lastBody).not.toContain("performs subtraction");
+  });
+
+  it("an UNRESOLVED matching thread still counts toward the verdict (only posting is deduped)", async () => {
+    const { dir, headSha } = track(featureRepoWithChange());
+    const f0 = fixtureFinding("findings", 0);
+    const seed: SeedThread = {
+      threadId: "T_open",
+      rootCommentId: 8002,
+      fp: fingerprint(f0),
+      path: f0.path,
+      line: 2,
+      isResolved: false,
+    };
+    const { octokit, rec } = fakeOctokit([], [seed]);
+
+    const result = await runReview({
+      inputs: baseInputs(),
+      octokit,
+      context: prContext(headSha),
+      fetch: replayFetch("findings"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    expect(result.findingsCount).toBe(1);
+    expect(result.verdict).toBe("changes");
+    expect(rec.reviews).toEqual([]); // deduped inline (existing thread covers it)
+  });
+
+  it("suppression works with inline comments OFF (threads from earlier runs still count)", async () => {
+    const { dir, headSha } = track(featureRepoWithChange());
+    const f0 = fixtureFinding("findings", 0);
+    const seed: SeedThread = {
+      threadId: "T_done",
+      rootCommentId: 8003,
+      fp: fingerprint(f0),
+      path: f0.path,
+      line: 2,
+      isResolved: true,
+    };
+    const { octokit, rec } = fakeOctokit([], [seed]);
+
+    const result = await runReview({
+      inputs: baseInputs({ inlineComments: false }),
+      octokit,
+      context: prContext(headSha),
+      fetch: replayFetch("findings"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    expect(result.findingsCount).toBe(0);
+    expect(result.verdict).toBe("approved");
+    expect(rec.reviews).toEqual([]);
+  });
 });
 
 // FAIL_ON merge gate composed with a REAL pipeline verdict (recorded fixtures, no

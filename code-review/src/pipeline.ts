@@ -32,7 +32,7 @@ import { postInlineReview } from "./github/review.js";
 import type { ReviewTarget } from "./github/review.js";
 import { fetchReviewThreads, resolveThread, replyToThread } from "./github/threads.js";
 import type { PriorThread } from "./github/threads.js";
-import { reconcile } from "./review/reconcile.js";
+import { dropResolved, reconcile } from "./review/reconcile.js";
 import { setVerdictLabel } from "./github/label.js";
 import type { LabelTarget } from "./github/label.js";
 import {
@@ -151,12 +151,11 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
   }
 
   // --- Fetch the bot's prior inline review threads (best-effort, never throws). These
-  // drive accept-or-argue (the author's replies go into the prompt) + dedup/resolve, so a
-  // re-review reacts to what the author SAID instead of blindly re-posting every finding.
-  // Only when inline comments are enabled (otherwise the bot owns no threads). ---
-  const priorThreads: PriorThread[] = inputs.inlineComments
-    ? await fetchReviewThreads(octokit, target)
-    : [];
+  // drive accept-or-argue (the author's replies go into the prompt), dedup/resolve, AND
+  // resolved-thread suppression of the verdict, so a re-review reacts to what the author
+  // SAID and DID instead of blindly re-raising every finding. Fetched even with inline
+  // comments off: threads from earlier inline-enabled runs must still suppress. ---
+  const priorThreads: PriorThread[] = await fetchReviewThreads(octokit, target);
 
   // --- Resolve the head SHA the review/state anchors to. ---
   const headSha = resolveHeadSha(reviewHead, context.sha, cwd);
@@ -241,14 +240,30 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
       new Map(Object.entries(f.line_text).map(([n, text]) => [Number(n), text])),
     ]),
   );
-  const findings = validateFindings(
+  const anchored = validateFindings(
     result.findings,
     changedLinesByPath,
     inputs.minConfidence,
     lineTextByPath,
   );
+  // --- Respect human-resolved threads BEFORE the verdict: a finding whose bot thread a
+  // human resolved is dropped everywhere — count, verdict comment, and inline posting —
+  // instead of being re-litigated forever (fp is stable across line drift). ---
+  const stamped = anchored.map((f) => ({ ...f, fp: fingerprint(f) }));
+  const { kept: findings, suppressed } = dropResolved(stamped, priorThreads);
+  if (suppressed.length > 0) {
+    process.stdout.write(
+      `  Suppressed ${suppressed.length} finding(s) already resolved on existing threads\n`,
+    );
+  }
   const validated: ProviderResult = { ...result, findings };
-  const verdict = resolveVerdict(validated.verdict, findings.length);
+  let verdict = resolveVerdict(validated.verdict, findings.length);
+  if (verdict === "changes" && findings.length === 0 && suppressed.length > 0) {
+    // Every concrete finding was human-resolved on its thread; keeping the model's
+    // request-changes would re-block on decisions a human already made.
+    verdict = "approved";
+    validated.verdict = "approved";
+  }
 
   // --- Review memory: diff current findings vs prior, render recap + marker. ---
   let recap = "";
@@ -310,9 +325,8 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     // The Reviews API needs a commit_id that is IN the PR; the merge sha is not (it
     // 422s and the comments vanish), so anchor to the PR head sha when present.
     const reviewTarget: typeof target = { ...target, headSha: context.headSha ?? headSha };
-    // Stamp each finding with its fingerprint so reconcile can match it to a prior thread.
-    const withFp = findings.map((f) => ({ ...f, fp: fingerprint(f) }));
-    const plan = reconcile(withFp, priorThreads);
+    // Findings were fingerprint-stamped before the resolved-thread suppression above.
+    const plan = reconcile(findings, priorThreads);
 
     // 1. Genuinely new findings → one fresh inline review.
     const r = await postInlineReview(octokit, plan.toCreate, reviewTarget);
