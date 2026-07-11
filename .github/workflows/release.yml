@@ -19,7 +19,12 @@ permissions:
   issues: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  # One release pipeline at a time REPO-WIDE, not per ref: the push-to-main run
+  # and the release-published run fire seconds apart with DIFFERENT refs
+  # (refs/heads/main vs the tag) and both force-move the same v<major> alias on
+  # the mirrors — per-ref groups let them race mid-push ("cannot lock ref
+  # 'refs/tags/v6': is at X but expected Y"). Serialize instead; never cancel.
+  group: release
   cancel-in-progress: false
 
 jobs:
