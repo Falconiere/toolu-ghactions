@@ -18,7 +18,9 @@ upload_timeout="${EXPO_BUILDER_PLAY_UPLOAD_TIMEOUT:-600}"
 token_script="${EXPO_BUILDER_PLAY_TOKEN_SCRIPT:?EXPO_BUILDER_PLAY_TOKEN_SCRIPT is required}"
 
 sa_b64="${EXPO_BUILDER_PLAY_SA_B64:-}"
-if printf 'eA==' | base64 -d >/dev/null 2>&1; then decode_flag="-d"; else decode_flag="-D"; fi
+# shellcheck source=src/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+decode_flag="$(b64_decode_flag)"
 if [ -z "$sa_b64" ] || ! sa_json="$(printf '%s' "$sa_b64" | base64 "$decode_flag" 2>/dev/null)" \
   || [ -z "$(printf '%s' "$sa_json" | jq -r '.client_email // empty' 2>/dev/null)" ] \
   || [ -z "$(printf '%s' "$sa_json" | jq -r '.private_key // empty' 2>/dev/null)" ]; then
@@ -67,7 +69,10 @@ api_call() {
   local label="$1"
   shift 1
   local http_code rc=0
-  http_code="$(curl -sS -o "$body" -w '%{http_code}' \
+  # Base --max-time guards the small JSON round-trips against silent hangs;
+  # the bundle upload passes its own later --max-time, which wins (curl
+  # last-flag semantics).
+  http_code="$(curl -sS -o "$body" -w '%{http_code}' --max-time 120 \
     -H "Authorization: Bearer $token" "$@")" || rc=$?
   if [ "$rc" -ne 0 ]; then
     local meaning="curl exit $rc"
@@ -87,7 +92,7 @@ api_call() {
       *applicationNotFound*)
         extra=" Hint: the first AAB for a package must be uploaded manually in Play Console, and the service account needs access to this app."
         ;;
-      *[Rr]eview*)
+      *"for review"* | *"in review"*)
         if [ "$label" = "commit edit" ]; then
           extra=" Hint: apps that have never passed Play review must use release-status: draft."
         fi
@@ -95,7 +100,7 @@ api_call() {
     esac
     case "$msg" in
       *editExpired* | *EDIT_EXPIRED* | *editAlreadyCommitted*)
-        extra=" Hint: the Play edit expired or was superseded mid-deploy — re-run the workflow."
+        extra="${extra} Hint: the Play edit expired or was superseded mid-deploy — re-run the workflow."
         ;;
     esac
     echo "::error::$label failed (HTTP $http_code): ${msg}${extra}"

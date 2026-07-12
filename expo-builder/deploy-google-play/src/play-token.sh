@@ -8,12 +8,9 @@ set -euo pipefail
 
 sa_b64="${EXPO_BUILDER_PLAY_SA_B64:?EXPO_BUILDER_PLAY_SA_B64 is required}"
 
-# BSD (macOS) base64 decodes with -D on older systems, -d elsewhere (P1 probe).
-if printf 'eA==' | base64 -d >/dev/null 2>&1; then
-  decode_flag="-d"
-else
-  decode_flag="-D"
-fi
+# shellcheck source=src/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+decode_flag="$(b64_decode_flag)"
 
 if ! sa_json="$(printf '%s' "$sa_b64" | base64 "$decode_flag" 2>/dev/null)" || [ -z "$sa_json" ]; then
   echo "::error::service-account-json-base64 did not decode (is it base64 of the key JSON?)" >&2
@@ -32,9 +29,10 @@ fi
 workdir="$(mktemp -d "${RUNNER_TEMP:?RUNNER_TEMP is required}/expo-builder-play.XXXXXX")"
 trap 'rm -rf "$workdir"' EXIT
 keyfile="$workdir/sa.key"
-: >"$keyfile"
-chmod 600 "$keyfile"
-printf '%s\n' "$private_key" >"$keyfile"
+# Subshell umask: the file is born 0600 — no window with default permissions.
+# The trailing newline restores the one command substitution stripped; PEM
+# parsers require the END line to be newline-terminated.
+(umask 077 && printf '%s\n' "$private_key" >"$keyfile")
 
 b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
 

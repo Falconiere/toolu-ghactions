@@ -111,18 +111,21 @@ esac"
     ! grep -q 'ya29' "$GITHUB_OUTPUT"
 }
 
-@test "validation failures make zero network calls" {
-    for case_env in \
-        "EXPO_BUILDER_PLAY_SA_B64=%%%bad%%%" \
-        "EXPO_BUILDER_PLAY_PACKAGE=" \
-        "EXPO_BUILDER_PLAY_AAB=$BATS_TEST_TMPDIR/missing.aab" \
-        "EXPO_BUILDER_PLAY_TRACK=" \
-        "EXPO_BUILDER_PLAY_STATUS=inProgress" \
-        "EXPO_BUILDER_PLAY_UPLOAD_TIMEOUT=zero"; do
+@test "validation failures name their error and make zero network calls" {
+    for case_spec in \
+        "EXPO_BUILDER_PLAY_SA_B64=%%%bad%%%|service-account-json-base64" \
+        "EXPO_BUILDER_PLAY_PACKAGE=|package-name is required" \
+        "EXPO_BUILDER_PLAY_AAB=$BATS_TEST_TMPDIR/missing.aab|no AAB at" \
+        "EXPO_BUILDER_PLAY_TRACK=|invalid track" \
+        "EXPO_BUILDER_PLAY_STATUS=inProgress|invalid release-status" \
+        "EXPO_BUILDER_PLAY_UPLOAD_TIMEOUT=zero|upload-timeout must be a positive integer"; do
+        case_env="${case_spec%%|*}"
+        want="${case_spec#*|}"
         rm -f "$SHIM_DIR/curl.calls"
         run env "$case_env" "$SCRIPT"
         [ "$status" -eq 1 ]
         [[ "$output" == *"::error::"* ]]
+        [[ "$output" == *"$want"* ]]
         [ ! -f "$SHIM_DIR/curl.calls" ]
     done
 }
@@ -192,4 +195,19 @@ esac"
     [ "$status" -eq 1 ]
     [[ "$output" == *"bundle upload transport failure (curl exit 28 — timed out)"* ]]
     [[ "$output" != *"HTTP"* ]]
+}
+
+@test "curl exits 35 and 52 carry their transport meanings" {
+    for spec in "35|TLS handshake failure" "52|empty reply from server"; do
+        code="${spec%%|*}"
+        want="${spec#*|}"
+        make_shim curl "$SHIM_PREAMBLE
+case \"\$url\" in
+  *oauth2.googleapis.com*) cat '$FIXTURES/token.json' >\"\$out\"; printf 200 ;;
+  */edits*)                exit $code ;;
+esac"
+        run "$SCRIPT"
+        [ "$status" -eq 1 ]
+        [[ "$output" == *"insert edit transport failure (curl exit $code — $want)"* ]]
+    done
 }

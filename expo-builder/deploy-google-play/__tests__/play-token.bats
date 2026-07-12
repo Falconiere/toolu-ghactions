@@ -80,6 +80,17 @@ b64url_decode() {
     [ "$status" -ne 0 ]
 }
 
+@test "key file is 0600 WHILE the script runs (observed from inside the curl call)" {
+    # The curl shim runs while the key file exists — record its permissions.
+    make_shim curl "
+kf=\$(find \"\$RUNNER_TEMP\" -name sa.key 2>/dev/null | head -n 1)
+if [ -n \"\$kf\" ]; then ls -l \"\$kf\" | cut -c1-10 >'$SHIM_DIR/keyperms'; fi
+$(replay_body token.json 200)"
+    EXPO_BUILDER_PLAY_SA_B64="$SA_B64" run "$SCRIPT"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$SHIM_DIR/keyperms")" = "-rw-------" ]
+}
+
 @test "invalid base64 fails before any curl call" {
     EXPO_BUILDER_PLAY_SA_B64="%%%not-base64%%%" run "$SCRIPT"
     [ "$status" -eq 1 ]
