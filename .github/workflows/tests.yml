@@ -215,7 +215,7 @@ jobs:
       - name: Install bats + jq
         uses: ./.github/actions/setup-bats
       - name: Run expo-builder test suite
-        run: bats expo-builder/build-android/__tests__/*.bats expo-builder/deploy-github-release/__tests__/*.bats
+        run: bats expo-builder/build-android/__tests__/*.bats expo-builder/deploy-github-release/__tests__/*.bats expo-builder/deploy-google-play/__tests__/*.bats
 
   expo-lint:
     name: expo-builder shellcheck + action-validator
@@ -225,10 +225,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: shellcheck
-        run: shellcheck --severity=warning expo-builder/build-android/src/*.sh expo-builder/deploy-github-release/src/*.sh
+        run: shellcheck --severity=warning expo-builder/build-android/src/*.sh expo-builder/deploy-github-release/src/*.sh expo-builder/deploy-google-play/src/*.sh
       - name: Install action-validator
         run: npm i -g @action-validator/cli
       - name: action-validator (build-android)
         run: action-validator expo-builder/build-android/action.yml
       - name: action-validator (deploy-github-release)
         run: action-validator expo-builder/deploy-github-release/action.yml
+      - name: action-validator (deploy-google-play)
+        run: action-validator expo-builder/deploy-google-play/action.yml
