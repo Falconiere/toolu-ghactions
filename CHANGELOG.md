@@ -1,5 +1,12 @@
 # Changelog
 
+## [6.2.1](https://github.com/Falconiere/toolu-ghactions/compare/v6.2.0...v6.2.1) (2026-07-12)
+
+
+### Bug Fixes
+
+* **code-review:** feed resolved threads to the model as dismissed findings ([8e268b6](https://github.com/Falconiere/toolu-ghactions/commit/8e268b6ba56cde12c6441c4b4d81b63977dab963))
+
 ## [6.2.0](https://github.com/Falconiere/toolu-ghactions/compare/v6.1.0...v6.2.0) (2026-07-12)
 
 
