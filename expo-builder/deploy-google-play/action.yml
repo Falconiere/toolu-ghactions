@@ -1,0 +1,70 @@
+name: 'Expo Deploy Google Play'
+description: >-
+  Upload a built AAB to a Google Play track with a service account — native
+  Android Publisher API v3 via curl, no fastlane, no third-party actions,
+  no Expo/EAS account.
+author: 'Falconiere Barbosa'
+branding:
+  icon: 'play'
+  color: 'green'
+
+inputs:
+  service-account-json-base64:
+    description: >-
+      Base64 of the Play service-account key JSON (secret). Base64 avoids
+      CRLF/newline mangling of the embedded PEM when passed through env.
+    required: true
+  package-name:
+    description: 'Application package name (e.g. com.example.app). Must already exist in Play Console — the API cannot register a new app.'
+    required: true
+  aab-path:
+    description: "Path to the AAB — pipe expo-builder/build-android's aab-path output."
+    required: true
+  track:
+    description: 'Play track: internal | alpha | beta | production, a custom closed-track id, or a form-factor track (e.g. wear:production). Passed verbatim.'
+    required: false
+    default: 'internal'
+  release-status:
+    description: 'completed | draft. Apps that have never passed Play review MUST use draft.'
+    required: false
+    default: 'completed'
+  changes-not-sent-for-review:
+    description: >-
+      true: commit with changesNotSentForReview=true — hold the change from
+      Play review submission (pairs with draft releases on not-yet-reviewed
+      apps; harmless otherwise).
+    required: false
+    default: 'false'
+  upload-timeout:
+    description: >-
+      Seconds (curl --max-time) for the bundle upload call ONLY. Typical AABs
+      upload in seconds; raise for 100MB+ artifacts or slow runners.
+    required: false
+    default: '600'
+
+outputs:
+  version-code:
+    description: 'versionCode of the uploaded bundle (from the Play API response).'
+    value: ${{ steps.deploy.outputs.version-code }}
+  track:
+    description: 'The track the release landed on.'
+    value: ${{ steps.deploy.outputs.track }}
+
+runs:
+  using: 'composite'
+  steps:
+    # Single step on purpose: the service-account key and the OAuth token live
+    # only inside this step's process tree — never in GITHUB_ENV or outputs.
+    - name: Deploy to Google Play
+      id: deploy
+      shell: bash
+      env:
+        EXPO_BUILDER_PLAY_SA_B64: ${{ inputs.service-account-json-base64 }}
+        EXPO_BUILDER_PLAY_PACKAGE: ${{ inputs.package-name }}
+        EXPO_BUILDER_PLAY_AAB: ${{ inputs.aab-path }}
+        EXPO_BUILDER_PLAY_TRACK: ${{ inputs.track }}
+        EXPO_BUILDER_PLAY_STATUS: ${{ inputs.release-status }}
+        EXPO_BUILDER_PLAY_HOLD_REVIEW: ${{ inputs.changes-not-sent-for-review }}
+        EXPO_BUILDER_PLAY_UPLOAD_TIMEOUT: ${{ inputs.upload-timeout }}
+        EXPO_BUILDER_PLAY_TOKEN_SCRIPT: ${{ github.action_path }}/src/play-token.sh
+      run: '"${{ github.action_path }}/src/deploy.sh"'

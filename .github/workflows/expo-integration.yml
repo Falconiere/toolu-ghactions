@@ -91,6 +91,13 @@ jobs:
           path: ${{ steps.build.outputs.apk-path }}
           if-no-files-found: error
 
+      - name: Hand the AAB to the Play deploy job
+        uses: actions/upload-artifact@v7
+        with:
+          name: signed-aab
+          path: ${{ steps.build.outputs.aab-path }}
+          if-no-files-found: error
+
   debug-fallback:
     name: debug fallback + prebuild skip (AC-3, AC-4)
     runs-on: ubuntu-latest
@@ -189,3 +196,44 @@ jobs:
       - name: Cleanup disposable release + tag
         if: always()
         run: gh release delete "$ITEST_TAG" --yes --cleanup-tag || true
+
+  play-deploy:
+    name: Google Play draft round-trip (AC-6)
+    needs: [build-signed]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Job-level env can read `secrets`; a step `if:` cannot (release.yml
+    # HAS_PUSH_TOKEN pattern). Without the Play secrets the job skips cleanly
+    # instead of failing every run red.
+    env:
+      HAS_PLAY_SECRETS: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON_B64 != '' && secrets.PLAY_PACKAGE_NAME != '' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Skip notice (no Play secrets)
+        if: env.HAS_PLAY_SECRETS != 'true'
+        run: echo "::notice::PLAY_SERVICE_ACCOUNT_JSON_B64 / PLAY_PACKAGE_NAME not set — skipping the live Google Play draft upload."
+
+      - uses: actions/download-artifact@v8
+        if: env.HAS_PLAY_SECRETS == 'true'
+        with:
+          name: signed-aab
+          path: dist
+
+      - name: Deploy draft to the internal track
+        if: env.HAS_PLAY_SECRETS == 'true'
+        id: play
+        uses: ./expo-builder/deploy-google-play
+        with:
+          service-account-json-base64: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON_B64 }}
+          package-name: ${{ secrets.PLAY_PACKAGE_NAME }}
+          aab-path: dist/app-release.aab
+          track: internal
+          release-status: draft
+
+      - name: Release landed (AC-6)
+        if: env.HAS_PLAY_SECRETS == 'true'
+        run: |
+          set -euo pipefail
+          [[ "${{ steps.play.outputs.version-code }}" =~ ^[0-9]+$ ]]
+          [[ "${{ steps.play.outputs.track }}" == "internal" ]]

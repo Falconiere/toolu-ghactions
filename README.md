@@ -31,7 +31,7 @@ AI coding agents open pull requests faster than human review scales. The discipl
 |---|---|---|---|
 | 🔍 | [**code-review**](./code-review/README.md) | AI pull-request review against an 8-dimension checklist, running one model via OpenRouter (any OpenAI-compatible id) or the native DeepSeek API, on the Vercel AI SDK. Posts a structured verdict and inline suggestions. | — |
 | 🌐 | [**cloudflare-tunnel**](./cloudflare-tunnel/README.md) | Expose a runner port to the public internet through a Cloudflare Tunnel — quick or named — for live preview and visual review. | `start` · `stop` · `wait` |
-| 📱 | [**expo-builder**](./expo-builder/README.md) | Build signed Expo Android APK/AABs with `expo prebuild` + Gradle — **no Expo/EAS account, no eas-cli** — and publish them to GitHub Releases with checksums. | `build-android` · `deploy-github-release` |
+| 📱 | [**expo-builder**](./expo-builder/README.md) | Build signed Expo Android APK/AABs with `expo prebuild` + Gradle — **no Expo/EAS account, no eas-cli** — and ship them to GitHub Releases or a Google Play track. | `build-android` · `deploy-github-release` · `deploy-google-play` |
 
 Each action is self-contained and independently versioned; take both or lift one.
 

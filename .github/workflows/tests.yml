@@ -107,7 +107,7 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install bats-core jq
       - name: Run expo-builder test suite
-        run: bats expo-builder/build-android/__tests__/*.bats expo-builder/deploy-github-release/__tests__/*.bats
+        run: bats expo-builder/build-android/__tests__/*.bats expo-builder/deploy-github-release/__tests__/*.bats expo-builder/deploy-google-play/__tests__/*.bats
 
   expo-lint:
     name: expo-builder shellcheck + action-validator
@@ -115,8 +115,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: shellcheck
-        run: shellcheck --severity=warning expo-builder/build-android/src/*.sh expo-builder/deploy-github-release/src/*.sh
+        run: shellcheck --severity=warning expo-builder/build-android/src/*.sh expo-builder/deploy-github-release/src/*.sh expo-builder/deploy-google-play/src/*.sh
       - name: action-validator (build-android)
         run: npx --yes @action-validator/cli expo-builder/build-android/action.yml
       - name: action-validator (deploy-github-release)
         run: npx --yes @action-validator/cli expo-builder/deploy-github-release/action.yml
+      - name: action-validator (deploy-google-play)
+        run: npx --yes @action-validator/cli expo-builder/deploy-google-play/action.yml
