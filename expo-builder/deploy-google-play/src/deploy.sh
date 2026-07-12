@@ -33,10 +33,12 @@ if [ ! -s "$aab" ]; then
   echo "::error::no AAB at '$aab' — pipe build-android's aab-path output"
   exit 1
 fi
-if [ -z "$track" ]; then
-  echo "::error::track must not be empty"
-  exit 1
-fi
+case "$track" in
+  '' | *[!A-Za-z0-9:_-]*)
+    echo "::error::invalid track '$track' — allowed characters: letters, digits, ':', '_', '-' (e.g. internal, wear:production)"
+    exit 1
+    ;;
+esac
 case "$status" in
   completed | draft) ;;
   *)
@@ -121,9 +123,10 @@ if [ -z "$version_code" ]; then
   exit 1
 fi
 
-# --- 3. Assign the track (REPLACES the track's active releases). ---
-track_body="$(printf '{"track":"%s","releases":[{"versionCodes":["%s"],"status":"%s"}]}' \
-  "$track" "$version_code" "$status")"
+# --- 3. Assign the track (REPLACES the track's active releases). jq builds
+# the body so no input can break the JSON structure. ---
+track_body="$(jq -cn --arg t "$track" --arg vc "$version_code" --arg s "$status" \
+  '{track: $t, releases: [{versionCodes: [$vc], status: $s}]}')"
 api_call "track update" -X PUT \
   -H "Content-Type: application/json" \
   -d "$track_body" \

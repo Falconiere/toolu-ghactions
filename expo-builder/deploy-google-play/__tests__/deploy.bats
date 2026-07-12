@@ -127,6 +127,22 @@ esac"
     done
 }
 
+@test "AAB path containing spaces uploads fine (quoted @file argument)" {
+    mkdir -p "$BATS_TEST_TMPDIR/out dir"
+    printf 'aab-bytes' >"$BATS_TEST_TMPDIR/out dir/app release.aab"
+    EXPO_BUILDER_PLAY_AAB="$BATS_TEST_TMPDIR/out dir/app release.aab" run "$SCRIPT"
+    [ "$status" -eq 0 ]
+    grep -qF "@$BATS_TEST_TMPDIR/out dir/app release.aab" "$SHIM_DIR/curl.calls"
+    grep -q '^version-code=42$' "$GITHUB_OUTPUT"
+}
+
+@test "track with unsafe characters is rejected before any network call" {
+    EXPO_BUILDER_PLAY_TRACK='internal","x":"y' run "$SCRIPT"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"::error::invalid track"* ]]
+    [ ! -f "$SHIM_DIR/curl.calls" ]
+}
+
 @test "invalid release-status names the enum" {
     EXPO_BUILDER_PLAY_STATUS="inProgress" run "$SCRIPT"
     [ "$status" -eq 1 ]
