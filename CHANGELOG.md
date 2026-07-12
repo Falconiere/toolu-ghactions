@@ -1,5 +1,18 @@
 # Changelog
 
+## [6.2.0](https://github.com/Falconiere/toolu-ghactions/compare/v6.1.0...v6.2.0) (2026-07-12)
+
+
+### Features
+
+* **expo-builder:** deploy-google-play — native Play API AAB deploy ([#78](https://github.com/Falconiere/toolu-ghactions/issues/78)) ([6ddc504](https://github.com/Falconiere/toolu-ghactions/commit/6ddc5044f90655e3d8a24022ee4a9cef2538238c))
+
+
+### Bug Fixes
+
+* **tests:** env.RUN on code-review checkout, scope .github force-all ([8331f30](https://github.com/Falconiere/toolu-ghactions/commit/8331f30622b39ba105646fd9efe35041a1380a16))
+* **tests:** here-string in changes filter, avoid SIGPIPE flip ([0d8c1d8](https://github.com/Falconiere/toolu-ghactions/commit/0d8c1d8fe29eb96c9ea09349dd9b20a47d0d5bd2))
+
 ## [6.1.0](https://github.com/Falconiere/toolu-ghactions/compare/v6.0.2...v6.1.0) (2026-07-11)
 
 
