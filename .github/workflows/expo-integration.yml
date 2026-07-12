@@ -6,7 +6,12 @@ name: expo-integration
 # Covers spec AC-1..AC-6 (docs/toolu/specs/2026-07-10-expo-builder-p1-android-design.md).
 
 on:
+  pull_request:
+    paths:
+      - 'expo-builder/**'
+      - '.github/workflows/expo-integration.yml'
   push:
+    branches: [main]
     paths:
       - 'expo-builder/**'
       - '.github/workflows/expo-integration.yml'
