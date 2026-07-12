@@ -53,11 +53,12 @@ jobs:
           # Diff against the PR base SHA (always present; do NOT rely on
           # origin/<base> existing under actions/checkout).
           files="$(git diff --name-only "$BASE_SHA"...HEAD 2>/dev/null)" || emit_all
-          # A CI-infra change (workflow or the setup-bats composite) is validated
-          # against the WHOLE suite. Here-strings (not printf|grep) so a match that
-          # closes grep early can't SIGPIPE the writer and flip the result under
-          # `set -o pipefail`.
-          if grep -qE '^\.github/' <<<"$files"; then
+          # A CI-infra change (a workflow or the setup-bats composite) is validated
+          # against the WHOLE suite. Scoped to workflows/ + actions/ so unrelated
+          # .github edits (dependabot, issue templates, CODEOWNERS) don't force the
+          # full run. Here-strings (not printf|grep) so a match that closes grep
+          # early can't SIGPIPE the writer and flip the result under pipefail.
+          if grep -qE '^\.github/(workflows|actions)/' <<<"$files"; then
             emit_all
           fi
           area() { grep -qE "$1" <<<"$files" && echo true || echo false; }
@@ -79,7 +80,7 @@ jobs:
       RUN: ${{ needs.changes.outputs.code_review == 'true' || github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v5
-        if: ${{ needs.changes.outputs.code_review == 'true' || github.ref == 'refs/heads/main' }}
+        if: ${{ env.RUN == 'true' }}
       - uses: oven-sh/setup-bun@v2
         if: ${{ env.RUN == 'true' }}
         with:
