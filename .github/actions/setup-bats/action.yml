@@ -1,0 +1,16 @@
+# Installs bats-core + jq on the runner host for the bash test suites.
+# Composite so the Linux (apt) / macOS (brew) branch lives in ONE place instead
+# of being duplicated across every bats job in tests.yml.
+name: setup-bats
+description: Install bats-core and jq on Linux or macOS runners.
+runs:
+  using: composite
+  steps:
+    - name: Install bats + jq (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y bats jq
+    - name: Install bats + jq (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: brew install bats-core jq

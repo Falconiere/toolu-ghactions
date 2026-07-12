@@ -1,39 +1,126 @@
 name: tests
 
+# Runs on PRs and on pushes to main only — a PR-less branch push burns no
+# minutes, and the old bare `push:` + `pull_request:` pair double-tested every
+# PR commit. The `changes` job scopes heavy work to the action dir that actually
+# changed; required checks still RUN (so they report) but skip their expensive
+# steps when their area is untouched (skip the work, not the job).
 on:
-  push:
   pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  changes:
+    name: detect changed areas
+    runs-on: ubuntu-latest
+    outputs:
+      code_review: ${{ steps.filter.outputs.code_review }}
+      tunnel: ${{ steps.filter.outputs.tunnel }}
+      expo: ${{ steps.filter.outputs.expo }}
+      scripts: ${{ steps.filter.outputs.scripts }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: filter
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -uo pipefail
+          # Fail-open: ANY error (or a non-PR event) runs the full suite. This job
+          # gates the 5 required checks; it must never exit non-zero or emit a
+          # false "unchanged" that green-lights a required check without running it.
+          emit_all() {
+            {
+              echo "code_review=true"
+              echo "tunnel=true"
+              echo "expo=true"
+              echo "scripts=true"
+            } >>"$GITHUB_OUTPUT"
+            exit 0
+          }
+          # push:main / dispatch / missing base => run everything.
+          if [ "$EVENT" != "pull_request" ] || [ -z "${BASE_SHA:-}" ]; then
+            emit_all
+          fi
+          # Diff against the PR base SHA (always present; do NOT rely on
+          # origin/<base> existing under actions/checkout).
+          files="$(git diff --name-only "$BASE_SHA"...HEAD 2>/dev/null)" || emit_all
+          # A CI-infra change (a workflow or the setup-bats composite) is validated
+          # against the WHOLE suite. Scoped to workflows/ + actions/ so unrelated
+          # .github edits (dependabot, issue templates, CODEOWNERS) don't force the
+          # full run. Here-strings (not printf|grep) so a match that closes grep
+          # early can't SIGPIPE the writer and flip the result under pipefail.
+          if grep -qE '^\.github/(workflows|actions)/' <<<"$files"; then
+            emit_all
+          fi
+          area() { grep -qE "$1" <<<"$files" && echo true || echo false; }
+          {
+            echo "code_review=$(area '^code-review/')"
+            echo "tunnel=$(area '^cloudflare-tunnel/')"
+            echo "expo=$(area '^expo-builder/')"
+            echo "scripts=$(area '^scripts/')"
+          } >>"$GITHUB_OUTPUT"
+
   code-review:
     name: code-review
+    needs: changes
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: code-review
+    env:
+      RUN: ${{ needs.changes.outputs.code_review == 'true' || github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v5
+        if: ${{ env.RUN == 'true' }}
       - uses: oven-sh/setup-bun@v2
+        if: ${{ env.RUN == 'true' }}
         with:
           bun-version: 1.3.14
+      - name: Cache bun install cache
+        if: ${{ env.RUN == 'true' }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('code-review/bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
       - name: Install dependencies
+        if: ${{ env.RUN == 'true' }}
         run: bun install --frozen-lockfile
       - name: Lint (oxlint + type-aware, zero warnings)
+        if: ${{ env.RUN == 'true' }}
         run: bun run lint
       - name: Format check (oxfmt)
+        if: ${{ env.RUN == 'true' }}
         run: bun run fmt:check
       - name: Typecheck
+        if: ${{ env.RUN == 'true' }}
         run: bun run typecheck
       - name: Unit tests
+        if: ${{ env.RUN == 'true' }}
         run: bun run test
       - name: Build dist
+        if: ${{ env.RUN == 'true' }}
         run: bun run build
       - name: dist is in sync with src
         # The committed dist/index.cjs must match a fresh build — consumers run the
         # checked-in bundle, not the TS sources. Fail if `bun run build` produced
         # any change.
+        if: ${{ env.RUN == 'true' }}
         run: git diff --quiet -- dist
+      - name: Install action-validator
+        if: ${{ env.RUN == 'true' }}
+        run: npm i -g @action-validator/cli
       - name: action.yml is a composite action wrapping the node24 review + SAST steps
+        if: ${{ env.RUN == 'true' }}
         run: |
           grep -qF "using: 'composite'" action.yml
           grep -qF 'dist/index.cjs' action.yml
@@ -41,22 +128,31 @@ jobs:
           ! grep -qF "using: 'node24'" action.yml
           ! grep -qF '6 AI vendors' action.yml
       - name: action.yml validates (composite is accepted by action-validator)
-        run: npx --yes @action-validator/cli action.yml
+        if: ${{ env.RUN == 'true' }}
+        run: action-validator action.yml
 
   scripts:
     name: scripts
+    needs: changes
     runs-on: ubuntu-latest
+    env:
+      RUN: ${{ needs.changes.outputs.scripts == 'true' || github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v5
+        if: ${{ env.RUN == 'true' }}
       - name: Install bats + jq
-        run: sudo apt-get update && sudo apt-get install -y bats jq
+        if: ${{ env.RUN == 'true' }}
+        uses: ./.github/actions/setup-bats
       - name: bats
+        if: ${{ env.RUN == 'true' }}
         run: bats scripts/__tests__/*.bats
       - name: shellcheck
+        if: ${{ env.RUN == 'true' }}
         run: shellcheck --severity=warning scripts/*.sh
 
   tunnel-test:
     name: tunnel bats (${{ matrix.os }})
+    needs: changes
     # cloudflare-tunnel is a composite action that runs on the runner host, so
     # the scripts must work on both Linux and macOS runners.
     strategy:
@@ -64,33 +160,49 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      RUN: ${{ needs.changes.outputs.tunnel == 'true' || github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v5
-      - name: Install bats + jq (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y bats jq
-      - name: Install bats + jq (macOS)
-        if: runner.os == 'macOS'
-        run: brew install bats-core jq
+        if: ${{ env.RUN == 'true' }}
+      - name: Install bats + jq
+        if: ${{ env.RUN == 'true' }}
+        uses: ./.github/actions/setup-bats
       - name: Run tunnel test suite
+        if: ${{ env.RUN == 'true' }}
         run: bats cloudflare-tunnel/__tests__/*.bats
 
   tunnel-lint:
     name: tunnel shellcheck + action-validator
+    needs: changes
     runs-on: ubuntu-latest
+    env:
+      RUN: ${{ needs.changes.outputs.tunnel == 'true' || github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v5
+        if: ${{ env.RUN == 'true' }}
       - name: shellcheck
+        if: ${{ env.RUN == 'true' }}
         run: shellcheck --severity=warning cloudflare-tunnel/src/*.sh
+      - name: Install action-validator
+        if: ${{ env.RUN == 'true' }}
+        run: npm i -g @action-validator/cli
       - name: action-validator (start)
-        run: npx --yes @action-validator/cli cloudflare-tunnel/start/action.yml
+        if: ${{ env.RUN == 'true' }}
+        run: action-validator cloudflare-tunnel/start/action.yml
       - name: action-validator (stop)
-        run: npx --yes @action-validator/cli cloudflare-tunnel/stop/action.yml
+        if: ${{ env.RUN == 'true' }}
+        run: action-validator cloudflare-tunnel/stop/action.yml
       - name: action-validator (wait)
-        run: npx --yes @action-validator/cli cloudflare-tunnel/wait/action.yml
+        if: ${{ env.RUN == 'true' }}
+        run: action-validator cloudflare-tunnel/wait/action.yml
 
   expo-test:
     name: expo-builder bats (${{ matrix.os }})
+    needs: changes
+    # NOT a required check — safe to skip the whole job when expo-builder is
+    # untouched (a job-level skip doesn't wedge branch protection here).
+    if: ${{ needs.changes.outputs.expo == 'true' || github.ref == 'refs/heads/main' }}
     # expo-builder is a composite-action suite whose scripts run on the runner
     # host; unit-test them on both Linux and macOS (BSD userland).
     strategy:
@@ -100,25 +212,25 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
-      - name: Install bats + jq (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y bats jq
-      - name: Install bats + jq (macOS)
-        if: runner.os == 'macOS'
-        run: brew install bats-core jq
+      - name: Install bats + jq
+        uses: ./.github/actions/setup-bats
       - name: Run expo-builder test suite
         run: bats expo-builder/build-android/__tests__/*.bats expo-builder/deploy-github-release/__tests__/*.bats expo-builder/deploy-google-play/__tests__/*.bats
 
   expo-lint:
     name: expo-builder shellcheck + action-validator
+    needs: changes
+    if: ${{ needs.changes.outputs.expo == 'true' || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - name: shellcheck
         run: shellcheck --severity=warning expo-builder/build-android/src/*.sh expo-builder/deploy-github-release/src/*.sh expo-builder/deploy-google-play/src/*.sh
+      - name: Install action-validator
+        run: npm i -g @action-validator/cli
       - name: action-validator (build-android)
-        run: npx --yes @action-validator/cli expo-builder/build-android/action.yml
+        run: action-validator expo-builder/build-android/action.yml
       - name: action-validator (deploy-github-release)
-        run: npx --yes @action-validator/cli expo-builder/deploy-github-release/action.yml
+        run: action-validator expo-builder/deploy-github-release/action.yml
       - name: action-validator (deploy-google-play)
-        run: npx --yes @action-validator/cli expo-builder/deploy-google-play/action.yml
+        run: action-validator expo-builder/deploy-google-play/action.yml
