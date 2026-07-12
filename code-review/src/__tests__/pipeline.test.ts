@@ -810,6 +810,9 @@ describe("runReview — thread-aware inline reconciliation", () => {
     expect(user?.content).toContain(
       "## Dismissed findings (author resolved these threads — SETTLED)",
     );
+    // The seeded thread's root body is `**finding** at <path>` (see fakeOctokit);
+    // cleanFindingBody + sanitizeInstruction keep that text, so its presence
+    // proves the THREAD's finding text reached the dismissed block.
     expect(user?.content).toContain(`finding** at ${f0.path}`);
     expect(user?.content).toContain("not verbatim, not reworded");
     // And it is NOT presented as an open accept-or-argue thread.
