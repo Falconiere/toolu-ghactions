@@ -460,7 +460,11 @@ earlier inline threads instead of blindly re-posting every finding:
   inline posting alike, instead of being re-litigated forever. When every
   remaining finding was human-resolved, a `request-changes` verdict downgrades to
   `merge-approved`. This works even with `INLINE_COMMENTS: false` (threads from
-  earlier inline-enabled runs still suppress).
+  earlier inline-enabled runs still suppress). Resolved threads are also fed to
+  the model as a **dismissed-findings block** ("settled — do not re-raise, not
+  even reworded"), so a rephrased variant of a dismissed finding — which gets a
+  new fingerprint and often a new line — is suppressed at the source instead of
+  slipping past the deterministic match.
 
 Threads are matched to findings by the same line-independent fingerprint used by
 [Review memory](#review-memory), carried in a hidden marker on each inline comment.
