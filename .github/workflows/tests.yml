@@ -54,11 +54,13 @@ jobs:
           # origin/<base> existing under actions/checkout).
           files="$(git diff --name-only "$BASE_SHA"...HEAD 2>/dev/null)" || emit_all
           # A CI-infra change (workflow or the setup-bats composite) is validated
-          # against the WHOLE suite.
-          if printf '%s\n' "$files" | grep -qE '^\.github/'; then
+          # against the WHOLE suite. Here-strings (not printf|grep) so a match that
+          # closes grep early can't SIGPIPE the writer and flip the result under
+          # `set -o pipefail`.
+          if grep -qE '^\.github/' <<<"$files"; then
             emit_all
           fi
-          area() { printf '%s\n' "$files" | grep -qE "$1" && echo true || echo false; }
+          area() { grep -qE "$1" <<<"$files" && echo true || echo false; }
           {
             echo "code_review=$(area '^code-review/')"
             echo "tunnel=$(area '^cloudflare-tunnel/')"
