@@ -780,6 +780,42 @@ describe("runReview — thread-aware inline reconciliation", () => {
     expect(bodies).toContain("no longer applies");
   });
 
+  it("a RESOLVED thread reaches the model prompt as a DISMISSED finding (do-not-reword)", async () => {
+    const { dir, headSha } = track(featureRepoWithChange());
+    const f0 = fixtureFinding("findings", 0);
+    const seed: SeedThread = {
+      threadId: "T_done",
+      rootCommentId: 8005,
+      fp: fingerprint(f0),
+      path: f0.path,
+      line: 2,
+      isResolved: true,
+    };
+    const { octokit } = fakeOctokit([], [seed]);
+    const captured: { body: CapturedRequestBody | null } = { body: null };
+
+    const result = await runReview({
+      inputs: baseInputs(),
+      octokit,
+      context: prContext(headSha),
+      fetch: capturingReplayFetch("findings", captured),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+    expect(result.verdict).toBe("approved"); // suppression still handles the count
+
+    // The prompt sent on the wire carries the dismissed block with the thread's
+    // finding text and the do-not-reword instruction.
+    const user = captured.body?.messages?.find((m) => m.role === "user");
+    expect(user?.content).toContain(
+      "## Dismissed findings (author resolved these threads — SETTLED)",
+    );
+    expect(user?.content).toContain(`finding** at ${f0.path}`);
+    expect(user?.content).toContain("not verbatim, not reworded");
+    // And it is NOT presented as an open accept-or-argue thread.
+    expect(user?.content).not.toContain("## Prior review threads");
+  });
+
   it("with NO prior threads, posts every finding (matches the old behaviour)", async () => {
     const { dir, headSha } = track(featureRepoWithChange());
     const { octokit, rec } = fakeOctokit([], []);

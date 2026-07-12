@@ -175,12 +175,14 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
   // Fed to the LLM as triage context AND summarized in the comment; absent dir → []. ---
   const mechanical = gatherMechanical(deps.sarifDir);
 
-  // Map the prior threads to the prompt's accept-or-argue context (finding text + replies).
+  // Map the prior threads to the prompt's context: accept-or-argue for open
+  // threads, DISMISSED (settled, do not re-raise or reword) for resolved ones.
   const priorThreadContexts = priorThreads.map((t) => ({
     path: t.path,
     line: t.line,
     finding: cleanFindingBody(t.rootBody),
     replies: t.replies,
+    resolved: t.isResolved,
   }));
 
   // --- Build the prompt + run the review, chunking the diff when it exceeds the
