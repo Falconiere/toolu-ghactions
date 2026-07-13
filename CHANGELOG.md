@@ -1,5 +1,17 @@
 # Changelog
 
+## [6.3.0](https://github.com/Falconiere/toolu-ghactions/compare/v6.2.1...v6.3.0) (2026-07-13)
+
+
+### Features
+
+* **code-review:** RULES_REF input — opt-in merge-ref convention reading ([1396b2e](https://github.com/Falconiere/toolu-ghactions/commit/1396b2e6904a9a525131ab370f244fd595c7b042))
+
+
+### Bug Fixes
+
+* **code-review:** fail-safe skip when RULES_REF=merge lacks a merge ref ([32f3014](https://github.com/Falconiere/toolu-ghactions/commit/32f3014f8f012b16e9b908e4a249a0bcc4085a20))
+
 ## [6.2.1](https://github.com/Falconiere/toolu-ghactions/compare/v6.2.0...v6.2.1) (2026-07-12)
 
 
