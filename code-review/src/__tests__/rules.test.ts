@@ -142,7 +142,7 @@ describe("gatherRules", () => {
     expect(out).not.toContain("HEAD INJECTED");
   });
 
-  it('rulesRef: "merge" reads the PR\'s own updated rules from the checkout (HEAD default)', () => {
+  it('rulesRef: "merge" reads the PR\'s own updated rules from the merge ref', () => {
     const dir = setupRepo();
     writeFile(dir, "CLAUDE.md", "STALE convention: never use tabs.\n");
     writeFile(dir, "src/app.ts", "export const x = 1\n");
@@ -151,16 +151,26 @@ describe("gatherRules", () => {
     // The PR legitimately updates the convention; merge mode reviews against it.
     git(dir, "checkout", "-b", "feature", "--quiet");
     writeFile(dir, "CLAUDE.md", "UPDATED convention: tabs are required.\n");
-    commitAll(dir, "update convention");
+    const head = commitAll(dir, "update convention");
 
     const out = gatherRules({
       baseSha: base,
       rulesRef: "merge",
+      mergeRef: head,
       cwd: dir,
       changedFiles: ["CLAUDE.md", "src/app.ts"],
     });
     expect(out).toContain("UPDATED convention: tabs are required.");
     expect(out).not.toContain("STALE convention");
+  });
+
+  it("merge mode without a mergeRef skips fail-safe instead of throwing or guessing HEAD", () => {
+    const dir = setupRepo();
+    writeFile(dir, "CLAUDE.md", "HEAD-only rule.\n");
+    commitAll(dir, "init");
+
+    const out = gatherRules({ baseSha: "unused", rulesRef: "merge", cwd: dir });
+    expect(out).toBe("");
   });
 
   it("merge mode reads an explicit mergeRef even when the checkout sits elsewhere", () => {
@@ -189,17 +199,18 @@ describe("gatherRules", () => {
     writeFile(dir, "AGENTS.md", `${"x".repeat(2000)}\n`);
     writeFile(dir, "docs/style-guide.md", "Prefer composition over inheritance.\n");
     const base = "unused-in-merge-mode"; // merge mode must not read the base sha.
-    commitAll(dir, "add conventions on the PR");
+    const head = commitAll(dir, "add conventions on the PR");
 
     const out = gatherRules({
       baseSha: base,
       rulesRef: "merge",
+      mergeRef: head,
       cwd: dir,
       maxBytes: 128,
       rulesGlob: "docs/*.md",
     });
-    expect(out).toContain("### CLAUDE.md");
-    expect(out).toContain("### docs/style-guide.md");
+    expect(out).toContain("### CLAUDE.md\nshort rule\n");
+    expect(out).toContain("### docs/style-guide.md\nPrefer composition over inheritance.\n");
     expect(out).not.toContain("### AGENTS.md");
     expect(out).toContain("[Project rules truncated at 128 bytes; 1 file(s) omitted.]");
   });
