@@ -31881,7 +31881,7 @@ function gatherRules(opts) {
   if (opts.check === false) return "";
   const maxBytes = typeof opts.maxBytes === "number" && Number.isInteger(opts.maxBytes) && opts.maxBytes > 0 ? opts.maxBytes : DEFAULT_MAX_BYTES;
   const useMerge = opts.rulesRef === "merge";
-  const ref = useMerge ? opts.mergeRef ?? "HEAD" : opts.baseSha ?? "";
+  const ref = useMerge ? opts.mergeRef ?? "" : opts.baseSha ?? "";
   const refLabel = useMerge ? "merge" : "base";
   if (ref === "") {
     process.stderr.write(`[project-rules] skipped: no ${refLabel} ref

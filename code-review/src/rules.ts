@@ -30,8 +30,9 @@ export type GitShow = (ref: string, path: string) => Buffer | null;
  * (never read from process.env) so the module is testable: check ←
  * INPUT_CHECK_PROJECT_RULES ("true"), baseSha ← RULES_BASE_SHA / diff base_sha,
  * rulesRef ← INPUT_RULES_REF ("base" | "merge", pre-validated by inputs.ts),
- * mergeRef ← the checked-out PR merge ref read when rulesRef is "merge" (defaults
- * to "HEAD"), changedFiles ← diff .changed_files, rulesGlob ← INPUT_RULES_GLOB,
+ * mergeRef ← the checked-out PR merge ref read when rulesRef is "merge" (absent →
+ * rules are skipped fail-safe, never guessed from HEAD), changedFiles ← diff
+ * .changed_files, rulesGlob ← INPUT_RULES_GLOB,
  * maxBytes ← INPUT_RULES_MAX_BYTES (default 32768), cwd ← repo dir, gitShow ←
  * blob reader.
  */
@@ -201,7 +202,7 @@ export function gatherRules(opts: RulesOptions): string {
   // — trusted same-repo PRs whose convention edits should apply to their own
   // review). Every read below (ls-tree + git show) uses this one ref.
   const useMerge = opts.rulesRef === "merge";
-  const ref = useMerge ? (opts.mergeRef ?? (() => { throw new Error('mergeRef required when rulesRef is merge'); })()) : (opts.baseSha ?? "");
+  const ref = useMerge ? (opts.mergeRef ?? "") : (opts.baseSha ?? "");
   const refLabel = useMerge ? "merge" : "base";
   // Fail-safe: with no readable ref we cannot read rules safely. Skip, don't guess.
   if (ref === "") {
