@@ -161,10 +161,14 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
   const headSha = resolveHeadSha(reviewHead, context.sha, cwd);
   target.headSha = headSha;
 
-  // --- Gather project rules ONCE from the base ref (best-effort, never throws). ---
+  // --- Gather project rules ONCE (best-effort, never throws): from the base ref
+  // by default (anti rule-injection), or from the checked-out PR merge ref when
+  // RULES_REF=merge (trusted same-repo PRs whose convention edits should apply). ---
   const projectRules = gatherRules({
     check: inputs.checkProjectRules,
     baseSha: diff.base_sha,
+    rulesRef: inputs.rulesRef,
+    mergeRef: reviewHead,
     changedFiles: diff.changed_files,
     rulesGlob: inputs.rulesGlob,
     maxBytes: inputs.rulesMaxBytes,

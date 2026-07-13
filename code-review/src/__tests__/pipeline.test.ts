@@ -221,6 +221,7 @@ function baseInputs(overrides: Partial<ActionInputs> = {}): ActionInputs {
     codebaseOverview: "",
     checkProjectRules: false, // keep the env hermetic — no repo rules to gather.
     rulesGlob: "",
+    rulesRef: "base",
     excludeGlobs: [],
     rulesMaxBytes: 32768,
     maxFiles: 0,

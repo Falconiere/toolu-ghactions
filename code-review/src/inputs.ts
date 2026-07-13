@@ -49,6 +49,9 @@ export interface ActionInputs {
   checkProjectRules: boolean;
   /** Extra path globs to include as project rules (newline/comma-separated), or "". */
   rulesGlob: string;
+  /** Ref the convention files are read from: "base" (anti-injection default) or
+   *  "merge" (the checked-out PR merge ref — trusted same-repo PRs only). */
+  rulesRef: "base" | "merge";
   /** Extra path globs to EXCLUDE from the reviewed diff, on top of the built-in generated/vendored set. */
   excludeGlobs: string[];
   /** Total byte cap on gathered project-rules text. */
@@ -159,6 +162,21 @@ function readVerbosity(): "compact" | "full" {
   return "compact";
 }
 
+/**
+ * Read RULES_REF, defaulting to "base" (convention files read from the base-branch
+ * tip, so a PR cannot modify the rules it is reviewed against); only an explicit
+ * "merge" reads them from the checked-out PR merge ref instead. An unrecognized
+ * non-empty value is a config typo: warn and fall back to base — the injection-safe
+ * default — rather than silently widening what a PR can influence.
+ */
+function readRulesRef(): "base" | "merge" {
+  const raw = core.getInput("RULES_REF").trim().toLowerCase();
+  if (raw === "" || raw === "base") return "base";
+  if (raw === "merge") return "merge";
+  core.warning(`RULES_REF="${raw}" is not "base" or "merge"; falling back to base.`);
+  return "base";
+}
+
 /** Read MIN_TRIGGER_PERMISSION, defaulting to "write"; only "admin" tightens it. */
 function readMinTriggerPermission(): "write" | "admin" {
   return core.getInput("MIN_TRIGGER_PERMISSION").trim().toLowerCase() === "admin"
@@ -234,6 +252,7 @@ export function readInputs(): ActionInputs {
     codebaseOverview: core.getInput("CODEBASE_OVERVIEW").trim(),
     checkProjectRules: readBool("CHECK_PROJECT_RULES", true),
     rulesGlob: core.getInput("RULES_GLOB"),
+    rulesRef: readRulesRef(),
     excludeGlobs: splitGlobs(core.getInput("EXCLUDE_GLOBS")),
     rulesMaxBytes: intInput("RULES_MAX_BYTES", 32768),
     maxFiles: intInput("MAX_FILES", 0),

@@ -218,7 +218,8 @@ The reviewer reads your repo's own rules and checks the diff against them — so
 change that breaks a documented house rule gets flagged, citing the rule. On by
 default (`CHECK_PROJECT_RULES: true`); set it `false` to turn off.
 
-What it reads, in priority order, **from the base ref** (never the PR head):
+What it reads, in priority order, **from the base ref** by default (never the PR
+head — see `RULES_REF` below for the trusted-repo opt-out):
 
 1. Root agent-rule files — `CLAUDE.md`, `AGENTS.md`, `.cursorrules`, `.windsurfrules`, `.github/copilot-instructions.md`
 2. Nested `CLAUDE.md` / `AGENTS.md` in ancestor directories of the changed files (per-package rules in a monorepo)
@@ -235,6 +236,23 @@ the cap are dropped with a notice. Two guarantees worth calling out:
   data; it can never alter the verdict logic or output schema.
 - **Bounded & quiet.** The plan/spec tree (`docs/toolu/**`, etc.) is never scooped;
   only the convention files above and your explicit `RULES_GLOB` are read.
+
+One deliberate consequence of base-ref reading: a same-repo PR that *legitimately
+updates* a convention file is still reviewed against the stale base-ref text, so the
+reviewer can keep re-raising "violations" of the very rules the PR changes. If your
+PR authors are already trusted — same-repo branches, protected by required review —
+set `RULES_REF: merge` to read the convention files from the checked-out PR merge
+ref instead, so a PR's own convention updates apply to its own review:
+
+```yaml
+with:
+  RULES_REF: merge # trusted same-repo PRs only — a PR can then modify its own review rules
+```
+
+The trade-off is explicit: `merge` gives up the injection guarantee above, so never
+enable it on repos that accept fork PRs. Everything else (priority order,
+`RULES_GLOB`, `RULES_MAX_BYTES`) behaves identically; an unrecognized value warns
+and falls back to `base`.
 
 ### Inline comments & suggestions
 
@@ -488,7 +506,8 @@ Thread reads/writes are best-effort: a GitHub API hiccup degrades to the previou
 | `REVIEW_PROMPT_FILE` | no | *(8-dimension checklist)* | Path to a markdown file (relative to repo root) with a custom review prompt. Overrides the default checklist. Project conventions are still gathered and injected, but a custom prompt supplies its own dimensions. |
 | `CODEBASE_OVERVIEW` | no | — | High-level context about the codebase (framework, patterns, architecture) injected into the review prompt. |
 | `CHECK_PROJECT_RULES` | no | `true` | Auto-read the repo's own convention files **from the base ref** (`CLAUDE.md`, `AGENTS.md`, `.cursor/rules`, `.cursorrules`, `.windsurfrules`, `.github/copilot-instructions.md`, plus `CONVENTIONS.md` / `CONTRIBUTING.md` / `docs/conventions/`) and review the diff against them via the **Convention adherence** dimension. Set `false` to disable. See [Project conventions](#project-conventions). |
-| `RULES_GLOB` | no | — | Extra path globs (relative to repo root, newline- or comma-separated) to include as project rules, e.g. `docs/architecture/**`. Matched against tracked files at the base ref. |
+| `RULES_GLOB` | no | — | Extra path globs (relative to repo root, newline- or comma-separated) to include as project rules, e.g. `docs/architecture/**`. Matched against tracked files at the rules ref (see `RULES_REF`). |
+| `RULES_REF` | no | `base` | Which ref the convention files are read from. `base` (default) reads the base-branch tip — injection-safe: a PR cannot change the rules it is reviewed against. `merge` reads the checked-out PR merge ref instead, so a same-repo PR that legitimately updates a convention is reviewed against its own text — **only enable it where PR authors are already trusted** (same-repo branches, protected by required review); it lets a PR modify its own review rules, so never use it on repos accepting fork PRs. An unrecognized value warns and falls back to `base`. See [Project conventions](#project-conventions). |
 | `EXCLUDE_GLOBS` | no | — | Extra path globs (newline- or comma-separated) to **exclude** from the reviewed diff, on top of the built-in generated/vendored/lockfile set and any `.gitattributes` `linguist-generated` paths, e.g. `migrations/**, **/*.snap`. Excluded files are still committed and CI-checked — only kept out of the LLM review. |
 | `RULES_MAX_BYTES` | no | `32768` | Byte cap on the gathered rules. Files are added in priority order until the cap; whole files past it are dropped with a truncation notice. |
 | `MAX_FILES` | no | `0` (unlimited) | Maximum changed files (counted **after** generated/vendored/excluded files are dropped) before the action skips. `0` reviews any number of files — the only ceiling is your OpenRouter billing balance. Set a positive value to opt into a hard skip on huge PRs. |
