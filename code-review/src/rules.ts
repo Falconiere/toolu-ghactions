@@ -201,7 +201,7 @@ export function gatherRules(opts: RulesOptions): string {
   // — trusted same-repo PRs whose convention edits should apply to their own
   // review). Every read below (ls-tree + git show) uses this one ref.
   const useMerge = opts.rulesRef === "merge";
-  const ref = useMerge ? (opts.mergeRef ?? "HEAD") : (opts.baseSha ?? "");
+  const ref = useMerge ? (opts.mergeRef ?? (() => { throw new Error('mergeRef required when rulesRef is merge'); })()) : (opts.baseSha ?? "");
   const refLabel = useMerge ? "merge" : "base";
   // Fail-safe: with no readable ref we cannot read rules safely. Skip, don't guess.
   if (ref === "") {
