@@ -116,6 +116,29 @@ describe("VERBOSITY", () => {
   });
 });
 
+describe("RULES_REF", () => {
+  it("defaults to base when unset (the anti rule-injection default)", () => {
+    expect(readInputs().rulesRef).toBe("base");
+  });
+
+  it("honors an explicit merge", () => {
+    setInput("RULES_REF", "merge");
+    expect(readInputs().rulesRef).toBe("merge");
+  });
+
+  it("is case-insensitive and trims", () => {
+    setInput("RULES_REF", "  Merge  ");
+    expect(readInputs().rulesRef).toBe("merge");
+  });
+
+  it("falls back to base on an unrecognized value, with a warning", () => {
+    setInput("RULES_REF", "head");
+    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+    expect(readInputs().rulesRef).toBe("base");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('is not "base" or "merge"'));
+  });
+});
+
 describe("string inputs are trimmed", () => {
   it("trims REVIEW_PROMPT_FILE and CODEBASE_OVERVIEW", () => {
     setInput("REVIEW_PROMPT_FILE", "  ./custom-prompt.md  ");

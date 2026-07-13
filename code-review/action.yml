@@ -54,9 +54,13 @@ inputs:
     required: false
     default: 'true'
   RULES_GLOB:
-    description: 'Extra path globs (relative to repo root, newline- or comma-separated) to include as project rules, e.g. "docs/architecture/**". Matched against tracked files at the base ref. Empty (default) = the well-known convention files only.'
+    description: 'Extra path globs (relative to repo root, newline- or comma-separated) to include as project rules, e.g. "docs/architecture/**". Matched against tracked files at the rules ref (see RULES_REF). Empty (default) = the well-known convention files only.'
     required: false
     default: ''
+  RULES_REF:
+    description: 'Which ref the convention files are read from: "base" (default) reads the base-branch tip, so a PR cannot modify the rules it is reviewed against (the anti rule-injection default); "merge" reads them from the checked-out PR merge ref, so a same-repo PR that legitimately updates a convention file is reviewed against its own updated text. SECURITY TRADE-OFF: "merge" lets a PR modify the rules it is reviewed against — only enable it on repos where PR authors are already trusted (same-repo branches, protected by required review), never on repos accepting fork PRs. Any other value warns and falls back to "base".'
+    required: false
+    default: 'base'
   EXCLUDE_GLOBS:
     description: 'Extra path globs (relative to repo root, newline- or comma-separated) to EXCLUDE from the AI review diff, on top of the built-in generated/vendored/lockfile set and any .gitattributes linguist-generated paths. e.g. "migrations/**, **/*.snap". Excluded files are still committed and CI-checked; they are only kept out of the LLM review.'
     required: false
@@ -220,6 +224,7 @@ runs:
         INPUT_CODEBASE_OVERVIEW: ${{ inputs.CODEBASE_OVERVIEW }}
         INPUT_CHECK_PROJECT_RULES: ${{ inputs.CHECK_PROJECT_RULES }}
         INPUT_RULES_GLOB: ${{ inputs.RULES_GLOB }}
+        INPUT_RULES_REF: ${{ inputs.RULES_REF }}
         INPUT_EXCLUDE_GLOBS: ${{ inputs.EXCLUDE_GLOBS }}
         INPUT_RULES_MAX_BYTES: ${{ inputs.RULES_MAX_BYTES }}
         INPUT_MAX_FILES: ${{ inputs.MAX_FILES }}

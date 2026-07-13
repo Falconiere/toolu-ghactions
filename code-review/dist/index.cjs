@@ -31313,6 +31313,13 @@ function readVerbosity() {
   core2.warning(`VERBOSITY="${raw}" is not "compact" or "full"; falling back to compact.`);
   return "compact";
 }
+function readRulesRef() {
+  const raw = core2.getInput("RULES_REF").trim().toLowerCase();
+  if (raw === "" || raw === "base") return "base";
+  if (raw === "merge") return "merge";
+  core2.warning(`RULES_REF="${raw}" is not "base" or "merge"; falling back to base.`);
+  return "base";
+}
 function readMinTriggerPermission() {
   return core2.getInput("MIN_TRIGGER_PERMISSION").trim().toLowerCase() === "admin" ? "admin" : "write";
 }
@@ -31359,6 +31366,7 @@ function readInputs() {
     codebaseOverview: core2.getInput("CODEBASE_OVERVIEW").trim(),
     checkProjectRules: readBool("CHECK_PROJECT_RULES", true),
     rulesGlob: core2.getInput("RULES_GLOB"),
+    rulesRef: readRulesRef(),
     excludeGlobs: splitGlobs(core2.getInput("EXCLUDE_GLOBS")),
     rulesMaxBytes: intInput("RULES_MAX_BYTES", 32768),
     maxFiles: intInput("MAX_FILES", 0),
@@ -31791,9 +31799,9 @@ function gitOrNull2(args, cwd) {
   }
 }
 function defaultGitShow(cwd) {
-  return (baseSha, path) => {
+  return (ref, path) => {
     try {
-      return (0, import_node_child_process2.execFileSync)("git", ["show", `${baseSha}:${path}`], {
+      return (0, import_node_child_process2.execFileSync)("git", ["show", `${ref}:${path}`], {
         cwd,
         encoding: "buffer",
         maxBuffer: 1024 * 1024 * 1024
@@ -31803,11 +31811,8 @@ function defaultGitShow(cwd) {
     }
   };
 }
-function listTracked(baseSha, cwd) {
-  const out = gitOrNull2(
-    ["-c", "core.quotePath=false", "ls-tree", "-r", "--name-only", baseSha],
-    cwd
-  );
+function listTracked(ref, cwd) {
+  const out = gitOrNull2(["-c", "core.quotePath=false", "ls-tree", "-r", "--name-only", ref], cwd);
   if (out === null) return [];
   return out.split("\n").filter((p) => p !== "");
 }
@@ -31875,16 +31880,24 @@ function hasNulByte(blob) {
 function gatherRules(opts) {
   if (opts.check === false) return "";
   const maxBytes = typeof opts.maxBytes === "number" && Number.isInteger(opts.maxBytes) && opts.maxBytes > 0 ? opts.maxBytes : DEFAULT_MAX_BYTES;
-  const baseSha = opts.baseSha ?? "";
-  if (baseSha === "") {
-    process.stderr.write("[project-rules] skipped: no base ref\n");
+  const useMerge = opts.rulesRef === "merge";
+  const ref = useMerge ? opts.mergeRef ?? "HEAD" : opts.baseSha ?? "";
+  const refLabel = useMerge ? "merge" : "base";
+  if (ref === "") {
+    process.stderr.write(`[project-rules] skipped: no ${refLabel} ref
+`);
     return "";
+  }
+  if (useMerge) {
+    process.stderr.write(`[project-rules] RULES_REF=merge: reading rules from ${ref}
+`);
   }
   const cwd = opts.cwd ?? process.cwd();
   const gitShow = opts.gitShow ?? defaultGitShow(cwd);
-  const tracked = listTracked(baseSha, cwd);
+  const tracked = listTracked(ref, cwd);
   if (tracked.every((p) => p.trim() === "")) {
-    process.stderr.write("[project-rules] skipped: no tracked files at base ref\n");
+    process.stderr.write(`[project-rules] skipped: no tracked files at ${refLabel} ref
+`);
     return "";
   }
   const selected = selectPaths(tracked, opts.changedFiles ?? [], opts.rulesGlob ?? "");
@@ -31892,7 +31905,7 @@ function gatherRules(opts) {
   let totalBytes = 0;
   let omitted = 0;
   for (const path of selected) {
-    const blob = gitShow(baseSha, path);
+    const blob = gitShow(ref, path);
     if (blob === null) {
       process.stderr.write(`[project-rules] skipped unreadable: ${path}
 `);
@@ -40086,6 +40099,8 @@ async function runReview(deps) {
   const projectRules = gatherRules({
     check: inputs.checkProjectRules,
     baseSha: diff.base_sha,
+    rulesRef: inputs.rulesRef,
+    mergeRef: reviewHead,
     changedFiles: diff.changed_files,
     rulesGlob: inputs.rulesGlob,
     maxBytes: inputs.rulesMaxBytes,
