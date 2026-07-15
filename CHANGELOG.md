@@ -1,5 +1,12 @@
 # Changelog
 
+## [6.4.0](https://github.com/Falconiere/toolu-ghactions/compare/v6.3.0...v6.4.0) (2026-07-15)
+
+
+### Features
+
+* **code-review:** converge reviews — wider resolved-thread suppression + MAX_ROUNDS surrender ([2b20c9f](https://github.com/Falconiere/toolu-ghactions/commit/2b20c9f0782a1f6e6188c2c4240f81b9d71b3704))
+
 ## [6.3.0](https://github.com/Falconiere/toolu-ghactions/compare/v6.2.1...v6.3.0) (2026-07-13)
 
 
