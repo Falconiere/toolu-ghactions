@@ -119,6 +119,10 @@ inputs:
     description: 'When true, recap what changed since the last review (resolved / still-open / new) and keep a collapsed history, using a hidden state marker in the sticky comment. Set false to disable memory.'
     required: false
     default: 'true'
+  MAX_ROUNDS:
+    description: 'Review-round surrender cap. A generative reviewer can produce a fresh findings batch on every push, so "zero findings" is not a reachable fixpoint on some PRs and a "changes" verdict would block forever. When set to N > 0 and this is review round N (or later; rounds counted from the REVIEW_MEMORY history), a "changes" verdict whose findings are ALL below blocker severity is downgraded to "approved" — the findings stay listed as advisory, the comment carries an explicit "Round cap" callout, and FAIL_ON stops failing the job. A single blocker finding disables the cap for that round. Requires REVIEW_MEMORY. 0 (default) = never surrender.'
+    required: false
+    default: '0'
   VERBOSITY:
     description: 'Verdict-comment verbosity: "compact" (default) collapses the checklist to a single line and renders recap buckets as `path:line` refs; "full" restores the multi-line checklist and inline recap text. Findings, the Findings heading, and the state marker are identical in both modes. Any other value warns and falls back to compact.'
     required: false
@@ -240,6 +244,7 @@ runs:
         INPUT_BOT_NAME: ${{ inputs.BOT_NAME }}
         INPUT_BOT_LOGO_URL: ${{ inputs.BOT_LOGO_URL }}
         INPUT_REVIEW_MEMORY: ${{ inputs.REVIEW_MEMORY }}
+        INPUT_MAX_ROUNDS: ${{ inputs.MAX_ROUNDS }}
         INPUT_FAIL_ON: ${{ inputs.FAIL_ON }}
         INPUT_VERBOSITY: ${{ inputs.VERBOSITY }}
         # Where the scanner steps wrote their SARIF — the node action reads + triages it.

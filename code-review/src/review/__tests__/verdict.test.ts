@@ -273,3 +273,19 @@ describe("formatVerdict — mechanical findings + graceful degradation", () => {
     expect(label).toBe("request-changes"); // error still fails-safe to do-not-merge
   });
 });
+
+describe("capNote (MAX_ROUNDS surrender note)", () => {
+  it("renders the round-cap callout under the verdict when set", () => {
+    const result: ProviderResult = { verdict: "approved", findings: [] };
+    const { body } = formatVerdict(result, {
+      capNote: "Round cap reached (MAX_ROUNDS=5): verdict auto-approved.",
+    });
+    expect(body).toContain("🔁 **Round cap:** Round cap reached (MAX_ROUNDS=5)");
+  });
+
+  it("omits the callout entirely when capNote is absent", () => {
+    const result: ProviderResult = { verdict: "approved", findings: [] };
+    const { body } = formatVerdict(result, {});
+    expect(body).not.toContain("Round cap");
+  });
+});

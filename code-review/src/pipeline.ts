@@ -33,6 +33,7 @@ import type { ReviewTarget } from "./github/review.js";
 import { fetchReviewThreads, resolveThread, replyToThread } from "./github/threads.js";
 import type { PriorThread } from "./github/threads.js";
 import { dropResolved, reconcile } from "./review/reconcile.js";
+import { applyRoundCap } from "./review/gate.js";
 import { setVerdictLabel } from "./github/label.js";
 import type { LabelTarget } from "./github/label.js";
 import {
@@ -271,6 +272,26 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     validated.verdict = "approved";
   }
 
+  // --- MAX_ROUNDS surrender: on round N with only sub-blocker findings left, a
+  // "changes" verdict downgrades to "approved" (findings stay listed as advisory)
+  // so a reviewer that generates fresh findings every push cannot block forever.
+  // Applied BEFORE diffState so the history entry records the capped verdict. ---
+  const cap = applyRoundCap({
+    verdict,
+    findings,
+    priorRounds: prior?.history?.length ?? 0,
+    maxRounds: inputs.reviewMemory ? inputs.maxRounds : 0,
+  });
+  let capNote = "";
+  if (cap.capped) {
+    verdict = "approved";
+    validated.verdict = "approved";
+    capNote =
+      `Round cap reached (MAX_ROUNDS=${inputs.maxRounds}): no blocker findings after ` +
+      `${inputs.maxRounds} review rounds — verdict auto-approved; the findings below are advisory.`;
+    process.stdout.write(`  ${capNote}\n`);
+  }
+
   // --- Review memory: diff current findings vs prior, render recap + marker. ---
   let recap = "";
   let history = "";
@@ -313,6 +334,7 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     mechanical,
     verbosity: inputs.verbosity,
     changedFiles: diff.total_files,
+    capNote,
   });
 
   // --- Post the verdict comment (a failure here IS an infra error → propagate). ---

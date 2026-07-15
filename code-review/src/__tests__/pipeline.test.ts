@@ -225,6 +225,7 @@ function baseInputs(overrides: Partial<ActionInputs> = {}): ActionInputs {
     excludeGlobs: [],
     rulesMaxBytes: 32768,
     maxFiles: 0,
+    maxRounds: 0,
     maxDiffLines: 0,
     maxChunkLines: 0, // never chunk: existing tests exercise the single-call fast path
     maxChunks: 20,

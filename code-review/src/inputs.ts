@@ -82,6 +82,9 @@ export interface ActionInputs {
   botLogoUrl: string;
   /** When true, recap changes since the last review via the hidden state marker. */
   reviewMemory: boolean;
+  /** Review rounds after which a blocker-free "changes" verdict surrenders to
+   *  "approved" (0 = never; requires reviewMemory for the round count). */
+  maxRounds: number;
   /** Verdicts that should fail the job (parsed from FAIL_ON; defaults to blocking on "changes"). */
   failOn: ReadonlySet<BlockableVerdict>;
   /** Comment verbosity: "compact" (default) collapses the checklist and renders recap
@@ -256,6 +259,7 @@ export function readInputs(): ActionInputs {
     excludeGlobs: splitGlobs(core.getInput("EXCLUDE_GLOBS")),
     rulesMaxBytes: intInput("RULES_MAX_BYTES", 32768),
     maxFiles: intInput("MAX_FILES", 0),
+    maxRounds: Math.max(0, intInput("MAX_ROUNDS", 0)),
     maxDiffLines: intInput("MAX_DIFF_LINES", 0),
     maxChunkLines: intInput("MAX_CHUNK_LINES", 1500),
     maxChunks: intInput("MAX_CHUNKS", 20),
