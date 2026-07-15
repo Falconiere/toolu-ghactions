@@ -44,6 +44,36 @@ function matches(f: ReconcileFinding, t: PriorThread): boolean {
   return f.path === t.path && t.line !== null && f.line === t.line;
 }
 
+/** How far (in lines) a RESOLVED thread's coverage reaches for a reworded finding. */
+const RESOLVED_LINE_RADIUS = 10;
+
+/** The `_(CATEGORY)_` tag the bot renders in its inline root comments, normalised
+ *  for comparison; null when the body carries none. */
+function threadCategory(rootBody: string): string | null {
+  const m = /_\(([^)·]+?)(?:\s*·[^)]*)?\)_/.exec(rootBody);
+  return m?.[1] === undefined ? null : m[1].trim().toLowerCase();
+}
+
+/**
+ * Does a RESOLVED thread cover this finding? Wider than {@link matches}: a model
+ * re-raising a human-resolved finding almost never reproduces it verbatim — it
+ * rewords the text (new fingerprint) and drifts the anchor line, and after the
+ * next push the thread itself often goes outdated (line null), so both strict
+ * prongs miss and the finding resurrects forever. A resolved thread therefore
+ * also covers a same-path finding within {@link RESOLVED_LINE_RADIUS} lines, or
+ * — when the thread is detached (line null) — a same-path finding with the same
+ * rendered category. Blockers are exempt from the loose prongs: only an exact
+ * match may suppress a blocker, so loosening can never hide a real showstopper.
+ */
+function matchesResolved(f: ReconcileFinding, t: PriorThread): boolean {
+  if (matches(f, t)) return true;
+  if (f.severity === "blocker") return false;
+  if (f.path !== t.path) return false;
+  if (t.line !== null) return Math.abs(f.line - t.line) <= RESOLVED_LINE_RADIUS;
+  const category = threadCategory(t.rootBody);
+  return category !== null && category === (f.category ?? "").trim().toLowerCase();
+}
+
 /** True when the last comment in the thread is the author's (a reply the bot hasn't answered). */
 function authorHasLastWord(thread: PriorThread): boolean {
   const last = thread.replies.at(-1);
@@ -63,8 +93,10 @@ function authorHasLastWord(thread: PriorThread): boolean {
  * Split this run's findings on whether a RESOLVED prior thread covers them. A human
  * resolving the bot's thread is a decision — the finding must vanish everywhere
  * (verdict count, verdict comment, inline posting), not just from re-posting.
- * Matching mirrors reconcile()'s rules (fingerprint OR exact path+line) so the
- * verdict never counts a finding the inline path would refuse to post.
+ * Matching is {@link matchesResolved} — reconcile()'s strict rules widened with a
+ * line radius and an outdated-thread category prong, because a re-raised finding
+ * is usually reworded (new fp) and line-drifted while the resolved thread itself
+ * has gone outdated (line null). Blockers only ever match strictly.
  */
 export function dropResolved<F extends ReconcileFinding>(
   findings: F[],
@@ -74,7 +106,7 @@ export function dropResolved<F extends ReconcileFinding>(
   const kept: F[] = [];
   const suppressed: F[] = [];
   for (const f of findings) {
-    (resolved.some((t) => matches(f, t)) ? suppressed : kept).push(f);
+    (resolved.some((t) => matchesResolved(f, t)) ? suppressed : kept).push(f);
   }
   return { kept, suppressed };
 }

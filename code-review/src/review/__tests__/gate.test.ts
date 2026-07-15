@@ -3,7 +3,7 @@
 // to assert the dropped-token diagnostic without writing to the run log.
 import { describe, it, expect, vi, afterEach } from "vitest";
 import * as core from "@actions/core";
-import { parseFailOn, shouldBlock } from "../gate.js";
+import { applyRoundCap, parseFailOn, shouldBlock } from "../gate.js";
 
 /** parseFailOn result as a sorted array for order-independent comparison. */
 function parsed(raw: string): string[] {
@@ -70,5 +70,47 @@ describe("shouldBlock", () => {
     expect(shouldBlock("approved", onChanges)).toBe(false);
     expect(shouldBlock("skip", onChanges)).toBe(false);
     expect(shouldBlock("changes", off)).toBe(false);
+  });
+});
+
+describe("applyRoundCap", () => {
+  const findings = [{ severity: "medium" }, { severity: "low" }];
+
+  it("caps a changes verdict at the round limit when no blocker remains", () => {
+    const d = applyRoundCap({ verdict: "changes", findings, priorRounds: 4, maxRounds: 5 });
+    expect(d).toEqual({ verdict: "approved", capped: true });
+  });
+
+  it("caps past the limit too (round N+1 and later)", () => {
+    const d = applyRoundCap({ verdict: "changes", findings, priorRounds: 9, maxRounds: 5 });
+    expect(d.capped).toBe(true);
+  });
+
+  it("does not cap below the round limit", () => {
+    const d = applyRoundCap({ verdict: "changes", findings, priorRounds: 3, maxRounds: 5 });
+    expect(d).toEqual({ verdict: "changes", capped: false });
+  });
+
+  it("maxRounds 0 disables the cap entirely", () => {
+    const d = applyRoundCap({ verdict: "changes", findings, priorRounds: 99, maxRounds: 0 });
+    expect(d).toEqual({ verdict: "changes", capped: false });
+  });
+
+  it("a blocker finding keeps the changes verdict no matter the round", () => {
+    const withBlocker = [...findings, { severity: "blocker" }];
+    const d = applyRoundCap({
+      verdict: "changes",
+      findings: withBlocker,
+      priorRounds: 9,
+      maxRounds: 5,
+    });
+    expect(d).toEqual({ verdict: "changes", capped: false });
+  });
+
+  it("never touches non-changes verdicts", () => {
+    for (const verdict of ["approved", "skip", "error"] as const) {
+      const d = applyRoundCap({ verdict, findings, priorRounds: 9, maxRounds: 5 });
+      expect(d).toEqual({ verdict, capped: false });
+    }
   });
 });

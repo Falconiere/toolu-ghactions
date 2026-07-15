@@ -46,3 +46,36 @@ export function shouldBlock(
   if (verdict === "changes" || verdict === "error") return failOn.has(verdict);
   return false;
 }
+
+/** What {@link applyRoundCap} decided: the (possibly downgraded) verdict, and
+ *  whether the round cap fired (so the comment can say so). */
+export interface RoundCapDecision {
+  verdict: "approved" | "changes" | "skip" | "error";
+  capped: boolean;
+}
+
+/**
+ * MAX_ROUNDS surrender: a generative reviewer can produce a fresh batch of
+ * findings on every push, so "zero findings" is not a reachable fixpoint on
+ * some PRs and the "changes" verdict would block forever. When this run is
+ * review round `maxRounds` (or later) and every remaining finding is below
+ * blocker severity, downgrade "changes" to "approved" — the findings are still
+ * listed, the label flips, and FAIL_ON stops failing the job. A single blocker
+ * disables the cap: a real showstopper must keep blocking no matter the round.
+ *
+ * `priorRounds` is the persisted history length (one entry per completed
+ * review), so `priorRounds + 1` is THIS round's number. `maxRounds <= 0`
+ * disables the cap entirely.
+ */
+export function applyRoundCap(opts: {
+  verdict: "approved" | "changes" | "skip" | "error";
+  findings: ReadonlyArray<{ severity?: string }>;
+  priorRounds: number;
+  maxRounds: number;
+}): RoundCapDecision {
+  const { verdict, findings, priorRounds, maxRounds } = opts;
+  if (maxRounds <= 0 || verdict !== "changes") return { verdict, capped: false };
+  if (priorRounds + 1 < maxRounds) return { verdict, capped: false };
+  if (findings.some((f) => f.severity === "blocker")) return { verdict, capped: false };
+  return { verdict: "approved", capped: true };
+}

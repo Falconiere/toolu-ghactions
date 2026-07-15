@@ -226,3 +226,89 @@ describe("dropResolved", () => {
     expect(suppressed).toEqual([done]);
   });
 });
+
+describe("dropResolved loose matching (resolved-thread convergence)", () => {
+  it("suppresses a reworded finding within the line radius of a resolved thread", () => {
+    // New fp (reworded) + drifted line: both strict prongs miss, radius covers it.
+    const f = finding({ fp: "fp-reworded", line: 17 });
+    const t = thread({ fp: "fp-original", line: 10, isResolved: true });
+    const { kept, suppressed } = dropResolved([f], [t]);
+    expect(kept).toEqual([]);
+    expect(suppressed).toEqual([f]);
+  });
+
+  it("keeps a finding outside the line radius", () => {
+    const f = finding({ fp: "fp-reworded", line: 25 });
+    const t = thread({ fp: "fp-original", line: 10, isResolved: true });
+    const { kept, suppressed } = dropResolved([f], [t]);
+    expect(kept).toEqual([f]);
+    expect(suppressed).toEqual([]);
+  });
+
+  it("never loose-suppresses a blocker (radius hit but severity blocker)", () => {
+    const f = finding({ fp: "fp-reworded", line: 11, severity: "blocker" });
+    const t = thread({ fp: "fp-original", line: 10, isResolved: true });
+    const { kept } = dropResolved([f], [t]);
+    expect(kept).toEqual([f]);
+  });
+
+  it("still suppresses a blocker on an exact fingerprint match (strict prong)", () => {
+    const f = finding({ fp: "fp-shared", severity: "blocker" });
+    const t = thread({ fp: "fp-shared", isResolved: true });
+    const { suppressed } = dropResolved([f], [t]);
+    expect(suppressed).toEqual([f]);
+  });
+
+  it("suppresses via same path + same category when the resolved thread is detached", () => {
+    // Outdated resolved thread: line null, so only the category prong can cover it.
+    const f = finding({ fp: "fp-reworded", line: 300, category: "correctness" });
+    const t = thread({
+      fp: "fp-original",
+      line: null,
+      isResolved: true,
+      isOutdated: true,
+      rootBody: "**medium** _(CORRECTNESS)_: some text\n\n<!-- toolu-fp:fp-original -->",
+    });
+    const { suppressed } = dropResolved([f], [t]);
+    expect(suppressed).toEqual([f]);
+  });
+
+  it("keeps a detached-thread mismatch (different category)", () => {
+    const f = finding({ fp: "fp-reworded", line: 300, category: "performance" });
+    const t = thread({
+      fp: "fp-original",
+      line: null,
+      isResolved: true,
+      isOutdated: true,
+      rootBody: "**medium** _(CORRECTNESS)_: some text\n\n<!-- toolu-fp:fp-original -->",
+    });
+    const { kept } = dropResolved([f], [t]);
+    expect(kept).toEqual([f]);
+  });
+
+  it("parses the summary-style `_(CATEGORY · confidence)_` tag too", () => {
+    const f = finding({ fp: "fp-reworded", line: 300, category: "doc/comment accuracy" });
+    const t = thread({
+      fp: "fp-original",
+      line: null,
+      isResolved: true,
+      rootBody: "**low** _(DOC/COMMENT ACCURACY · high)_: text\n\n<!-- toolu-fp:fp-original -->",
+    });
+    const { suppressed } = dropResolved([f], [t]);
+    expect(suppressed).toEqual([f]);
+  });
+
+  it("an UNRESOLVED nearby thread never suppresses", () => {
+    const f = finding({ fp: "fp-reworded", line: 11 });
+    const t = thread({ fp: "fp-original", line: 10, isResolved: false });
+    const { kept } = dropResolved([f], [t]);
+    expect(kept).toEqual([f]);
+  });
+
+  it("a resolved thread in a different path never suppresses", () => {
+    const f = finding({ fp: "fp-reworded", line: 10, path: "src/b.ts" });
+    const t = thread({ fp: "fp-original", line: 10, path: "src/a.ts", isResolved: true });
+    const { kept } = dropResolved([f], [t]);
+    expect(kept).toEqual([f]);
+  });
+});

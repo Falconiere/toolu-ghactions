@@ -31251,6 +31251,13 @@ function shouldBlock(verdict, failOn) {
   if (verdict === "changes" || verdict === "error") return failOn.has(verdict);
   return false;
 }
+function applyRoundCap(opts) {
+  const { verdict, findings, priorRounds, maxRounds } = opts;
+  if (maxRounds <= 0 || verdict !== "changes") return { verdict, capped: false };
+  if (priorRounds + 1 < maxRounds) return { verdict, capped: false };
+  if (findings.some((f) => f.severity === "blocker")) return { verdict, capped: false };
+  return { verdict: "approved", capped: true };
+}
 
 // src/git/globs.ts
 function splitGlobs(raw) {
@@ -31370,6 +31377,7 @@ function readInputs() {
     excludeGlobs: splitGlobs(core2.getInput("EXCLUDE_GLOBS")),
     rulesMaxBytes: intInput("RULES_MAX_BYTES", 32768),
     maxFiles: intInput("MAX_FILES", 0),
+    maxRounds: Math.max(0, intInput("MAX_ROUNDS", 0)),
     maxDiffLines: intInput("MAX_DIFF_LINES", 0),
     maxChunkLines: intInput("MAX_CHUNK_LINES", 1500),
     maxChunks: intInput("MAX_CHUNKS", 20),
@@ -39025,6 +39033,9 @@ function renderBody(body, findingsSection) {
   if (body.errorDetail !== "") main2 += `
 
 > \u26A0\uFE0F **Provider error:** ${body.errorDetail}`;
+  if (body.capNote !== "") main2 += `
+
+> \u{1F501} **Round cap:** ${body.capNote}`;
   parts.push(main2);
   if (body.recap !== "") parts.push(`
 ${body.recap}
@@ -39295,7 +39306,8 @@ function formatVerdict(result, opts) {
     recap: opts.recap ?? "",
     history: opts.history ?? "",
     marker: marker17,
-    mechanical: opts.mechanical ?? []
+    mechanical: opts.mechanical ?? [],
+    capNote: opts.capNote ?? ""
   };
   const rendered = fitToSizeLimit(body, marker17);
   return { body: rendered, label };
@@ -39860,6 +39872,19 @@ function matches(f, t) {
   if (f.fp === t.fp) return true;
   return f.path === t.path && t.line !== null && f.line === t.line;
 }
+var RESOLVED_LINE_RADIUS = 10;
+function threadCategory(rootBody) {
+  const m = /_\(([^)·]+?)(?:\s*·[^)]*)?\)_/.exec(rootBody);
+  return m?.[1] === void 0 ? null : m[1].trim().toLowerCase();
+}
+function matchesResolved(f, t) {
+  if (matches(f, t)) return true;
+  if (f.severity === "blocker") return false;
+  if (f.path !== t.path) return false;
+  if (t.line !== null) return Math.abs(f.line - t.line) <= RESOLVED_LINE_RADIUS;
+  const category = threadCategory(t.rootBody);
+  return category !== null && category === (f.category ?? "").trim().toLowerCase();
+}
 function authorHasLastWord(thread) {
   const last = thread.replies.at(-1);
   if (!last) return false;
@@ -39871,7 +39896,7 @@ function dropResolved(findings, priorThreads) {
   const kept = [];
   const suppressed = [];
   for (const f of findings) {
-    (resolved.some((t) => matches(f, t)) ? suppressed : kept).push(f);
+    (resolved.some((t) => matchesResolved(f, t)) ? suppressed : kept).push(f);
   }
   return { kept, suppressed };
 }
@@ -40182,6 +40207,20 @@ async function runReview(deps) {
     verdict = "approved";
     validated.verdict = "approved";
   }
+  const cap = applyRoundCap({
+    verdict,
+    findings,
+    priorRounds: prior?.history?.length ?? 0,
+    maxRounds: inputs.reviewMemory ? inputs.maxRounds : 0
+  });
+  let capNote = "";
+  if (cap.capped) {
+    verdict = "approved";
+    validated.verdict = "approved";
+    capNote = `Round cap reached (MAX_ROUNDS=${inputs.maxRounds}): no blocker findings after ${inputs.maxRounds} review rounds \u2014 verdict auto-approved; the findings below are advisory.`;
+    process.stdout.write(`  ${capNote}
+`);
+  }
   let recap = "";
   let history = "";
   let marker17 = "";
@@ -40219,7 +40258,8 @@ async function runReview(deps) {
     historyMarker: marker17,
     mechanical,
     verbosity: inputs.verbosity,
-    changedFiles: diff.total_files
+    changedFiles: diff.total_files,
+    capNote
   });
   const commentUrl = await upsertComment(octokit, target, body, stickyId);
   await setVerdictLabel(octokit, verdict, target, { manageLabels: inputs.manageLabels });

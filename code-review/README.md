@@ -254,6 +254,13 @@ enable it on repos that accept fork PRs. Everything else (priority order,
 `RULES_GLOB`, `RULES_MAX_BYTES`) behaves identically; an unrecognized value warns
 and falls back to `base`.
 
+### Convergence: resolved threads & the round cap
+
+A generative reviewer re-derives its findings from the diff on every push, so left alone it can produce a *fresh* batch each round — reworded text (new fingerprint), drifted line anchors, findings wandering into untouched files — and a PR can accumulate dozens of findings without ever reaching the zero-findings verdict. Two mechanisms make the review converge:
+
+- **Resolved threads suppress re-raises (always on).** A human resolving one of the bot's inline threads is a decision. A finding covered by a resolved thread is dropped everywhere — verdict count, summary comment, inline posting. Coverage is deliberately wider than an exact match: same fingerprint, same `path:line`, same path within **10 lines** (a reworded finding drifts), or — when the resolved thread has gone outdated after a push (GitHub detaches its line) — same path and same finding category. **Blocker-severity findings only ever match exactly**, so the loosening can never hide a genuine showstopper.
+- **`MAX_ROUNDS` surrender (opt-in).** Set `MAX_ROUNDS: 5` and the fifth review round (counted from the `REVIEW_MEMORY` history) that would still say `changes` with **only sub-blocker findings** is downgraded to `approved`: the findings stay listed as advisory, the comment carries an explicit `🔁 Round cap` callout, and `FAIL_ON` stops failing the job. One blocker finding disables the cap for that round. `0` (default) keeps the old block-forever behavior.
+
 ### Inline comments & suggestions
 
 With `INLINE_COMMENTS: true` (default), findings are posted as inline review comments anchored to the exact file and line. When the model has a concrete, high-confidence fix it attaches a ` ```suggestion ` block you can commit straight from the PR. Anchors are validated against GitHub's own view of the PR diff before posting: a finding GitHub cannot anchor degrades to a **file-level** comment instead of failing the whole batch (the summary comment always carries every finding regardless). Set `INLINE_COMMENTS: false` for a summary-comment-only review.

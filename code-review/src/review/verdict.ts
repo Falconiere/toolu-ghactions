@@ -54,6 +54,8 @@ export interface VerdictOptions {
   verbosity?: "compact" | "full";
   /** File count of the reviewed diff — shown in the compact checklist line (default 0). */
   changedFiles?: number;
+  /** MAX_ROUNDS surrender note shown under the verdict ("" → omit). */
+  capNote?: string;
 }
 
 /** Thrown when the body cannot fit under the size cap without dropping the marker. */
@@ -112,6 +114,7 @@ export function formatVerdict(
     history: opts.history ?? "",
     marker,
     mechanical: opts.mechanical ?? [],
+    capNote: opts.capNote ?? "",
   };
 
   const rendered = fitToSizeLimit(body, marker);

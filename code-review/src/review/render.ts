@@ -59,6 +59,8 @@ export interface ReviewBody {
   marker: string;
   /** Deterministic findings (gitleaks/opengrep) for the Mechanical-checks summary ([] → omit). */
   mechanical: MechanicalFinding[];
+  /** MAX_ROUNDS surrender note shown under the verdict line ("" → omit). */
+  capNote: string;
 }
 
 /**
@@ -79,6 +81,9 @@ export function renderBody(body: ReviewBody, findingsSection: string): string {
   // Surface the real provider-error message (not just the generic badge) so a failed
   // review is diagnosable from the comment alone.
   if (body.errorDetail !== "") main += `\n\n> ⚠️ **Provider error:** ${body.errorDetail}`;
+  // The MAX_ROUNDS surrender is a verdict override — say so right under the verdict
+  // so an auto-approved round is never mistaken for a clean review.
+  if (body.capNote !== "") main += `\n\n> 🔁 **Round cap:** ${body.capNote}`;
   parts.push(main);
 
   if (body.recap !== "") parts.push(`\n${body.recap}\n`);
