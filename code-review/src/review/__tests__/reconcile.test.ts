@@ -4,7 +4,7 @@
 // (line radius, detached-thread category) live in reconcile-loose.test.ts.
 import { describe, expect, it } from "vitest";
 import { dropResolved, reconcile } from "@/review/reconcile.js";
-import { authorReply, botReply, finding, thread } from "./reconcile-helpers.js";
+import { authorReply, botReply, finding, thread } from "@/review/__tests__/reconcile-helpers.js";
 
 describe("reconcile", () => {
   it("posts a brand-new finding (no matching prior thread) via toCreate", () => {

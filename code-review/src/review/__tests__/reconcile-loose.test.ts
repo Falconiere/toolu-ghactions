@@ -6,7 +6,7 @@
 // these prongs exist to stop. Split from reconcile.test.ts (file-size budget).
 import { describe, expect, it } from "vitest";
 import { dropResolved, reconcile } from "@/review/reconcile.js";
-import { authorReply, finding, thread } from "./reconcile-helpers.js";
+import { authorReply, finding, thread } from "@/review/__tests__/reconcile-helpers.js";
 
 describe("dropResolved loose matching (resolved-thread convergence)", () => {
   it("suppresses a reworded finding within the line radius of a resolved thread", () => {
