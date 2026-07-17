@@ -12,12 +12,11 @@ export function gitOrNull(args: string[], cwd: string): string | null {
       encoding: "utf8",
       maxBuffer: 1024 * 1024 * 1024,
     }).trim();
-  } catch (err) {
-    // The null return IS the contract (absent ref/path is an expected outcome);
-    // still log so a genuinely broken git invocation is diagnosable.
-    process.stderr.write(
-      `  Note: git ${args[0] ?? ""} returned non-zero (${err instanceof Error ? err.message.split("\n")[0] : String(err)})\n`,
-    );
+  } catch {
+    // Silent by contract: non-zero exit is an ANSWER here, not an error —
+    // `merge-base --is-ancestor` says "no" via exit code, `rev-parse --verify`
+    // probes for refs that are expected to be absent. Callers log at their own
+    // decision points when the outcome is worth surfacing.
     return null;
   }
 }
@@ -83,10 +82,10 @@ export function readFileAt(reviewHead: string, cwd: string): (path: string) => s
         encoding: "utf8",
         maxBuffer: 1024 * 1024 * 1024,
       });
-    } catch (err) {
-      process.stderr.write(
-        `  Note: could not read ${path} at ${reviewHead} (${err instanceof Error ? err.message.split("\n")[0] : String(err)})\n`,
-      );
+    } catch {
+      // Silent: an absent path at the ref is the documented null contract
+      // (deleted files — normal), and logging it would emit one line per
+      // deleted file on every chunked review.
       return null;
     }
   };

@@ -193,6 +193,8 @@ export async function publish(input: PublishInput): Promise<ReviewResult> {
   });
 
   const commentUrl = await upsertComment(octokit, target, body, input.stickyId);
+  // setVerdictLabel never throws — every labels-API call is caught inside
+  // github/label.ts and reported via its LabelResult, so no try/catch here.
   await setVerdictLabel(octokit, verdict, target, { manageLabels: inputs.manageLabels });
   if (inputs.inlineComments) await postInline(input, findings);
   return { verdict, findingsCount: findings.length, commentUrl };

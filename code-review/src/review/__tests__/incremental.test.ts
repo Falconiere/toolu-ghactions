@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { dropOutOfScope } from "@/review/incremental.js";
 import type { IncrementalScope } from "@/review/incremental.js";
-import { finding, thread } from "./reconcile-helpers.js";
+import { finding, thread } from "@/review/__tests__/reconcile-helpers.js";
 
 const EMPTY: IncrementalScope = new Map();
 

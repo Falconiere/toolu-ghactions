@@ -1050,6 +1050,27 @@ describe("runReview — marker survives a cancelled run (cancel-in-progress safe
 
     expect(rec.updated[0]?.body).toContain(priorMarker);
   });
+
+  it("a FIRST run (no prior sticky, null marker) posts an in-progress body with no marker and no 'null'", async () => {
+    // priorMarker is null on round one — the body must not render a literal
+    // "null" or an empty marker line.
+    const { dir, headSha } = track(featureRepoWithChange());
+    const { octokit, rec } = fakeOctokit();
+
+    await runReview({
+      inputs: baseInputs(),
+      octokit,
+      context: prContext(headSha),
+      fetch: replayFetch("success"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    const first = rec.created[0];
+    expect(first?.body).toContain("PR Review in Progress");
+    expect(first?.body).not.toContain("null");
+    expect(first?.body).not.toContain("toolu-review-state:v1");
+  });
 });
 
 describe("runReview — incremental scope (natural convergence)", () => {

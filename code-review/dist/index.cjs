@@ -32136,11 +32136,7 @@ function gitOrNull2(args, cwd) {
       encoding: "utf8",
       maxBuffer: 1024 * 1024 * 1024
     }).trim();
-  } catch (err) {
-    process.stderr.write(
-      `  Note: git ${args[0] ?? ""} returned non-zero (${err instanceof Error ? err.message.split("\n")[0] : String(err)})
-`
-    );
+  } catch {
     return null;
   }
 }
@@ -32187,11 +32183,7 @@ function readFileAt(reviewHead, cwd) {
         encoding: "utf8",
         maxBuffer: 1024 * 1024 * 1024
       });
-    } catch (err) {
-      process.stderr.write(
-        `  Note: could not read ${path} at ${reviewHead} (${err instanceof Error ? err.message.split("\n")[0] : String(err)})
-`
-      );
+    } catch {
       return null;
     }
   };

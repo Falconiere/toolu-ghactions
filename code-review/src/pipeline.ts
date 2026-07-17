@@ -80,6 +80,10 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
   // The PR HEAD sha survives: it is reachable from the next merge commit, so
   // `merge-base --is-ancestor <prev head> HEAD` holds and the since-diff lands
   // on the same checkout tree the review diff numbers its lines against.
+  // The fallback never stores a merge sha in practice: pull_request payloads
+  // always carry `.pull_request.head.sha` (event.head_sha is only absent on
+  // other events), and on issue_comment runs target.headSha is `git rev-parse
+  // FETCH_HEAD` — the fetched PR head itself, the correct series anchor.
   const reviewedSha = event.head_sha ?? target.headSha;
 
   const scope = incrementalScope(deps, found, reviewHead, cwd);
