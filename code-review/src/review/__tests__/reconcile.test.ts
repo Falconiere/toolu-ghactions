@@ -1,49 +1,14 @@
+// reconcile.test.ts — the STRICT thread↔finding rules: fingerprint / exact
+// path+line matching, the {create, reply, resolve} plan, duplicate-thread
+// cleanup, and resolved-thread suppression on exact matches. The loose prongs
+// (line radius, detached-thread category) live in reconcile-loose.test.ts.
 import { describe, expect, it } from "vitest";
 import { dropResolved, reconcile } from "@/review/reconcile.js";
-import type { ReconcileFinding } from "@/review/reconcile.js";
-import type { PriorThread, ThreadComment } from "@/github/threads.js";
-
-const BOT = "toolu-bot";
-
-/** Build a ReconcileFinding with defaults; fp defaults to a path:line-derived stub. */
-function finding(over: Partial<ReconcileFinding> = {}): ReconcileFinding {
-  return {
-    path: "src/a.ts",
-    line: 10,
-    fp: "fp-default",
-    text: "a finding",
-    severity: "medium",
-    category: "correctness",
-    ...over,
-  };
-}
-
-/** Build a bot-authored PriorThread with defaults (no replies, unresolved, current). */
-function thread(over: Partial<PriorThread> = {}): PriorThread {
-  return {
-    threadId: "T_1",
-    rootCommentId: 100,
-    fp: "fp-default",
-    path: "src/a.ts",
-    line: 10,
-    isResolved: false,
-    isOutdated: false,
-    rootBody: "**medium**: a finding\n\n<!-- toolu-fp:fp-default -->",
-    replies: [],
-    botLogin: BOT,
-    ...over,
-  };
-}
-
-const authorReply: ThreadComment = {
-  author: "human-dev",
-  body: "I disagree, this is intentional.",
-};
-const botReply: ThreadComment = { author: BOT, body: "Still flagging after re-review. ..." };
+import { authorReply, botReply, finding, thread } from "./reconcile-helpers.js";
 
 describe("reconcile", () => {
   it("posts a brand-new finding (no matching prior thread) via toCreate", () => {
-    const f = finding({ fp: "fp-new" });
+    const f = finding({ fp: "fp-new", path: "src/new.ts" });
     const plan = reconcile([f], []);
     expect(plan.toCreate).toEqual([f]);
     expect(plan.toReply).toEqual([]);
@@ -65,11 +30,12 @@ describe("reconcile", () => {
     expect(plan.toCreate).toEqual([]);
   });
 
-  it("does NOT match by path+line when the thread line is null (detached)", () => {
+  it("does NOT match a detached thread without a category tag in its body", () => {
+    // Thread line is null and its root body carries no `_(CATEGORY)_` tag, so
+    // neither the strict prongs nor the detached-category prong can cover it.
     const f = finding({ fp: "fp-a", path: "src/x.ts", line: 42 });
     const t = thread({ fp: "fp-b", path: "src/x.ts", line: null });
     const plan = reconcile([f], [t]);
-    // No fp match and the thread has no line → treated as a different, gone finding.
     expect(plan.toCreate).toEqual([f]);
     expect(plan.toResolve).toEqual([t]);
   });
@@ -224,91 +190,5 @@ describe("dropResolved", () => {
     const { kept, suppressed } = dropResolved([done, live], [resolvedThread, openThread]);
     expect(kept).toEqual([live]);
     expect(suppressed).toEqual([done]);
-  });
-});
-
-describe("dropResolved loose matching (resolved-thread convergence)", () => {
-  it("suppresses a reworded finding within the line radius of a resolved thread", () => {
-    // New fp (reworded) + drifted line: both strict prongs miss, radius covers it.
-    const f = finding({ fp: "fp-reworded", line: 17 });
-    const t = thread({ fp: "fp-original", line: 10, isResolved: true });
-    const { kept, suppressed } = dropResolved([f], [t]);
-    expect(kept).toEqual([]);
-    expect(suppressed).toEqual([f]);
-  });
-
-  it("keeps a finding outside the line radius", () => {
-    const f = finding({ fp: "fp-reworded", line: 25 });
-    const t = thread({ fp: "fp-original", line: 10, isResolved: true });
-    const { kept, suppressed } = dropResolved([f], [t]);
-    expect(kept).toEqual([f]);
-    expect(suppressed).toEqual([]);
-  });
-
-  it("never loose-suppresses a blocker (radius hit but severity blocker)", () => {
-    const f = finding({ fp: "fp-reworded", line: 11, severity: "blocker" });
-    const t = thread({ fp: "fp-original", line: 10, isResolved: true });
-    const { kept } = dropResolved([f], [t]);
-    expect(kept).toEqual([f]);
-  });
-
-  it("still suppresses a blocker on an exact fingerprint match (strict prong)", () => {
-    const f = finding({ fp: "fp-shared", severity: "blocker" });
-    const t = thread({ fp: "fp-shared", isResolved: true });
-    const { suppressed } = dropResolved([f], [t]);
-    expect(suppressed).toEqual([f]);
-  });
-
-  it("suppresses via same path + same category when the resolved thread is detached", () => {
-    // Outdated resolved thread: line null, so only the category prong can cover it.
-    const f = finding({ fp: "fp-reworded", line: 300, category: "correctness" });
-    const t = thread({
-      fp: "fp-original",
-      line: null,
-      isResolved: true,
-      isOutdated: true,
-      rootBody: "**medium** _(CORRECTNESS)_: some text\n\n<!-- toolu-fp:fp-original -->",
-    });
-    const { suppressed } = dropResolved([f], [t]);
-    expect(suppressed).toEqual([f]);
-  });
-
-  it("keeps a detached-thread mismatch (different category)", () => {
-    const f = finding({ fp: "fp-reworded", line: 300, category: "performance" });
-    const t = thread({
-      fp: "fp-original",
-      line: null,
-      isResolved: true,
-      isOutdated: true,
-      rootBody: "**medium** _(CORRECTNESS)_: some text\n\n<!-- toolu-fp:fp-original -->",
-    });
-    const { kept } = dropResolved([f], [t]);
-    expect(kept).toEqual([f]);
-  });
-
-  it("parses the summary-style `_(CATEGORY · confidence)_` tag too", () => {
-    const f = finding({ fp: "fp-reworded", line: 300, category: "doc/comment accuracy" });
-    const t = thread({
-      fp: "fp-original",
-      line: null,
-      isResolved: true,
-      rootBody: "**low** _(DOC/COMMENT ACCURACY · high)_: text\n\n<!-- toolu-fp:fp-original -->",
-    });
-    const { suppressed } = dropResolved([f], [t]);
-    expect(suppressed).toEqual([f]);
-  });
-
-  it("an UNRESOLVED nearby thread never suppresses", () => {
-    const f = finding({ fp: "fp-reworded", line: 11 });
-    const t = thread({ fp: "fp-original", line: 10, isResolved: false });
-    const { kept } = dropResolved([f], [t]);
-    expect(kept).toEqual([f]);
-  });
-
-  it("a resolved thread in a different path never suppresses", () => {
-    const f = finding({ fp: "fp-reworded", line: 10, path: "src/b.ts" });
-    const t = thread({ fp: "fp-original", line: 10, path: "src/a.ts", isResolved: true });
-    const { kept } = dropResolved([f], [t]);
-    expect(kept).toEqual([f]);
   });
 });

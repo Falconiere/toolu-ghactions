@@ -44,8 +44,8 @@ function matches(f: ReconcileFinding, t: PriorThread): boolean {
   return f.path === t.path && t.line !== null && f.line === t.line;
 }
 
-/** How far (in lines) a RESOLVED thread's coverage reaches for a reworded finding. */
-const RESOLVED_LINE_RADIUS = 10;
+/** How far (in lines) a prior thread's coverage reaches for a reworded finding. */
+const NEARBY_LINE_RADIUS = 10;
 
 /** The `_(CATEGORY)_` tag the bot renders in its inline root comments, normalised
  *  for comparison; null when the body carries none. */
@@ -55,23 +55,31 @@ function threadCategory(rootBody: string): string | null {
 }
 
 /**
- * Does a RESOLVED thread cover this finding? Wider than {@link matches}: a model
- * re-raising a human-resolved finding almost never reproduces it verbatim — it
- * rewords the text (new fingerprint) and drifts the anchor line, and after the
- * next push the thread itself often goes outdated (line null), so both strict
- * prongs miss and the finding resurrects forever. A resolved thread therefore
- * also covers a same-path finding within {@link RESOLVED_LINE_RADIUS} lines, or
- * — when the thread is detached (line null) — a same-path finding with the same
- * rendered category. Blockers are exempt from the loose prongs: only an exact
- * match may suppress a blocker, so loosening can never hide a real showstopper.
+ * The LOOSE prongs shared by resolved- and open-thread coverage: a model
+ * re-raising a finding almost never reproduces it verbatim — it rewords the
+ * text (new fingerprint) and drifts the anchor line, and after the next push
+ * the thread itself often goes outdated (line null), so both strict prongs
+ * miss. A thread therefore also covers a same-path finding within
+ * {@link NEARBY_LINE_RADIUS} lines, or — when the thread is detached (line
+ * null) — a same-path finding with the same rendered category.
+ */
+function matchesNearby(f: ReconcileFinding, t: PriorThread): boolean {
+  if (f.path !== t.path) return false;
+  if (t.line !== null) return Math.abs(f.line - t.line) <= NEARBY_LINE_RADIUS;
+  const category = threadCategory(t.rootBody);
+  return category !== null && category === (f.category ?? "").trim().toLowerCase();
+}
+
+/**
+ * Does a RESOLVED thread cover this finding? Strict {@link matches} widened by
+ * {@link matchesNearby}. Blockers are exempt from the loose prongs: suppression
+ * HIDES the finding (verdict, comment, inline), so only an exact match may
+ * suppress a blocker — loosening can never hide a real showstopper.
  */
 function matchesResolved(f: ReconcileFinding, t: PriorThread): boolean {
   if (matches(f, t)) return true;
   if (f.severity === "blocker") return false;
-  if (f.path !== t.path) return false;
-  if (t.line !== null) return Math.abs(f.line - t.line) <= RESOLVED_LINE_RADIUS;
-  const category = threadCategory(t.rootBody);
-  return category !== null && category === (f.category ?? "").trim().toLowerCase();
+  return matchesNearby(f, t);
 }
 
 /** True when the last comment in the thread is the author's (a reply the bot hasn't answered). */
@@ -84,11 +92,6 @@ function authorHasLastWord(thread: PriorThread): boolean {
   return last.author !== thread.botLogin;
 }
 
-/**
- * Partition this run's findings against the bot's prior threads into a {create, reply,
- * resolve} plan. See the module header for the rules. Resolved threads are never acted on
- * again but still "cover" a matching finding so it is not re-posted as a duplicate.
- */
 /**
  * Split this run's findings on whether a RESOLVED prior thread covers them. A human
  * resolving the bot's thread is a decision — the finding must vanish everywhere
@@ -111,6 +114,15 @@ export function dropResolved<F extends ReconcileFinding>(
   return { kept, suppressed };
 }
 
+/**
+ * Partition this run's findings against the bot's prior threads into a {create,
+ * reply, resolve} plan (module header has the rules). Mapping is STRICT-FIRST
+ * ({@link matches}) then widened to {@link matchesNearby}: a persisting finding
+ * is usually reworded (new fp) and line-drifted, and strict-only matching would
+ * resolve the old thread and re-post a duplicate — the resolve-then-reinvent
+ * churn. The loose prong hides nothing (only the posting location changes), so
+ * unlike {@link matchesResolved} it applies to blockers too.
+ */
 export function reconcile<F extends ReconcileFinding>(
   findings: F[],
   priorThreads: PriorThread[],
@@ -121,7 +133,8 @@ export function reconcile<F extends ReconcileFinding>(
   const toResolve: PriorThread[] = [];
 
   for (const thread of priorThreads) {
-    const idx = findings.findIndex((f) => matches(f, thread));
+    let idx = findings.findIndex((f) => matches(f, thread));
+    if (idx < 0) idx = findings.findIndex((f) => matchesNearby(f, thread));
     const matched = idx >= 0 ? findings[idx] : undefined;
     if (matched) covered.add(idx);
     if (thread.isResolved) continue; // respect an existing resolution: never re-act

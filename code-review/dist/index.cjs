@@ -24669,8 +24669,8 @@ function loadApiKey({
   return apiKey;
 }
 var validatorSymbol = Symbol.for("vercel.ai.validator");
-function validator(validate) {
-  return { [validatorSymbol]: true, validate };
+function validator(validate2) {
+  return { [validatorSymbol]: true, validate: validate2 };
 }
 function isValidator(value) {
   return typeof value === "object" && value !== null && validatorSymbol in value && value[validatorSymbol] === true && "validate" in value;
@@ -31402,9 +31402,6 @@ function readBool(name17, fallback) {
   return core2.getBooleanInput(name17);
 }
 
-// src/pipeline.ts
-var import_node_child_process3 = require("node:child_process");
-
 // src/git/diff.ts
 var import_node_child_process = require("node:child_process");
 
@@ -31796,12 +31793,599 @@ function stripTrailingNewlines(s) {
   return s.replace(/\n+$/, "");
 }
 
-// src/rules.ts
+// src/github/event.ts
+async function resolveEvent(ctx, opts = {}) {
+  if (!ctx.payload) return deny("no-event-payload");
+  switch (ctx.eventName) {
+    case "pull_request":
+      return resolvePullRequest(ctx.payload);
+    case "issue_comment":
+      return resolveIssueComment(ctx.payload, opts);
+    default:
+      return deny("unsupported-event");
+  }
+}
+function resolvePullRequest(payload) {
+  const prNumber = payload.pull_request?.number;
+  if (!prNumber) return deny("no-pr-number");
+  return {
+    run: true,
+    reason: "pull_request",
+    review_head: "HEAD",
+    base_ref: payload.pull_request?.base?.ref ?? "",
+    full_review: true,
+    pr_number: prNumber
+  };
+}
+async function resolveIssueComment(payload, opts) {
+  const triggerPhrase = opts.triggerPhrase ?? "@toolu";
+  const minPermission = opts.minTriggerPermission ?? "write";
+  const ownLogin = opts.ownLogin ?? "github-actions[bot]";
+  const commenter = payload.comment?.user?.login ?? "";
+  const userType = payload.comment?.user?.type ?? "";
+  if (userType === "Bot" || commenter === ownLogin) return deny("bot-author");
+  if (payload.issue?.pull_request == null) return deny("not-a-pull-request");
+  const body = payload.comment?.body ?? "";
+  const triggerLc = `${triggerPhrase.toLowerCase()} review`;
+  const idx = body.toLowerCase().indexOf(triggerLc);
+  if (idx < 0) return deny("no-trigger");
+  const instruction = body.slice(idx + triggerLc.length).trim();
+  const prNumber = payload.issue?.number;
+  const commentId = payload.comment?.id;
+  let permission = "";
+  try {
+    permission = await opts.lookupPermission?.(commenter) ?? "";
+  } catch {
+    return deny("permission-check-failed", { commenter });
+  }
+  if (!permission) return deny("permission-check-failed", { commenter });
+  const allowed = minPermission === "admin" ? permission === "admin" : permission === "admin" || permission === "write";
+  if (!allowed) return deny("insufficient-permission", { commenter });
+  let baseRef = "";
+  if (prNumber !== void 0 && opts.lookupBaseRef) {
+    try {
+      baseRef = await opts.lookupBaseRef(prNumber);
+    } catch {
+      baseRef = "";
+    }
+  }
+  return {
+    run: true,
+    reason: "mention",
+    review_head: "FETCH_HEAD",
+    base_ref: baseRef,
+    // full_review=false ONLY when an instruction scopes the review.
+    full_review: instruction === "",
+    instruction,
+    ...prNumber !== void 0 ? { pr_number: prNumber } : {},
+    commenter,
+    ...commentId !== void 0 ? { comment_id: commentId } : {}
+  };
+}
+function deny(reason, extra = {}) {
+  return {
+    run: false,
+    reason,
+    full_review: false,
+    ...extra.commenter !== void 0 ? { commenter: extra.commenter } : {}
+  };
+}
+
+// src/review/fpmarker.ts
+function appendFpMarker(body, fp) {
+  return `${body}
+
+<!-- toolu-fp:${fp} -->`;
+}
+function extractFpMarker(body) {
+  const m = body.match(/<!-- toolu-fp:([0-9a-f]+) -->/);
+  return m?.[1] ?? null;
+}
+
+// src/github/threads.ts
+var GqlThreadSchema = external_exports.object({
+  id: external_exports.string(),
+  isResolved: external_exports.boolean(),
+  isOutdated: external_exports.boolean(),
+  path: external_exports.string(),
+  line: external_exports.number().nullable(),
+  comments: external_exports.object({
+    nodes: external_exports.array(
+      external_exports.object({
+        databaseId: external_exports.number().nullable(),
+        body: external_exports.string(),
+        author: external_exports.object({ login: external_exports.string() }).nullable()
+      })
+    )
+  })
+});
+var GqlResponseSchema = external_exports.object({
+  repository: external_exports.object({
+    pullRequest: external_exports.object({
+      reviewThreads: external_exports.object({
+        pageInfo: external_exports.object({ hasNextPage: external_exports.boolean(), endCursor: external_exports.string().nullable() }),
+        nodes: external_exports.array(GqlThreadSchema)
+      })
+    }).nullable()
+  }).nullable()
+});
+var THREADS_QUERY = `
+  query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        reviewThreads(first: 100, after: $cursor) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id
+            isResolved
+            isOutdated
+            path
+            line
+            comments(first: 50) {
+              nodes { databaseId body author { login } }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+var RESOLVE_MUTATION = `
+  mutation($threadId: ID!) {
+    resolveReviewThread(input: { threadId: $threadId }) {
+      thread { isResolved }
+    }
+  }
+`;
+async function fetchReviewThreads(client, target) {
+  const threads = [];
+  let cursor = null;
+  try {
+    for (let page = 0; page < 20; page++) {
+      const raw = await client.graphql(THREADS_QUERY, {
+        owner: target.owner,
+        repo: target.repo,
+        number: target.prNumber,
+        cursor
+      });
+      const parsed = GqlResponseSchema.safeParse(raw);
+      if (!parsed.success) break;
+      const conn = parsed.data.repository?.pullRequest?.reviewThreads;
+      if (!conn) break;
+      for (const node of conn.nodes) {
+        const parsed2 = normalizeThread(node);
+        if (parsed2) threads.push(parsed2);
+      }
+      if (!conn.pageInfo.hasNextPage) break;
+      cursor = conn.pageInfo.endCursor;
+      if (cursor === null) break;
+    }
+  } catch {
+    return [];
+  }
+  return threads;
+}
+function normalizeThread(node) {
+  const comments = node.comments.nodes;
+  const root = comments[0];
+  if (!root || root.databaseId == null) return null;
+  const fp = extractFpMarker(root.body);
+  if (fp === null) return null;
+  return {
+    threadId: node.id,
+    rootCommentId: root.databaseId,
+    fp,
+    path: node.path,
+    line: node.line,
+    isResolved: node.isResolved,
+    isOutdated: node.isOutdated,
+    rootBody: root.body,
+    botLogin: root.author?.login ?? "",
+    replies: comments.slice(1).map((c) => ({ author: c.author?.login ?? "", body: c.body }))
+  };
+}
+async function resolveThread(client, threadId) {
+  try {
+    await client.graphql(RESOLVE_MUTATION, { threadId });
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function replyToThread(client, target, rootCommentId, body) {
+  try {
+    await client.rest.pulls.createReplyForReviewComment({
+      owner: target.owner,
+      repo: target.repo,
+      pull_number: target.prNumber,
+      comment_id: rootCommentId,
+      body
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// src/errors.ts
+function errorMessage(err, fallback = "unknown error") {
+  if (err instanceof Error) {
+    if (err.message) return err.message;
+    const cause = err.cause;
+    if (cause instanceof Error && cause.message) return `${err.name}: ${cause.message}`;
+    if (err.name) return err.name;
+  }
+  const s = String(err);
+  return s && s !== "[object Object]" ? s : fallback;
+}
+
+// src/github/label.ts
+var APPROVED_LABEL = "merge-approved";
+var CHANGES_LABEL = "request-changes";
+var APPROVED_COLOR = "0e8a16";
+var CHANGES_COLOR = "d93f0b";
+function mapVerdict(verdict) {
+  switch (verdict) {
+    case "approved":
+      return { add: APPROVED_LABEL, remove: CHANGES_LABEL, color: APPROVED_COLOR };
+    case "changes":
+    case "error":
+      return { add: CHANGES_LABEL, remove: APPROVED_LABEL, color: CHANGES_COLOR };
+    default:
+      return null;
+  }
+}
+async function setVerdictLabel(octokit, verdict, target, opts = {}) {
+  if (opts.manageLabels === false) return { changed: false, reason: "MANAGE_LABELS=false" };
+  const mapping = mapVerdict(verdict);
+  if (!mapping) return { changed: false, reason: `verdict '${verdict}' \u2014 no label change` };
+  const { owner, repo, prNumber } = target;
+  try {
+    await octokit.rest.issues.createLabel({
+      owner,
+      repo,
+      name: mapping.add,
+      color: mapping.color,
+      description: "AI code review verdict"
+    });
+  } catch {
+  }
+  try {
+    await octokit.rest.issues.removeLabel({
+      owner,
+      repo,
+      issue_number: prNumber,
+      name: mapping.remove
+    });
+  } catch {
+  }
+  try {
+    await octokit.rest.issues.addLabels({
+      owner,
+      repo,
+      issue_number: prNumber,
+      labels: [mapping.add]
+    });
+    return { changed: true, added: mapping.add };
+  } catch (err) {
+    return { changed: false, reason: errorMessage(err, "labels API request failed") };
+  }
+}
+
+// src/github/comment.ts
+var MARKER_PREFIX = "<!-- toolu-review-state:v1";
+var LEGACY_HEADER_RE = /### Code Review|### PR Review in Progress/;
+var MAX_PAGES = 20;
+var PER_PAGE = 100;
+function hasMarker(body) {
+  return body.includes(MARKER_PREFIX);
+}
+async function findSticky(octokit, target) {
+  const markerMatches = [];
+  const legacyMatches = [];
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const { data } = await octokit.rest.issues.listComments({
+      owner: target.owner,
+      repo: target.repo,
+      issue_number: target.prNumber,
+      per_page: PER_PAGE,
+      page
+    });
+    for (const c of data) {
+      if (hasMarker(c.body ?? "")) markerMatches.push(c);
+      else if (LEGACY_HEADER_RE.test(c.body ?? "")) legacyMatches.push(c);
+    }
+    if (data.length < PER_PAGE) break;
+  }
+  const selected = markerMatches.length > 0 ? markerMatches : legacyMatches;
+  if (selected.length === 0) return null;
+  const latest = selected.reduce((a, b) => a.created_at <= b.created_at ? b : a);
+  return { id: latest.id, body: latest.body ?? "" };
+}
+async function upsertComment(octokit, target, body, stickyId) {
+  let url;
+  if (stickyId !== void 0) {
+    const { data } = await octokit.rest.issues.updateComment({
+      owner: target.owner,
+      repo: target.repo,
+      comment_id: stickyId,
+      body
+    });
+    url = data.html_url;
+  } else {
+    const { data } = await octokit.rest.issues.createComment({
+      owner: target.owner,
+      repo: target.repo,
+      issue_number: target.prNumber,
+      body
+    });
+    url = data.html_url;
+  }
+  if (!url) throw new Error("post-comment: API response carried no html_url");
+  return url;
+}
+
+// src/pipeline/git.ts
 var import_node_child_process2 = require("node:child_process");
-var DEFAULT_MAX_BYTES = 32768;
 function gitOrNull2(args, cwd) {
   try {
-    return (0, import_node_child_process2.execFileSync)("git", args, { cwd, encoding: "utf8", maxBuffer: 1024 * 1024 * 1024 });
+    return (0, import_node_child_process2.execFileSync)("git", args, {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024 * 1024
+    }).trim();
+  } catch (err) {
+    process.stderr.write(
+      `  Note: git ${args[0] ?? ""} returned non-zero (${err instanceof Error ? err.message.split("\n")[0] : String(err)})
+`
+    );
+    return null;
+  }
+}
+function resolveHeadSha(reviewHead, contextSha, cwd) {
+  if (reviewHead === "HEAD") return contextSha;
+  return gitOrNull2(["rev-parse", reviewHead], cwd) ?? contextSha;
+}
+function readFileAt(reviewHead, cwd) {
+  return (path) => {
+    try {
+      return (0, import_node_child_process2.execFileSync)("git", ["show", `${reviewHead}:${path}`], {
+        cwd,
+        encoding: "utf8",
+        maxBuffer: 1024 * 1024 * 1024
+      });
+    } catch (err) {
+      process.stderr.write(
+        `  Note: could not read ${path} at ${reviewHead} (${err instanceof Error ? err.message.split("\n")[0] : String(err)})
+`
+      );
+      return null;
+    }
+  };
+}
+
+// src/state.ts
+var import_node_crypto = require("node:crypto");
+var import_node_zlib = require("node:zlib");
+var MARKER_PREFIX2 = "<!-- toolu-review-state:v1 ";
+var MARKER_SUFFIX = " -->";
+var FP_SEP = "";
+var MAX_DECODE_BYTES = 5e6;
+var StoredFindingSchema = external_exports.object({}).passthrough();
+var HistoryEntrySchema = external_exports.object({
+  sha: external_exports.string(),
+  ts: external_exports.number(),
+  verdict: external_exports.string(),
+  counts: external_exports.object({
+    new: external_exports.number(),
+    open: external_exports.number(),
+    resolved: external_exports.number(),
+    total: external_exports.number()
+  })
+});
+var ReviewStateSchema = external_exports.object({
+  schema: external_exports.literal("toolu-review-state"),
+  version: external_exports.literal(1),
+  findings: external_exports.array(StoredFindingSchema).catch([]),
+  history: external_exports.array(HistoryEntrySchema).catch([])
+});
+function canonString(f) {
+  const path = f.path ?? "";
+  const category = f.category ?? "";
+  const normText = (f.text ?? "").toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").replace(/^ +/, "").replace(/ +$/, "").slice(0, 200);
+  return `${path}${FP_SEP}${category}${FP_SEP}${normText}`;
+}
+function fingerprint(f) {
+  return (0, import_node_crypto.createHash)("sha1").update(canonString(f), "utf8").digest("hex");
+}
+function attachFps(findings) {
+  return findings.map((f) => ({ ...f, fp: fingerprint(f) }));
+}
+function encodeMarker(state) {
+  const payload = (0, import_node_zlib.gzipSync)(Buffer.from(JSON.stringify(state), "utf8")).toString("base64");
+  return `${MARKER_PREFIX2}${payload}${MARKER_SUFFIX}`;
+}
+function decodeMarker(body) {
+  const re2 = new RegExp(
+    `${escapeRegExp(MARKER_PREFIX2)}([A-Za-z0-9+/=]*)${escapeRegExp(MARKER_SUFFIX)}`
+  );
+  const m = body.match(re2);
+  const payload = m?.[1];
+  if (!payload) return {};
+  try {
+    const json = (0, import_node_zlib.gunzipSync)(Buffer.from(payload, "base64"), {
+      maxOutputLength: MAX_DECODE_BYTES
+    }).toString("utf8");
+    const parsed = JSON.parse(json);
+    const result = ReviewStateSchema.safeParse(parsed);
+    if (!result.success) {
+      process.stderr.write(
+        "  Warning: state marker failed schema validation \u2014 starting memory fresh\n"
+      );
+      return {};
+    }
+    return result.data;
+  } catch (err) {
+    process.stderr.write(
+      `  Warning: state marker decode failed (${err instanceof Error ? err.message : String(err)}) \u2014 starting memory fresh
+`
+    );
+    return {};
+  }
+}
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function extractMarker(body) {
+  const re2 = new RegExp(
+    `${escapeRegExp(MARKER_PREFIX2)}[A-Za-z0-9+/=]*${escapeRegExp(MARKER_SUFFIX)}`
+  );
+  return body.match(re2)?.[0] ?? null;
+}
+function diffState(input) {
+  const current = attachFps(input.current_findings);
+  const priorFindings = input.prior?.findings ?? [];
+  const priorFps = new Set(priorFindings.map((f) => f.fp));
+  const currentFps = new Set(current.map((f) => f.fp));
+  const inScope = new Set(input.scope.in_scope_paths);
+  const fresh = current.filter((f) => !priorFps.has(f.fp));
+  const open = current.filter((f) => priorFps.has(f.fp));
+  const resolved = input.scope.full_review ? priorFindings.filter((f) => !currentFps.has(f.fp) && inScope.has(f.path ?? "")) : [];
+  const counts = {
+    new: fresh.length,
+    open: open.length,
+    resolved: resolved.length,
+    total: current.length
+  };
+  const nowMs = (input.now ?? Date.now)();
+  const history_entry = {
+    sha: input.head_sha.slice(0, 7),
+    ts: Math.floor(nowMs / 1e3),
+    verdict: input.verdict,
+    counts
+  };
+  const history = [...input.prior?.history ?? [], history_entry].slice(-10);
+  return {
+    new: fresh,
+    open,
+    resolved,
+    counts,
+    history_entry,
+    next_state: { schema: "toolu-review-state", version: 1, findings: current, history }
+  };
+}
+
+// src/pipeline/bodies.ts
+var import_node_fs = require("node:fs");
+var import_node_path = require("node:path");
+var LOADING_GIF_URL = "https://raw.githubusercontent.com/falconiere/toolu-ghactions/main/code-review/assets/loading.gif";
+function resolveChecklistPath() {
+  const fallback = "/action/prompts/review-checklist.txt";
+  const here = typeof __dirname !== "undefined" ? __dirname : "";
+  const candidates = [
+    (0, import_node_path.join)(process.env["GITHUB_ACTION_PATH"] ?? "", "prompts/review-checklist.txt"),
+    fallback,
+    "prompts/review-checklist.txt",
+    "code-review/prompts/review-checklist.txt",
+    (0, import_node_path.join)(here, "../prompts/review-checklist.txt")
+  ];
+  return candidates.find((p) => (0, import_node_fs.existsSync)(p)) ?? fallback;
+}
+function formatDuration(ms) {
+  const secs = Math.max(0, Math.round(ms / 1e3));
+  const m = Math.floor(secs / 60);
+  return m > 0 ? `${m}m ${secs % 60}s` : `${secs}s`;
+}
+function jobUrl(ctx) {
+  return `${ctx.serverUrl}/${ctx.repo.owner}/${ctx.repo.repo}/actions/runs/${ctx.runId}`;
+}
+function skipBody(ctx, reason) {
+  return `**AI Code Review skipped** \u2014\u2014 [View job](${jobUrl(ctx)})
+
+---
+### Code Review \u2014 skipped
+
+**Skipped:** ${reason}
+`;
+}
+function noopBody(ctx) {
+  return `**AI Code Review finished** \u2014\u2014 [View job](${jobUrl(ctx)})
+
+---
+### Code Review \u2014 \`${ctx.repo.repo}\`
+
+**No file changes to review.** \u{1F389}
+
+\`merge-approved\`
+`;
+}
+function inProgressBody(ctx, priorMarker) {
+  const marker17 = priorMarker != null && priorMarker !== "" ? `
+${priorMarker}
+` : "";
+  return `**AI Code Review running** \u2014\u2014 [View job](${jobUrl(ctx)})
+
+---
+### PR Review in Progress
+
+- [ ] Read repository context and PR diff
+- [ ] Review changed files
+- [ ] Analyze correctness, security, performance
+- [ ] Post findings
+- [ ] Set verdict label
+
+<p align="left"><img src="${LOADING_GIF_URL}" width="100" alt="Review in progress"></p>
+${marker17}`;
+}
+
+// src/pipeline/sticky.ts
+async function locatePrior(octokit, target, reviewMemory) {
+  const sticky = await findSticky(octokit, target).catch((err) => {
+    process.stderr.write(
+      `  Warning: could not locate the sticky comment (${err instanceof Error ? err.message : String(err)})
+`
+    );
+    return null;
+  });
+  if (!sticky) return { stickyId: void 0, prior: null, priorMarker: null };
+  const prior = reviewMemory ? asReviewState(decodeMarker(sticky.body)) : null;
+  return { stickyId: sticky.id, prior, priorMarker: extractMarker(sticky.body) };
+}
+async function postInProgress(octokit, target, context2, found) {
+  try {
+    await upsertComment(
+      octokit,
+      target,
+      inProgressBody(context2, found.priorMarker),
+      found.stickyId
+    );
+    if (found.stickyId !== void 0) return found.stickyId;
+    const sticky = await findSticky(octokit, target).catch((err) => {
+      process.stderr.write(
+        `  Warning: could not re-locate the sticky after creating it (${err instanceof Error ? err.message : String(err)})
+`
+      );
+      return null;
+    });
+    return sticky?.id;
+  } catch {
+    process.stderr.write("  Warning: could not post in-progress comment\n");
+    return found.stickyId;
+  }
+}
+function isReviewState(decoded) {
+  return "findings" in decoded;
+}
+function asReviewState(decoded) {
+  return isReviewState(decoded) ? decoded : null;
+}
+
+// src/rules.ts
+var import_node_child_process3 = require("node:child_process");
+var DEFAULT_MAX_BYTES = 32768;
+function gitOrNull3(args, cwd) {
+  try {
+    return (0, import_node_child_process3.execFileSync)("git", args, { cwd, encoding: "utf8", maxBuffer: 1024 * 1024 * 1024 });
   } catch {
     return null;
   }
@@ -31809,7 +32393,7 @@ function gitOrNull2(args, cwd) {
 function defaultGitShow(cwd) {
   return (ref, path) => {
     try {
-      return (0, import_node_child_process2.execFileSync)("git", ["show", `${ref}:${path}`], {
+      return (0, import_node_child_process3.execFileSync)("git", ["show", `${ref}:${path}`], {
         cwd,
         encoding: "buffer",
         maxBuffer: 1024 * 1024 * 1024
@@ -31820,7 +32404,7 @@ function defaultGitShow(cwd) {
   };
 }
 function listTracked(ref, cwd) {
-  const out = gitOrNull2(["-c", "core.quotePath=false", "ls-tree", "-r", "--name-only", ref], cwd);
+  const out = gitOrNull3(["-c", "core.quotePath=false", "ls-tree", "-r", "--name-only", ref], cwd);
   if (out === null) return [];
   return out.split("\n").filter((p) => p !== "");
 }
@@ -31950,8 +32534,8 @@ ${blob.toString("utf8")}
 }
 
 // src/prompt.ts
-var import_node_fs = require("node:fs");
-var import_node_path = require("node:path");
+var import_node_fs2 = require("node:fs");
+var import_node_path2 = require("node:path");
 function renderMechanicalBlock(findings) {
   if (findings.length === 0) return "";
   const lines = findings.map(
@@ -32009,15 +32593,15 @@ function resolveSystemPrompt(opts) {
   const promptFile = opts.reviewPromptFile ?? "";
   if (promptFile !== "") {
     const workspace = opts.githubWorkspace && opts.githubWorkspace !== "" ? opts.githubWorkspace : "/github/workspace";
-    const promptPath = (0, import_node_path.isAbsolute)(promptFile) ? promptFile : (0, import_node_path.join)(workspace, promptFile);
+    const promptPath = (0, import_node_path2.isAbsolute)(promptFile) ? promptFile : (0, import_node_path2.join)(workspace, promptFile);
     try {
-      return (0, import_node_fs.readFileSync)(promptPath, "utf8");
+      return (0, import_node_fs2.readFileSync)(promptPath, "utf8");
     } catch {
       throw new PromptError(`Custom review prompt file not found: ${promptFile}`);
     }
   }
   try {
-    return (0, import_node_fs.readFileSync)(opts.checklistPath, "utf8");
+    return (0, import_node_fs2.readFileSync)(opts.checklistPath, "utf8");
   } catch {
     throw new PromptError(
       "No review prompt available \u2014 set INPUT_REVIEW_PROMPT_FILE or ship review-checklist.txt"
@@ -32107,11 +32691,11 @@ ${fence}`;
 }
 
 // src/mechanical/gather.ts
-var import_node_fs3 = require("node:fs");
-var import_node_path2 = require("node:path");
+var import_node_fs4 = require("node:fs");
+var import_node_path3 = require("node:path");
 
 // src/mechanical/sarif.ts
-var import_node_fs2 = require("node:fs");
+var import_node_fs3 = require("node:fs");
 var TOOL_DEFAULT_SEVERITY = {
   gitleaks: "error",
   opengrep: "warning",
@@ -32120,7 +32704,7 @@ var TOOL_DEFAULT_SEVERITY = {
 function parseSarif(file, tool) {
   let doc;
   try {
-    doc = JSON.parse((0, import_node_fs2.readFileSync)(file, "utf8"));
+    doc = JSON.parse((0, import_node_fs3.readFileSync)(file, "utf8"));
   } catch {
     return [];
   }
@@ -32200,7 +32784,7 @@ function gatherMechanical(sarifDir) {
   if (sarifDir === void 0 || sarifDir === "") return [];
   let names;
   try {
-    names = (0, import_node_fs3.readdirSync)(sarifDir);
+    names = (0, import_node_fs4.readdirSync)(sarifDir);
   } catch {
     return [];
   }
@@ -32210,7 +32794,7 @@ function gatherMechanical(sarifDir) {
     if (!name17.endsWith(".sarif")) continue;
     const tool = toolForFile(name17);
     if (tool === null) continue;
-    for (const finding of parseSarif((0, import_node_path2.join)(sarifDir, name17), tool)) {
+    for (const finding of parseSarif((0, import_node_path3.join)(sarifDir, name17), tool)) {
       const key = `${finding.tool}|${finding.ruleId}|${finding.path}|${finding.line}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -34215,7 +34799,7 @@ function zodSchema(zodSchema2, options) {
 }
 var schemaSymbol = Symbol.for("vercel.ai.schema");
 function jsonSchema(jsonSchema2, {
-  validate
+  validate: validate2
 } = {}) {
   return {
     [schemaSymbol]: true,
@@ -34223,7 +34807,7 @@ function jsonSchema(jsonSchema2, {
     // should never be used directly
     [validatorSymbol]: true,
     jsonSchema: jsonSchema2,
-    validate
+    validate: validate2
   };
 }
 function isSchema(value) {
@@ -38485,18 +39069,6 @@ function atEndOfBlockComment(text2, i) {
   return text2[i] === "*" && text2[i + 1] === "/";
 }
 
-// src/errors.ts
-function errorMessage(err, fallback = "unknown error") {
-  if (err instanceof Error) {
-    if (err.message) return err.message;
-    const cause = err.cause;
-    if (cause instanceof Error && cause.message) return `${err.name}: ${cause.message}`;
-    if (err.name) return err.name;
-  }
-  const s = String(err);
-  return s && s !== "[object Object]" ? s : fallback;
-}
-
 // src/llm/schema.ts
 var Finding = external_exports.object({
   path: external_exports.string(),
@@ -38797,16 +39369,16 @@ function moduleTargets(seg) {
     if (modDecl?.[1] !== void 0) {
       const name17 = modDecl[1];
       if (pendingPath !== null) {
-        targets.push(join3(dir, pendingPath));
+        targets.push(join4(dir, pendingPath));
         pendingPath = null;
       } else {
-        targets.push(join3(dir, `${name17}.rs`), join3(dir, `${name17}/mod.rs`));
-        targets.push(join3(stemDir, `${name17}.rs`), join3(stemDir, `${name17}/mod.rs`));
+        targets.push(join4(dir, `${name17}.rs`), join4(dir, `${name17}/mod.rs`));
+        targets.push(join4(stemDir, `${name17}.rs`), join4(stemDir, `${name17}/mod.rs`));
       }
       continue;
     }
     if (/^\s*(?:pub\s+)?use\s+super::/.test(rest)) {
-      targets.push(join3(dir, "mod.rs"));
+      targets.push(join4(dir, "mod.rs"));
       if (dir !== "") targets.push(`${dir}.rs`);
     }
     if (pathAttr === null && rest.trim() !== "" && !rest.trim().startsWith("//")) {
@@ -38827,7 +39399,7 @@ function dirOf(path) {
   const i = path.lastIndexOf("/");
   return i === -1 ? "" : path.slice(0, i);
 }
-function join3(dir, rest) {
+function join4(dir, rest) {
   return dir === "" ? rest : `${dir}/${rest}`;
 }
 function normalizePath(path) {
@@ -39218,6 +39790,82 @@ function dedupKey(f) {
   return `${f.path}|${f.line}|${end}|${normText}`;
 }
 
+// src/pipeline/reviewCall.ts
+function buildThreadContexts(priorThreads) {
+  return priorThreads.map((t) => ({
+    path: t.path,
+    line: t.line,
+    finding: cleanFindingBody(t.rootBody),
+    replies: t.replies,
+    resolved: t.isResolved
+  }));
+}
+function cleanFindingBody(body) {
+  return body.replace(/<!-- toolu-fp:[0-9a-f]+ -->/g, "").replace(/```suggestion[\s\S]*?```/g, "").replace(/\n{3,}/g, "\n\n").trim();
+}
+async function reviewAndValidate(input) {
+  const { inputs, diff, event, cwd, reviewHead } = input;
+  const projectRules = gatherRules({
+    check: inputs.checkProjectRules,
+    baseSha: diff.base_sha,
+    rulesRef: inputs.rulesRef,
+    mergeRef: reviewHead,
+    changedFiles: diff.changed_files,
+    rulesGlob: inputs.rulesGlob,
+    maxBytes: inputs.rulesMaxBytes,
+    cwd
+  });
+  const mechanical = gatherMechanical(input.sarifDir);
+  const priorThreadContexts = buildThreadContexts(input.priorThreads);
+  const result = await reviewChunked({
+    diff,
+    maxChunkLines: inputs.maxChunkLines,
+    maxChunks: inputs.maxChunks,
+    mechanical,
+    buildEnvelope: (subDiff, chunkMechanical) => buildPrompt({
+      diff: subDiff,
+      checklistPath: resolveChecklistPath(),
+      maxTokens: inputs.maxTokens,
+      enforceJsonSchema: inputs.enforceJsonSchema,
+      reviewPromptFile: inputs.reviewPromptFile,
+      codebaseOverview: inputs.codebaseOverview,
+      reviewInstruction: event.instruction ?? "",
+      projectRules,
+      githubWorkspace: cwd,
+      mechanicalFindings: chunkMechanical,
+      priorThreads: priorThreadContexts
+    }),
+    review: (envelope) => reviewWithModel(envelope, {
+      provider: inputs.provider,
+      model: inputs.model,
+      apiKey: inputs.apiKey,
+      timeoutMs: inputs.requestTimeoutMs,
+      ...input.fetch ? { fetch: input.fetch } : {}
+    }),
+    readFile: readFileAt(reviewHead, cwd)
+  });
+  const stamped = validate(result, diff, inputs);
+  return { result, stamped, mechanical };
+}
+function validate(result, diff, inputs) {
+  const changedLinesByPath = new Map(
+    diff.files.map((f) => [f.path, f.changed_lines])
+  );
+  const lineTextByPath = new Map(
+    diff.files.map((f) => [
+      f.path,
+      new Map(Object.entries(f.line_text).map(([n, text2]) => [Number(n), text2]))
+    ])
+  );
+  const anchored = validateFindings(
+    result.findings,
+    changedLinesByPath,
+    inputs.minConfidence,
+    lineTextByPath
+  );
+  return anchored.map((f) => ({ ...f, fp: fingerprint(f) }));
+}
+
 // src/review/recap.ts
 var RECAP_LIST_CAP = 8;
 function renderRecapSection(diff, opts) {
@@ -39359,243 +40007,6 @@ function labelAndBadge(verdict) {
 function buildHeader(duration, jobUrl2) {
   const base = duration ? `**AI Code Review finished in ${duration}**` : "**AI Code Review finished**";
   return `${base} \u2014\u2014 [View job](${jobUrl2})`;
-}
-
-// src/state.ts
-var import_node_crypto = require("node:crypto");
-var import_node_zlib = require("node:zlib");
-var MARKER_PREFIX = "<!-- toolu-review-state:v1 ";
-var MARKER_SUFFIX = " -->";
-var FP_SEP = "";
-var MAX_DECODE_BYTES = 5e6;
-var StoredFindingSchema = external_exports.object({}).passthrough();
-var HistoryEntrySchema = external_exports.object({
-  sha: external_exports.string(),
-  ts: external_exports.number(),
-  verdict: external_exports.string(),
-  counts: external_exports.object({
-    new: external_exports.number(),
-    open: external_exports.number(),
-    resolved: external_exports.number(),
-    total: external_exports.number()
-  })
-});
-var ReviewStateSchema = external_exports.object({
-  schema: external_exports.literal("toolu-review-state"),
-  version: external_exports.literal(1),
-  findings: external_exports.array(StoredFindingSchema).catch([]),
-  history: external_exports.array(HistoryEntrySchema).catch([])
-});
-function canonString(f) {
-  const path = f.path ?? "";
-  const category = f.category ?? "";
-  const normText = (f.text ?? "").toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").replace(/^ +/, "").replace(/ +$/, "").slice(0, 200);
-  return `${path}${FP_SEP}${category}${FP_SEP}${normText}`;
-}
-function fingerprint(f) {
-  return (0, import_node_crypto.createHash)("sha1").update(canonString(f), "utf8").digest("hex");
-}
-function attachFps(findings) {
-  return findings.map((f) => ({ ...f, fp: fingerprint(f) }));
-}
-function encodeMarker(state) {
-  const payload = (0, import_node_zlib.gzipSync)(Buffer.from(JSON.stringify(state), "utf8")).toString("base64");
-  return `${MARKER_PREFIX}${payload}${MARKER_SUFFIX}`;
-}
-function decodeMarker(body) {
-  const re2 = new RegExp(
-    `${escapeRegExp(MARKER_PREFIX)}([A-Za-z0-9+/=]*)${escapeRegExp(MARKER_SUFFIX)}`
-  );
-  const m = body.match(re2);
-  const payload = m?.[1];
-  if (!payload) return {};
-  try {
-    const json = (0, import_node_zlib.gunzipSync)(Buffer.from(payload, "base64"), {
-      maxOutputLength: MAX_DECODE_BYTES
-    }).toString("utf8");
-    const parsed = JSON.parse(json);
-    const result = ReviewStateSchema.safeParse(parsed);
-    return result.success ? result.data : {};
-  } catch {
-    return {};
-  }
-}
-function escapeRegExp(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-function diffState(input) {
-  const current = attachFps(input.current_findings);
-  const priorFindings = input.prior?.findings ?? [];
-  const priorFps = new Set(priorFindings.map((f) => f.fp));
-  const currentFps = new Set(current.map((f) => f.fp));
-  const inScope = new Set(input.scope.in_scope_paths);
-  const fresh = current.filter((f) => !priorFps.has(f.fp));
-  const open = current.filter((f) => priorFps.has(f.fp));
-  const resolved = input.scope.full_review ? priorFindings.filter((f) => !currentFps.has(f.fp) && inScope.has(f.path ?? "")) : [];
-  const counts = {
-    new: fresh.length,
-    open: open.length,
-    resolved: resolved.length,
-    total: current.length
-  };
-  const nowMs = (input.now ?? Date.now)();
-  const history_entry = {
-    sha: input.head_sha.slice(0, 7),
-    ts: Math.floor(nowMs / 1e3),
-    verdict: input.verdict,
-    counts
-  };
-  const history = [...input.prior?.history ?? [], history_entry].slice(-10);
-  return {
-    new: fresh,
-    open,
-    resolved,
-    counts,
-    history_entry,
-    next_state: { schema: "toolu-review-state", version: 1, findings: current, history }
-  };
-}
-
-// src/github/event.ts
-async function resolveEvent(ctx, opts = {}) {
-  if (!ctx.payload) return deny("no-event-payload");
-  switch (ctx.eventName) {
-    case "pull_request":
-      return resolvePullRequest(ctx.payload);
-    case "issue_comment":
-      return resolveIssueComment(ctx.payload, opts);
-    default:
-      return deny("unsupported-event");
-  }
-}
-function resolvePullRequest(payload) {
-  const prNumber = payload.pull_request?.number;
-  if (!prNumber) return deny("no-pr-number");
-  return {
-    run: true,
-    reason: "pull_request",
-    review_head: "HEAD",
-    base_ref: payload.pull_request?.base?.ref ?? "",
-    full_review: true,
-    pr_number: prNumber
-  };
-}
-async function resolveIssueComment(payload, opts) {
-  const triggerPhrase = opts.triggerPhrase ?? "@toolu";
-  const minPermission = opts.minTriggerPermission ?? "write";
-  const ownLogin = opts.ownLogin ?? "github-actions[bot]";
-  const commenter = payload.comment?.user?.login ?? "";
-  const userType = payload.comment?.user?.type ?? "";
-  if (userType === "Bot" || commenter === ownLogin) return deny("bot-author");
-  if (payload.issue?.pull_request == null) return deny("not-a-pull-request");
-  const body = payload.comment?.body ?? "";
-  const triggerLc = `${triggerPhrase.toLowerCase()} review`;
-  const idx = body.toLowerCase().indexOf(triggerLc);
-  if (idx < 0) return deny("no-trigger");
-  const instruction = body.slice(idx + triggerLc.length).trim();
-  const prNumber = payload.issue?.number;
-  const commentId = payload.comment?.id;
-  let permission = "";
-  try {
-    permission = await opts.lookupPermission?.(commenter) ?? "";
-  } catch {
-    return deny("permission-check-failed", { commenter });
-  }
-  if (!permission) return deny("permission-check-failed", { commenter });
-  const allowed = minPermission === "admin" ? permission === "admin" : permission === "admin" || permission === "write";
-  if (!allowed) return deny("insufficient-permission", { commenter });
-  let baseRef = "";
-  if (prNumber !== void 0 && opts.lookupBaseRef) {
-    try {
-      baseRef = await opts.lookupBaseRef(prNumber);
-    } catch {
-      baseRef = "";
-    }
-  }
-  return {
-    run: true,
-    reason: "mention",
-    review_head: "FETCH_HEAD",
-    base_ref: baseRef,
-    // full_review=false ONLY when an instruction scopes the review.
-    full_review: instruction === "",
-    instruction,
-    ...prNumber !== void 0 ? { pr_number: prNumber } : {},
-    commenter,
-    ...commentId !== void 0 ? { comment_id: commentId } : {}
-  };
-}
-function deny(reason, extra = {}) {
-  return {
-    run: false,
-    reason,
-    full_review: false,
-    ...extra.commenter !== void 0 ? { commenter: extra.commenter } : {}
-  };
-}
-
-// src/github/comment.ts
-var MARKER_PREFIX2 = "<!-- toolu-review-state:v1";
-var LEGACY_HEADER_RE = /### Code Review|### PR Review in Progress/;
-var MAX_PAGES = 20;
-var PER_PAGE = 100;
-function hasMarker(body) {
-  return body.includes(MARKER_PREFIX2);
-}
-async function findSticky(octokit, target) {
-  const markerMatches = [];
-  const legacyMatches = [];
-  for (let page = 1; page <= MAX_PAGES; page++) {
-    const { data } = await octokit.rest.issues.listComments({
-      owner: target.owner,
-      repo: target.repo,
-      issue_number: target.prNumber,
-      per_page: PER_PAGE,
-      page
-    });
-    for (const c of data) {
-      if (hasMarker(c.body ?? "")) markerMatches.push(c);
-      else if (LEGACY_HEADER_RE.test(c.body ?? "")) legacyMatches.push(c);
-    }
-    if (data.length < PER_PAGE) break;
-  }
-  const selected = markerMatches.length > 0 ? markerMatches : legacyMatches;
-  if (selected.length === 0) return null;
-  const latest = selected.reduce((a, b) => a.created_at <= b.created_at ? b : a);
-  return { id: latest.id, body: latest.body ?? "" };
-}
-async function upsertComment(octokit, target, body, stickyId) {
-  let url;
-  if (stickyId !== void 0) {
-    const { data } = await octokit.rest.issues.updateComment({
-      owner: target.owner,
-      repo: target.repo,
-      comment_id: stickyId,
-      body
-    });
-    url = data.html_url;
-  } else {
-    const { data } = await octokit.rest.issues.createComment({
-      owner: target.owner,
-      repo: target.repo,
-      issue_number: target.prNumber,
-      body
-    });
-    url = data.html_url;
-  }
-  if (!url) throw new Error("post-comment: API response carried no html_url");
-  return url;
-}
-
-// src/review/fpmarker.ts
-function appendFpMarker(body, fp) {
-  return `${body}
-
-<!-- toolu-fp:${fp} -->`;
-}
-function extractFpMarker(body) {
-  const m = body.match(/<!-- toolu-fp:([0-9a-f]+) -->/);
-  return m?.[1] ?? null;
 }
 
 // src/github/review.ts
@@ -39742,148 +40153,26 @@ async function postInlineReview(octokit, findings, target) {
   }
 }
 
-// src/github/threads.ts
-var GqlThreadSchema = external_exports.object({
-  id: external_exports.string(),
-  isResolved: external_exports.boolean(),
-  isOutdated: external_exports.boolean(),
-  path: external_exports.string(),
-  line: external_exports.number().nullable(),
-  comments: external_exports.object({
-    nodes: external_exports.array(
-      external_exports.object({
-        databaseId: external_exports.number().nullable(),
-        body: external_exports.string(),
-        author: external_exports.object({ login: external_exports.string() }).nullable()
-      })
-    )
-  })
-});
-var GqlResponseSchema = external_exports.object({
-  repository: external_exports.object({
-    pullRequest: external_exports.object({
-      reviewThreads: external_exports.object({
-        pageInfo: external_exports.object({ hasNextPage: external_exports.boolean(), endCursor: external_exports.string().nullable() }),
-        nodes: external_exports.array(GqlThreadSchema)
-      })
-    }).nullable()
-  }).nullable()
-});
-var THREADS_QUERY = `
-  query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
-    repository(owner: $owner, name: $repo) {
-      pullRequest(number: $number) {
-        reviewThreads(first: 100, after: $cursor) {
-          pageInfo { hasNextPage endCursor }
-          nodes {
-            id
-            isResolved
-            isOutdated
-            path
-            line
-            comments(first: 50) {
-              nodes { databaseId body author { login } }
-            }
-          }
-        }
-      }
-    }
-  }
-`;
-var RESOLVE_MUTATION = `
-  mutation($threadId: ID!) {
-    resolveReviewThread(input: { threadId: $threadId }) {
-      thread { isResolved }
-    }
-  }
-`;
-async function fetchReviewThreads(client, target) {
-  const threads = [];
-  let cursor = null;
-  try {
-    for (let page = 0; page < 20; page++) {
-      const raw = await client.graphql(THREADS_QUERY, {
-        owner: target.owner,
-        repo: target.repo,
-        number: target.prNumber,
-        cursor
-      });
-      const parsed = GqlResponseSchema.safeParse(raw);
-      if (!parsed.success) break;
-      const conn = parsed.data.repository?.pullRequest?.reviewThreads;
-      if (!conn) break;
-      for (const node of conn.nodes) {
-        const parsed2 = normalizeThread(node);
-        if (parsed2) threads.push(parsed2);
-      }
-      if (!conn.pageInfo.hasNextPage) break;
-      cursor = conn.pageInfo.endCursor;
-      if (cursor === null) break;
-    }
-  } catch {
-    return [];
-  }
-  return threads;
-}
-function normalizeThread(node) {
-  const comments = node.comments.nodes;
-  const root = comments[0];
-  if (!root || root.databaseId == null) return null;
-  const fp = extractFpMarker(root.body);
-  if (fp === null) return null;
-  return {
-    threadId: node.id,
-    rootCommentId: root.databaseId,
-    fp,
-    path: node.path,
-    line: node.line,
-    isResolved: node.isResolved,
-    isOutdated: node.isOutdated,
-    rootBody: root.body,
-    botLogin: root.author?.login ?? "",
-    replies: comments.slice(1).map((c) => ({ author: c.author?.login ?? "", body: c.body }))
-  };
-}
-async function resolveThread(client, threadId) {
-  try {
-    await client.graphql(RESOLVE_MUTATION, { threadId });
-    return true;
-  } catch {
-    return false;
-  }
-}
-async function replyToThread(client, target, rootCommentId, body) {
-  try {
-    await client.rest.pulls.createReplyForReviewComment({
-      owner: target.owner,
-      repo: target.repo,
-      pull_number: target.prNumber,
-      comment_id: rootCommentId,
-      body
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // src/review/reconcile.ts
 function matches(f, t) {
   if (f.fp === t.fp) return true;
   return f.path === t.path && t.line !== null && f.line === t.line;
 }
-var RESOLVED_LINE_RADIUS = 10;
+var NEARBY_LINE_RADIUS = 10;
 function threadCategory(rootBody) {
   const m = /_\(([^)·]+?)(?:\s*·[^)]*)?\)_/.exec(rootBody);
   return m?.[1] === void 0 ? null : m[1].trim().toLowerCase();
 }
+function matchesNearby(f, t) {
+  if (f.path !== t.path) return false;
+  if (t.line !== null) return Math.abs(f.line - t.line) <= NEARBY_LINE_RADIUS;
+  const category = threadCategory(t.rootBody);
+  return category !== null && category === (f.category ?? "").trim().toLowerCase();
+}
 function matchesResolved(f, t) {
   if (matches(f, t)) return true;
   if (f.severity === "blocker") return false;
-  if (f.path !== t.path) return false;
-  if (t.line !== null) return Math.abs(f.line - t.line) <= RESOLVED_LINE_RADIUS;
-  const category = threadCategory(t.rootBody);
-  return category !== null && category === (f.category ?? "").trim().toLowerCase();
+  return matchesNearby(f, t);
 }
 function authorHasLastWord(thread) {
   const last = thread.replies.at(-1);
@@ -39906,7 +40195,8 @@ function reconcile(findings, priorThreads) {
   const toReply = [];
   const toResolve = [];
   for (const thread of priorThreads) {
-    const idx = findings.findIndex((f) => matches(f, thread));
+    let idx = findings.findIndex((f) => matches(f, thread));
+    if (idx < 0) idx = findings.findIndex((f) => matchesNearby(f, thread));
     const matched = idx >= 0 ? findings[idx] : void 0;
     if (matched) covered.add(idx);
     if (thread.isResolved) continue;
@@ -39925,137 +40215,172 @@ function reconcile(findings, priorThreads) {
   return { toCreate, toReply, toResolve };
 }
 
-// src/github/label.ts
-var APPROVED_LABEL = "merge-approved";
-var CHANGES_LABEL = "request-changes";
-var APPROVED_COLOR = "0e8a16";
-var CHANGES_COLOR = "d93f0b";
-function mapVerdict(verdict) {
-  switch (verdict) {
-    case "approved":
-      return { add: APPROVED_LABEL, remove: CHANGES_LABEL, color: APPROVED_COLOR };
-    case "changes":
-    case "error":
-      return { add: CHANGES_LABEL, remove: APPROVED_LABEL, color: CHANGES_COLOR };
-    default:
-      return null;
+// src/pipeline/publish.ts
+function settleVerdict(input) {
+  const { kept: findings, suppressed } = dropResolved(input.stamped, input.priorThreads);
+  if (suppressed.length > 0) {
+    process.stdout.write(
+      `  Suppressed ${suppressed.length} finding(s) already resolved on existing threads
+`
+    );
   }
-}
-async function setVerdictLabel(octokit, verdict, target, opts = {}) {
-  if (opts.manageLabels === false) return { changed: false, reason: "MANAGE_LABELS=false" };
-  const mapping = mapVerdict(verdict);
-  if (!mapping) return { changed: false, reason: `verdict '${verdict}' \u2014 no label change` };
-  const { owner, repo, prNumber } = target;
-  try {
-    await octokit.rest.issues.createLabel({
-      owner,
-      repo,
-      name: mapping.add,
-      color: mapping.color,
-      description: "AI code review verdict"
-    });
-  } catch {
+  const validated = { ...input.result, findings };
+  let verdict = resolveVerdict(validated.verdict, findings.length);
+  if (verdict === "changes" && findings.length === 0 && suppressed.length > 0) {
+    verdict = "approved";
+    validated.verdict = "approved";
   }
-  try {
-    await octokit.rest.issues.removeLabel({
-      owner,
-      repo,
-      issue_number: prNumber,
-      name: mapping.remove
-    });
-  } catch {
+  const cap = applyRoundCap({
+    verdict,
+    findings,
+    priorRounds: input.prior?.history?.length ?? 0,
+    maxRounds: input.inputs.reviewMemory ? input.inputs.maxRounds : 0
+  });
+  let capNote = "";
+  if (cap.capped) {
+    verdict = "approved";
+    validated.verdict = "approved";
+    capNote = `Round cap reached (MAX_ROUNDS=${input.inputs.maxRounds}): no blocker findings after ${input.inputs.maxRounds} review rounds \u2014 verdict auto-approved; the findings below are advisory.`;
+    process.stdout.write(`  ${capNote}
+`);
   }
-  try {
-    await octokit.rest.issues.addLabels({
-      owner,
-      repo,
-      issue_number: prNumber,
-      labels: [mapping.add]
-    });
-    return { changed: true, added: mapping.add };
-  } catch (err) {
-    return { changed: false, reason: errorMessage(err, "labels API request failed") };
+  return { validated, findings, verdict, capNote };
+}
+function renderMemory(input, findings, verdict) {
+  if (!input.inputs.reviewMemory) return { recap: "", history: "", marker: "" };
+  const state = diffState({
+    prior: input.prior,
+    current_findings: findings,
+    scope: { in_scope_paths: input.diff.changed_files, full_review: input.fullReview },
+    head_sha: input.target.headSha,
+    verdict,
+    now: input.now
+    // injected clock → deterministic marker history ts under a pinned clock.
+  });
+  const hadPrior = (input.prior?.findings?.length ?? 0) > 0 || (input.prior?.history?.length ?? 0) > 0;
+  const recap = hadPrior ? renderRecapSection(state, {
+    history: [],
+    fullReview: input.fullReview,
+    hasPrior: true,
+    compact: input.inputs.verbosity === "compact"
+  }) : "";
+  return {
+    recap,
+    history: renderHistorySection(state.next_state.history),
+    marker: encodeMarker(state.next_state)
+  };
+}
+async function publish(input) {
+  const { octokit, context: context2, target, inputs } = input;
+  const { validated, findings, verdict, capNote } = settleVerdict(input);
+  const { recap, history, marker: marker17 } = renderMemory(input, findings, verdict);
+  const { body } = formatVerdict(validated, {
+    botName: inputs.botName,
+    botLogoUrl: inputs.botLogoUrl,
+    // Heading shows the PR SOURCE branch (bash used GITHUB_HEAD_REF); prefer it.
+    branch: context2.headRef ?? (input.reviewHead === "HEAD" ? input.baseBranch : input.reviewHead),
+    jobUrl: jobUrl(context2),
+    duration: formatDuration(input.now() - input.startMs),
+    recap,
+    history,
+    historyMarker: marker17,
+    mechanical: input.mechanical,
+    verbosity: inputs.verbosity,
+    changedFiles: input.diff.total_files,
+    capNote
+  });
+  const commentUrl = await upsertComment(octokit, target, body, input.stickyId);
+  await setVerdictLabel(octokit, verdict, target, { manageLabels: inputs.manageLabels });
+  if (inputs.inlineComments) await postInline(input, findings);
+  return { verdict, findingsCount: findings.length, commentUrl };
+}
+async function postInline(input, findings) {
+  const { octokit, context: context2, target } = input;
+  const reviewTarget = { ...target, headSha: context2.headSha ?? target.headSha };
+  const plan = reconcile(findings, input.priorThreads);
+  const r = await postInlineReview(octokit, plan.toCreate, reviewTarget);
+  if (!r.posted && r.reason !== "no anchored findings") {
+    process.stderr.write(`  Warning: inline review step failed: ${r.reason ?? "unknown"}
+`);
   }
-}
-
-// src/pipeline/bodies.ts
-var import_node_fs4 = require("node:fs");
-var import_node_path3 = require("node:path");
-var LOADING_GIF_URL = "https://raw.githubusercontent.com/falconiere/toolu-ghactions/main/code-review/assets/loading.gif";
-function resolveChecklistPath() {
-  const fallback = "/action/prompts/review-checklist.txt";
-  const here = typeof __dirname !== "undefined" ? __dirname : "";
-  const candidates = [
-    (0, import_node_path3.join)(process.env["GITHUB_ACTION_PATH"] ?? "", "prompts/review-checklist.txt"),
-    fallback,
-    "prompts/review-checklist.txt",
-    "code-review/prompts/review-checklist.txt",
-    (0, import_node_path3.join)(here, "../prompts/review-checklist.txt")
-  ];
-  return candidates.find((p) => (0, import_node_fs4.existsSync)(p)) ?? fallback;
-}
-function formatDuration(ms) {
-  const secs = Math.max(0, Math.round(ms / 1e3));
-  const m = Math.floor(secs / 60);
-  return m > 0 ? `${m}m ${secs % 60}s` : `${secs}s`;
-}
-function jobUrl(ctx) {
-  return `${ctx.serverUrl}/${ctx.repo.owner}/${ctx.repo.repo}/actions/runs/${ctx.runId}`;
-}
-function skipBody(ctx, reason) {
-  return `**AI Code Review skipped** \u2014\u2014 [View job](${jobUrl(ctx)})
-
----
-### Code Review \u2014 skipped
-
-**Skipped:** ${reason}
-`;
-}
-function noopBody(ctx) {
-  return `**AI Code Review finished** \u2014\u2014 [View job](${jobUrl(ctx)})
-
----
-### Code Review \u2014 \`${ctx.repo.repo}\`
-
-**No file changes to review.** \u{1F389}
-
-\`merge-approved\`
-`;
-}
-function inProgressBody(ctx) {
-  return `**AI Code Review running** \u2014\u2014 [View job](${jobUrl(ctx)})
-
----
-### PR Review in Progress
-
-- [ ] Read repository context and PR diff
-- [ ] Review changed files
-- [ ] Analyze correctness, security, performance
-- [ ] Post findings
-- [ ] Set verdict label
-
-<p align="left"><img src="${LOADING_GIF_URL}" width="100" alt="Review in progress"></p>
-`;
+  for (const { thread, finding } of plan.toReply) {
+    await replyToThread(
+      octokit,
+      target,
+      thread.rootCommentId,
+      `**Still flagging after re-review.** ${finding.text}`
+    );
+  }
+  for (const thread of plan.toResolve) {
+    if (!thread.isOutdated) {
+      await replyToThread(
+        octokit,
+        target,
+        thread.rootCommentId,
+        "Re-reviewed \u2014 this no longer applies (addressed, or point taken). Resolving."
+      );
+    }
+    await resolveThread(octokit, thread.threadId);
+  }
 }
 
 // src/pipeline.ts
-function gitOrNull3(args, cwd) {
-  try {
-    return (0, import_node_child_process3.execFileSync)("git", args, {
-      cwd,
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024 * 1024
-    }).trim();
-  } catch {
-    return null;
-  }
-}
 async function runReview(deps) {
   const { inputs, octokit, context: context2 } = deps;
   const cwd = deps.cwd ?? process.cwd();
   const now = deps.now ?? Date.now;
   const startMs = now();
-  const skip = () => ({ verdict: "skip", findingsCount: 0, commentUrl: "" });
+  const event = await resolveTrigger(deps);
+  if (!event || event.pr_number === void 0) {
+    return { verdict: "skip", findingsCount: 0, commentUrl: "" };
+  }
+  const target = {
+    owner: context2.repo.owner,
+    repo: context2.repo.repo,
+    prNumber: event.pr_number,
+    headSha: ""
+    // filled after the diff resolves the review head sha.
+  };
+  const reviewHead = event.review_head ?? "HEAD";
+  const baseBranch = event.base_ref && event.base_ref !== "" ? event.base_ref : inputs.baseBranch;
+  const resolved = await resolveDiffOrSkip(deps, target, reviewHead, baseBranch, cwd);
+  if ("done" in resolved) return resolved.done;
+  const diff = resolved.diff;
+  const found = await locatePrior(octokit, target, inputs.reviewMemory);
+  const stickyId = await postInProgress(octokit, target, context2, found);
+  const priorThreads = await fetchReviewThreads(octokit, target);
+  target.headSha = resolveHeadSha(reviewHead, context2.sha, cwd);
+  const { result, stamped, mechanical } = await reviewAndValidate({
+    inputs,
+    diff,
+    event,
+    priorThreads,
+    reviewHead,
+    cwd,
+    sarifDir: deps.sarifDir,
+    fetch: deps.fetch
+  });
+  return publish({
+    octokit,
+    context: context2,
+    target,
+    inputs,
+    diff,
+    result,
+    stamped,
+    priorThreads,
+    prior: found.prior,
+    stickyId,
+    mechanical,
+    fullReview: event.full_review,
+    reviewHead,
+    baseBranch,
+    startMs,
+    now
+  });
+}
+async function resolveTrigger(deps) {
+  const { inputs, context: context2 } = deps;
   const event = await resolveEvent(
     { eventName: context2.eventName, payload: context2.payload },
     {
@@ -40068,23 +40393,16 @@ async function runReview(deps) {
   if (!event.run) {
     process.stderr.write(`[SKIP] Not triggering a review: ${event.reason ?? "not-triggered"}
 `);
-    return skip();
+    return null;
   }
-  const prNumber = event.pr_number;
-  if (prNumber === void 0) {
+  if (event.pr_number === void 0) {
     process.stderr.write("[SKIP] No PR number resolved from the event\n");
-    return skip();
+    return null;
   }
-  const target = {
-    owner: context2.repo.owner,
-    repo: context2.repo.repo,
-    prNumber,
-    headSha: ""
-    // filled after the diff resolves the review head sha.
-  };
-  const reviewHead = event.review_head ?? "HEAD";
-  const baseBranch = event.base_ref && event.base_ref !== "" ? event.base_ref : inputs.baseBranch;
-  const fullReview = event.full_review;
+  return event;
+}
+async function resolveDiffOrSkip(deps, target, reviewHead, baseBranch, cwd) {
+  const { inputs, octokit, context: context2 } = deps;
   const diff = fetchDiff({
     baseBranch,
     maxFiles: inputs.maxFiles,
@@ -40098,223 +40416,15 @@ async function runReview(deps) {
     process.stderr.write(`[SKIP] ${diff.error}
 `);
     const url = await upsertComment(octokit, target, skipBody(context2, diff.error), void 0);
-    return { verdict: "skip", findingsCount: 0, commentUrl: url };
+    return { done: { verdict: "skip", findingsCount: 0, commentUrl: url } };
   }
   if (diff.total_files === 0) {
     process.stderr.write("[SKIP] No file changes to review\n");
     const url = await upsertComment(octokit, target, noopBody(context2), void 0);
     await setVerdictLabel(octokit, "approved", target, { manageLabels: inputs.manageLabels });
-    return { verdict: "skip", findingsCount: 0, commentUrl: url };
+    return { done: { verdict: "skip", findingsCount: 0, commentUrl: url } };
   }
-  let prior = null;
-  let stickyId;
-  const sticky = await findSticky(octokit, target).catch(() => null);
-  if (sticky) {
-    stickyId = sticky.id;
-    if (inputs.reviewMemory) prior = asReviewState(decodeMarker(sticky.body));
-  }
-  try {
-    stickyId = await captureUpsertId(octokit, target, inProgressBody(context2), stickyId, prNumber);
-  } catch {
-    process.stderr.write("  Warning: could not post in-progress comment\n");
-  }
-  const priorThreads = await fetchReviewThreads(octokit, target);
-  const headSha = resolveHeadSha(reviewHead, context2.sha, cwd);
-  target.headSha = headSha;
-  const projectRules = gatherRules({
-    check: inputs.checkProjectRules,
-    baseSha: diff.base_sha,
-    rulesRef: inputs.rulesRef,
-    mergeRef: reviewHead,
-    changedFiles: diff.changed_files,
-    rulesGlob: inputs.rulesGlob,
-    maxBytes: inputs.rulesMaxBytes,
-    cwd
-  });
-  const mechanical = gatherMechanical(deps.sarifDir);
-  const priorThreadContexts = priorThreads.map((t) => ({
-    path: t.path,
-    line: t.line,
-    finding: cleanFindingBody(t.rootBody),
-    replies: t.replies,
-    resolved: t.isResolved
-  }));
-  const result = await reviewChunked({
-    diff,
-    maxChunkLines: inputs.maxChunkLines,
-    maxChunks: inputs.maxChunks,
-    mechanical,
-    buildEnvelope: (subDiff, chunkMechanical) => buildPrompt({
-      diff: subDiff,
-      checklistPath: resolveChecklistPath(),
-      maxTokens: inputs.maxTokens,
-      enforceJsonSchema: inputs.enforceJsonSchema,
-      reviewPromptFile: inputs.reviewPromptFile,
-      codebaseOverview: inputs.codebaseOverview,
-      reviewInstruction: event.instruction ?? "",
-      projectRules,
-      githubWorkspace: cwd,
-      mechanicalFindings: chunkMechanical,
-      priorThreads: priorThreadContexts
-    }),
-    review: (envelope) => reviewWithModel(envelope, {
-      provider: inputs.provider,
-      model: inputs.model,
-      apiKey: inputs.apiKey,
-      timeoutMs: inputs.requestTimeoutMs,
-      ...deps.fetch ? { fetch: deps.fetch } : {}
-    }),
-    // Full post-change content for oversized-chunk context — read UNTRIMMED (the
-    // trimming gitOrNull above would alter file bytes).
-    readFile: (path) => {
-      try {
-        return (0, import_node_child_process3.execFileSync)("git", ["show", `${reviewHead}:${path}`], {
-          cwd,
-          encoding: "utf8",
-          maxBuffer: 1024 * 1024 * 1024
-        });
-      } catch {
-        return null;
-      }
-    }
-  });
-  const changedLinesByPath = new Map(
-    diff.files.map((f) => [f.path, f.changed_lines])
-  );
-  const lineTextByPath = new Map(
-    diff.files.map((f) => [
-      f.path,
-      new Map(Object.entries(f.line_text).map(([n, text2]) => [Number(n), text2]))
-    ])
-  );
-  const anchored = validateFindings(
-    result.findings,
-    changedLinesByPath,
-    inputs.minConfidence,
-    lineTextByPath
-  );
-  const stamped = anchored.map((f) => ({ ...f, fp: fingerprint(f) }));
-  const { kept: findings, suppressed } = dropResolved(stamped, priorThreads);
-  if (suppressed.length > 0) {
-    process.stdout.write(
-      `  Suppressed ${suppressed.length} finding(s) already resolved on existing threads
-`
-    );
-  }
-  const validated = { ...result, findings };
-  let verdict = resolveVerdict(validated.verdict, findings.length);
-  if (verdict === "changes" && findings.length === 0 && suppressed.length > 0) {
-    verdict = "approved";
-    validated.verdict = "approved";
-  }
-  const cap = applyRoundCap({
-    verdict,
-    findings,
-    priorRounds: prior?.history?.length ?? 0,
-    maxRounds: inputs.reviewMemory ? inputs.maxRounds : 0
-  });
-  let capNote = "";
-  if (cap.capped) {
-    verdict = "approved";
-    validated.verdict = "approved";
-    capNote = `Round cap reached (MAX_ROUNDS=${inputs.maxRounds}): no blocker findings after ${inputs.maxRounds} review rounds \u2014 verdict auto-approved; the findings below are advisory.`;
-    process.stdout.write(`  ${capNote}
-`);
-  }
-  let recap = "";
-  let history = "";
-  let marker17 = "";
-  if (inputs.reviewMemory) {
-    const state = diffState({
-      prior,
-      current_findings: findings,
-      scope: { in_scope_paths: diff.changed_files, full_review: fullReview },
-      head_sha: headSha,
-      verdict,
-      now
-      // injected clock → deterministic marker history ts under a pinned clock.
-    });
-    const hadPrior = (prior?.findings?.length ?? 0) > 0 || (prior?.history?.length ?? 0) > 0;
-    if (hadPrior) {
-      recap = renderRecapSection(state, {
-        history: [],
-        fullReview,
-        hasPrior: true,
-        compact: inputs.verbosity === "compact"
-      });
-    }
-    history = renderHistorySection(state.next_state.history);
-    marker17 = encodeMarker(state.next_state);
-  }
-  const { body } = formatVerdict(validated, {
-    botName: inputs.botName,
-    botLogoUrl: inputs.botLogoUrl,
-    // Heading shows the PR SOURCE branch (bash used GITHUB_HEAD_REF); prefer it.
-    branch: context2.headRef ?? (reviewHead === "HEAD" ? baseBranch : reviewHead),
-    jobUrl: jobUrl(context2),
-    duration: formatDuration(now() - startMs),
-    recap,
-    history,
-    historyMarker: marker17,
-    mechanical,
-    verbosity: inputs.verbosity,
-    changedFiles: diff.total_files,
-    capNote
-  });
-  const commentUrl = await upsertComment(octokit, target, body, stickyId);
-  await setVerdictLabel(octokit, verdict, target, { manageLabels: inputs.manageLabels });
-  if (inputs.inlineComments) {
-    const reviewTarget = { ...target, headSha: context2.headSha ?? headSha };
-    const plan = reconcile(findings, priorThreads);
-    const r = await postInlineReview(octokit, plan.toCreate, reviewTarget);
-    if (!r.posted && r.reason !== "no anchored findings") {
-      process.stderr.write(`  Warning: inline review step failed: ${r.reason ?? "unknown"}
-`);
-    }
-    for (const { thread, finding } of plan.toReply) {
-      await replyToThread(
-        octokit,
-        target,
-        thread.rootCommentId,
-        `**Still flagging after re-review.** ${finding.text}`
-      );
-    }
-    for (const thread of plan.toResolve) {
-      if (!thread.isOutdated) {
-        await replyToThread(
-          octokit,
-          target,
-          thread.rootCommentId,
-          "Re-reviewed \u2014 this no longer applies (addressed, or point taken). Resolving."
-        );
-      }
-      await resolveThread(octokit, thread.threadId);
-    }
-  }
-  return { verdict, findingsCount: findings.length, commentUrl };
-}
-function isReviewState(decoded) {
-  return "findings" in decoded;
-}
-function asReviewState(decoded) {
-  return isReviewState(decoded) ? decoded : null;
-}
-function cleanFindingBody(body) {
-  return body.replace(/<!-- toolu-fp:[0-9a-f]+ -->/g, "").replace(/```suggestion[\s\S]*?```/g, "").replace(/\n{3,}/g, "\n\n").trim();
-}
-async function captureUpsertId(octokit, target, body, stickyId, prNumber) {
-  await upsertComment(octokit, target, body, stickyId);
-  if (stickyId !== void 0) return stickyId;
-  const sticky = await findSticky(octokit, {
-    owner: target.owner,
-    repo: target.repo,
-    prNumber
-  }).catch(() => null);
-  return sticky?.id;
-}
-function resolveHeadSha(reviewHead, contextSha, cwd) {
-  if (reviewHead === "HEAD") return contextSha;
-  return gitOrNull3(["rev-parse", reviewHead], cwd) ?? contextSha;
+  return { diff };
 }
 
 // node_modules/universal-user-agent/index.js

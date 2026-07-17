@@ -71,8 +71,17 @@ export function noopBody(ctx: GithubContext): string {
 `;
 }
 
-/** The in-progress comment body (parity with main.sh's IN_PROGRESS_BODY). */
-export function inProgressBody(ctx: GithubContext): string {
+/**
+ * The in-progress comment body (parity with main.sh's IN_PROGRESS_BODY).
+ *
+ * `priorMarker` — the previous run's RAW state marker, appended as the last
+ * line so review memory SURVIVES this run being cancelled mid-review
+ * (concurrency cancel-in-progress): without it the sticky is left marker-less
+ * and the next run silently starts memory-blank — history reset, recap lost,
+ * MAX_ROUNDS counter back to zero.
+ */
+export function inProgressBody(ctx: GithubContext, priorMarker?: string | null): string {
+  const marker = priorMarker != null && priorMarker !== "" ? `\n${priorMarker}\n` : "";
   return `**AI Code Review running** —— [View job](${jobUrl(ctx)})
 
 ---
@@ -85,5 +94,5 @@ export function inProgressBody(ctx: GithubContext): string {
 - [ ] Set verdict label
 
 <p align="left"><img src="${LOADING_GIF_URL}" width="100" alt="Review in progress"></p>
-`;
+${marker}`;
 }
