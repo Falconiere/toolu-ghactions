@@ -972,3 +972,76 @@ describe("FAIL_ON merge gate (real pipeline verdict + shouldBlock)", () => {
     expect(shouldBlock(result.verdict, parseFailOn("changes"))).toBe(false);
   });
 });
+
+describe("runReview — marker survives a cancelled run (cancel-in-progress safety)", () => {
+  it("the in-progress upsert body CARRIES the prior state marker", async () => {
+    // A rapid second push cancels the in-flight run via concurrency
+    // cancel-in-progress AFTER the sticky was overwritten with the in-progress
+    // body and BEFORE the final verdict restored the marker. If the in-progress
+    // body drops the marker, that cancellation wipes review memory: history
+    // reset, recap lost, MAX_ROUNDS counter back to zero (observed in prod as
+    // "resolves a round then invents a fresh batch"). The FIRST update posted
+    // must therefore already carry the prior marker.
+    const { dir, headSha } = track(featureRepoWithChange());
+    const priorState: ReviewState = {
+      schema: "toolu-review-state",
+      version: 1,
+      findings: [{ path: "src/util.ts", line: 2, text: "prior finding", fp: "abc" }],
+      history: [
+        {
+          sha: "1234567",
+          ts: 1_700_000_000,
+          verdict: "changes",
+          counts: { new: 1, open: 0, resolved: 0, total: 1 },
+        },
+      ],
+    };
+    const priorMarker = encodeMarker(priorState);
+    const { octokit, rec } = fakeOctokit([
+      { id: 777, body: `### Code Review — old\n\n${priorMarker}` },
+    ]);
+
+    await runReview({
+      inputs: baseInputs(),
+      octokit,
+      context: prContext(headSha),
+      fetch: replayFetch("success"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    // First update = the in-progress body. It must carry the prior marker VERBATIM.
+    const first = rec.updated[0];
+    expect(first?.comment_id).toBe(777);
+    expect(first?.body).toContain("PR Review in Progress");
+    expect(first?.body).toContain(priorMarker);
+
+    // And the final verdict body carries a (fresh) marker as always.
+    expect(rec.updated.at(-1)?.body).toContain("toolu-review-state:v1");
+  });
+
+  it("reviewMemory=false still carries the marker through the in-progress body", async () => {
+    // Memory off must not DESTROY state a future memory-on run would read.
+    const { dir, headSha } = track(featureRepoWithChange());
+    const priorMarker = encodeMarker({
+      schema: "toolu-review-state",
+      version: 1,
+      findings: [],
+      history: [],
+    });
+    const { octokit, rec } = fakeOctokit([
+      { id: 888, body: `### Code Review — old\n\n${priorMarker}` },
+    ]);
+
+    await runReview({
+      inputs: baseInputs({ reviewMemory: false }),
+      octokit,
+      context: prContext(headSha),
+      fetch: replayFetch("success"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    expect(rec.updated[0]?.body).toContain(priorMarker);
+  });
+});

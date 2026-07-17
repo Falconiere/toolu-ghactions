@@ -32,6 +32,7 @@ export interface Finding {
   [k: string]: unknown;
 }
 
+/** One completed review round: head sha, timestamp, verdict, and finding counts. */
 export interface HistoryEntry {
   sha: string;
   ts: number;
@@ -63,6 +64,7 @@ const ReviewStateSchema = z.object({
   history: z.array(HistoryEntrySchema).catch([]),
 });
 
+/** The persisted cross-push review memory carried in the sticky-comment marker. */
 export interface ReviewState {
   schema: "toolu-review-state";
   version: 1;
@@ -123,8 +125,19 @@ export function decodeMarker(body: string): ReviewState | Record<string, never> 
     }).toString("utf8");
     const parsed: unknown = JSON.parse(json);
     const result = ReviewStateSchema.safeParse(parsed);
-    return result.success ? result.data : {};
-  } catch {
+    if (!result.success) {
+      process.stderr.write(
+        "  Warning: state marker failed schema validation — starting memory fresh\n",
+      );
+      return {};
+    }
+    return result.data;
+  } catch (err) {
+    // Deliberate fail-safe (marker is attacker-influenceable; see MAX_DECODE_BYTES),
+    // but LOG the reset: a silent memory wipe is indistinguishable from no marker.
+    process.stderr.write(
+      `  Warning: state marker decode failed (${err instanceof Error ? err.message : String(err)}) — starting memory fresh\n`,
+    );
     return {};
   }
 }
@@ -133,6 +146,21 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * Extract the RAW marker line from a comment body (or null when absent), so a
+ * caller can carry the encoded state forward VERBATIM without decode+re-encode.
+ * Motivating case: the in-progress sticky must keep the prior run's marker —
+ * a run cancelled mid-review (concurrency cancel-in-progress) otherwise leaves
+ * a marker-less sticky and the next run starts memory-blank (history reset).
+ */
+export function extractMarker(body: string): string | null {
+  const re = new RegExp(
+    `${escapeRegExp(MARKER_PREFIX)}[A-Za-z0-9+/=]*${escapeRegExp(MARKER_SUFFIX)}`,
+  );
+  return body.match(re)?.[0] ?? null;
+}
+
+/** Inputs to {@link diffState}: prior state, this run's findings, scope, and clock. */
 export interface DiffInput {
   prior: ReviewState | null;
   current_findings: Finding[];
@@ -143,6 +171,7 @@ export interface DiffInput {
   now?: () => number;
 }
 
+/** {@link diffState} output: partitioned findings, counts, and the next persisted state. */
 export interface DiffResult {
   new: Finding[];
   open: Finding[];

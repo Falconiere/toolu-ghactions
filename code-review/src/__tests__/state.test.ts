@@ -5,6 +5,7 @@ import {
   attachFps,
   encodeMarker,
   decodeMarker,
+  extractMarker,
   diffState,
   type ReviewState,
   type Finding,
@@ -198,5 +199,24 @@ describe("diffState", () => {
     });
     expect(r.next_state.history).toHaveLength(10);
     expect(r.next_state.history.at(-1)).toEqual(r.history_entry);
+  });
+});
+
+describe("extractMarker", () => {
+  it("returns the raw marker line from a body, verbatim", () => {
+    const marker = encodeMarker(sampleState);
+    const body = `### Code Review — repo\n\nsome findings\n\n${marker}\n`;
+    expect(extractMarker(body)).toBe(marker);
+  });
+
+  it("extracted marker decodes to the same state (carry-forward is lossless)", () => {
+    const marker = encodeMarker(sampleState);
+    const carried = extractMarker(`header\n${marker}`);
+    expect(carried).not.toBeNull();
+    expect(decodeMarker(carried ?? "")).toEqual(sampleState);
+  });
+
+  it("returns null when the body carries no marker", () => {
+    expect(extractMarker("### PR Review in Progress\n- [ ] steps")).toBeNull();
   });
 });
