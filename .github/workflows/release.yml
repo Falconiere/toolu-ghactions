@@ -52,6 +52,11 @@ jobs:
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
+      # Surface a masked mint failure loudly — continue-on-error keeps the run
+      # alive, but a broken app install must not hide behind the PAT fallback.
+      - name: App token mint failed (falling back)
+        if: steps.app-token.outcome == 'failure'
+        run: echo "::warning::create-github-app-token failed — check the app installation/permissions on this repo; release-please falls back to the PAT/GITHUB_TOKEN."
       - uses: googleapis/release-please-action@v4
         id: rp
         with:
@@ -167,6 +172,12 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ matrix.mirror_name }}
+      # Surface a masked mint failure loudly — continue-on-error keeps the run
+      # alive, but a missing app install on the mirror must not hide behind the
+      # PAT fallback / skip.
+      - name: App token mint failed (falling back)
+        if: steps.app-token.outcome == 'failure'
+        run: echo "::warning::create-github-app-token failed for ${{ matrix.mirror_repo }} — check the app installation/permissions there; mirror falls back to the PAT or skips."
       - name: Skip notice (no push credential)
         if: steps.app-token.outputs.token == '' && env.HAS_PUSH_TOKEN != 'true'
         run: echo "::notice::No GitHub App install or RELEASE_TOOLU_ACTIONS_TOKEN for ${{ matrix.mirror_repo }} — skipping ${{ matrix.action }} mirror. Install the app on the mirror repo (or set the PAT) to enable Marketplace publishing."
