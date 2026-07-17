@@ -31808,13 +31808,15 @@ async function resolveEvent(ctx, opts = {}) {
 function resolvePullRequest(payload) {
   const prNumber = payload.pull_request?.number;
   if (!prNumber) return deny("no-pr-number");
+  const headSha = payload.pull_request?.head?.sha;
   return {
     run: true,
     reason: "pull_request",
     review_head: "HEAD",
     base_ref: payload.pull_request?.base?.ref ?? "",
     full_review: true,
-    pr_number: prNumber
+    pr_number: prNumber,
+    ...headSha !== void 0 && headSha !== "" ? { head_sha: headSha } : {}
   };
 }
 async function resolveIssueComment(payload, opts) {
@@ -40336,7 +40338,7 @@ function renderMemory(input, findings, verdict) {
     prior: input.prior,
     current_findings: findings,
     scope: { in_scope_paths: input.diff.changed_files, full_review: input.fullReview },
-    head_sha: input.target.headSha,
+    head_sha: input.reviewedSha,
     verdict,
     now: input.now
     // injected clock → deterministic marker history ts under a pinned clock.
@@ -40434,6 +40436,7 @@ async function runReview(deps) {
   const stickyId = await postInProgress(octokit, target, context2, found);
   const priorThreads = await fetchReviewThreads(octokit, target);
   target.headSha = resolveHeadSha(reviewHead, context2.sha, cwd);
+  const reviewedSha = event.head_sha ?? target.headSha;
   const scope = incrementalScope(deps, found, reviewHead, cwd);
   const reviewed = await reviewAndValidate({
     inputs,
@@ -40453,6 +40456,7 @@ async function runReview(deps) {
     diff,
     priorThreads,
     scope,
+    reviewedSha,
     reviewHead,
     baseBranch,
     result: reviewed.result,

@@ -46,6 +46,14 @@ export interface PublishInput {
   mechanical: MechanicalFinding[];
   /** Incremental scope (lines changed since the last reviewed sha); null = full review. */
   scope: IncrementalScope | null;
+  /**
+   * The sha recorded as the marker's `reviewed_sha` — the PR HEAD sha when the
+   * event carries one, else `target.headSha`. Kept separate from
+   * `target.headSha` (GITHUB_SHA — the ephemeral test-merge commit on
+   * pull_request events): a merge sha is orphaned on every push, so a series
+   * stored on it never resolves next run and incremental scope stays null.
+   */
+  reviewedSha: string;
   fullReview: boolean;
   reviewHead: string;
   baseBranch: string;
@@ -135,7 +143,7 @@ function renderMemory(
     prior: input.prior,
     current_findings: findings,
     scope: { in_scope_paths: input.diff.changed_files, full_review: input.fullReview },
-    head_sha: input.target.headSha,
+    head_sha: input.reviewedSha,
     verdict,
     now: input.now, // injected clock → deterministic marker history ts under a pinned clock.
   });

@@ -58,6 +58,14 @@ export interface EventResolution {
   review_head?: string;
   /** The PR base ref to diff against. */
   base_ref?: string;
+  /**
+   * The PR HEAD sha (`.pull_request.head.sha`, pull_request events only). The
+   * incremental-review series must converge on this, NOT on GITHUB_SHA: on
+   * pull_request events GITHUB_SHA is the ephemeral test-merge commit, orphaned
+   * on every push, so a stored merge sha never resolves (or ancestor-checks) on
+   * the next run and the incremental scope would silently stay null forever.
+   */
+  head_sha?: string;
   /** The trimmed instruction text after "<phrase> review" (@mention only). */
   instruction?: string;
   /** True for a whole-PR review; false when an @mention instruction scopes it. */
@@ -98,6 +106,7 @@ export async function resolveEvent(
 function resolvePullRequest(payload: EventPayload): EventResolution {
   const prNumber = payload.pull_request?.number;
   if (!prNumber) return deny("no-pr-number");
+  const headSha = payload.pull_request?.head?.sha;
   return {
     run: true,
     reason: "pull_request",
@@ -105,6 +114,7 @@ function resolvePullRequest(payload: EventPayload): EventResolution {
     base_ref: payload.pull_request?.base?.ref ?? "",
     full_review: true,
     pr_number: prNumber,
+    ...(headSha !== undefined && headSha !== "" ? { head_sha: headSha } : {}),
   };
 }
 

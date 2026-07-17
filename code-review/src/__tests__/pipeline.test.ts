@@ -1137,4 +1137,32 @@ describe("runReview — incremental scope (natural convergence)", () => {
     const state = decodeMarker(marker ?? "");
     expect("reviewed_sha" in state && state.reviewed_sha).toBe(headSha);
   });
+
+  it("records the PAYLOAD's PR head sha, not GITHUB_SHA (the test-merge commit)", async () => {
+    // On pull_request events GITHUB_SHA is the ephemeral test-merge commit,
+    // orphaned on every push — a series stored on it never resolves (or
+    // ancestor-checks) on the next run, silently disabling the incremental
+    // scope. The marker must converge on `.pull_request.head.sha`.
+    const { dir, headSha } = track(featureRepoWithChange());
+    const { octokit, rec } = fakeOctokit();
+    const ctx = prContext("1111111111111111111111111111111111111111");
+    ctx.payload = {
+      pull_request: { number: 7, base: { ref: "main" }, head: { sha: headSha } },
+    };
+
+    await runReview({
+      inputs: baseInputs(),
+      octokit,
+      context: ctx,
+      fetch: replayFetch("findings"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    const lastBody = rec.updated.at(-1)?.body ?? rec.created.at(-1)?.body ?? "";
+    const marker = extractMarker(lastBody);
+    expect(marker).not.toBeNull();
+    const state = decodeMarker(marker ?? "");
+    expect("reviewed_sha" in state && state.reviewed_sha).toBe(headSha);
+  });
 });

@@ -62,6 +62,11 @@ function threadCategory(rootBody: string): string | null {
  * miss. A thread therefore also covers a same-path finding within
  * {@link NEARBY_LINE_RADIUS} lines, or — when the thread is detached (line
  * null) — a same-path finding with the same rendered category.
+ *
+ * Deliberately severity-blind (and module-private to keep it so): the blocker
+ * exemption lives in {@link matchesResolved}, the only SUPPRESSION path —
+ * reconcile()'s use of the loose prongs merely relocates where a finding is
+ * posted, so blockers may match here without ever being hidden.
  */
 function matchesNearby(f: ReconcileFinding, t: PriorThread): boolean {
   if (f.path !== t.path) return false;

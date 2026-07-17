@@ -73,6 +73,14 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
   const stickyId = await postInProgress(octokit, target, context, found);
   const priorThreads = await fetchReviewThreads(octokit, target);
   target.headSha = resolveHeadSha(reviewHead, context.sha, cwd);
+  // The sha the incremental series is stored on. Prefer the PR HEAD sha over
+  // target.headSha: on pull_request events the latter is GITHUB_SHA — the
+  // ephemeral test-merge commit, orphaned on every push — so a series stored on
+  // it never resolves (or ancestor-checks) next run and the scope stays null.
+  // The PR HEAD sha survives: it is reachable from the next merge commit, so
+  // `merge-base --is-ancestor <prev head> HEAD` holds and the since-diff lands
+  // on the same checkout tree the review diff numbers its lines against.
+  const reviewedSha = event.head_sha ?? target.headSha;
 
   const scope = incrementalScope(deps, found, reviewHead, cwd);
 
@@ -95,6 +103,7 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     diff,
     priorThreads,
     scope,
+    reviewedSha,
     reviewHead,
     baseBranch,
     result: reviewed.result,
