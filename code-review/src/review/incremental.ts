@@ -48,6 +48,9 @@ export function dropOutOfScope<F extends ReconcileFinding>(
   const kept: F[] = [];
   const dropped: F[] = [];
   for (const f of findings) {
+    // f.line is always a real int here: the finding schema (llm/schema.ts)
+    // requires `line: z.number().int()`, so no file-level/lineless finding can
+    // reach this filter — only PRIOR-state findings have an optional line.
     const inScope = scope.get(f.path)?.has(f.line) === true;
     const carried = coveredByThread(f, priorThreads) || coveredByPriorFinding(f, priorFindings);
     (inScope || carried ? kept : dropped).push(f);

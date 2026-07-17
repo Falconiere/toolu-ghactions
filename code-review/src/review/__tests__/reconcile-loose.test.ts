@@ -126,6 +126,11 @@ describe("reconcile loose matching (open-thread convergence)", () => {
     const plan = reconcile([f], [t]);
     expect(plan.toCreate).toEqual([]);
     expect(plan.toResolve).toEqual([]);
+    // No reply either: the thread has no author reply to answer, so the open
+    // thread itself keeps stating the finding. "Covered, no action" is the
+    // intended plan — the finding still counts toward the verdict; only a
+    // duplicate inline post is avoided.
+    expect(plan.toReply).toEqual([]);
   });
 
   it("open-thread loose matching applies to blockers too (nothing is hidden by it)", () => {
