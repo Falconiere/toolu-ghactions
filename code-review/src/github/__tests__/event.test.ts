@@ -28,6 +28,19 @@ describe("resolveEvent — pull_request", () => {
     expect(r.full_review).toBe(true);
     expect(r.base_ref).toBe("main");
     expect(r.pr_number).toBe(42);
+    // The PR HEAD sha rides along — the incremental series converges on it,
+    // never on GITHUB_SHA (the ephemeral test-merge commit).
+    expect(r.head_sha).toBe("abc123def456");
+  });
+
+  it("omits head_sha when the payload carries none", async () => {
+    const noHead: EventPayload = {
+      ...payload("pull-request"),
+      pull_request: { number: 42, base: { ref: "main" } },
+    };
+    const r = await resolveEvent({ eventName: "pull_request", payload: noHead });
+    expect(r.run).toBe(true);
+    expect(r.head_sha).toBeUndefined();
   });
 });
 
