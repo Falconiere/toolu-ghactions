@@ -12,7 +12,13 @@ import { runReview } from "@/pipeline.js";
 import type { GithubContext, PipelineOctokit, ReviewDeps } from "@/pipeline.js";
 import type { ActionInputs } from "@/inputs.js";
 import { parseFailOn, shouldBlock, type BlockableVerdict } from "@/review/gate.js";
-import { encodeMarker, fingerprint, type ReviewState } from "@/state.js";
+import {
+  decodeMarker,
+  encodeMarker,
+  extractMarker,
+  fingerprint,
+  type ReviewState,
+} from "@/state.js";
 import { appendFpMarker } from "@/review/fpmarker.js";
 import { git, setupGitRepo, writeFile, removeRepo } from "@/git/__tests__/helpers.js";
 
@@ -1043,5 +1049,92 @@ describe("runReview — marker survives a cancelled run (cancel-in-progress safe
     });
 
     expect(rec.updated[0]?.body).toContain(priorMarker);
+  });
+});
+
+describe("runReview — incremental scope (natural convergence)", () => {
+  it("nothing changed since the last reviewed sha → a freshly invented finding cannot flip the verdict", async () => {
+    // Round N+1 with reviewed_sha == current head: the since-diff is EMPTY, so a
+    // generative model re-inventing findings about already-reviewed code has no
+    // scope to put them in. The verdict converges to approved with no surrender
+    // cap involved — the bot "stops when there are no issues on the changed files".
+    const { dir, headSha } = track(featureRepoWithChange());
+    const priorMarker = encodeMarker({
+      schema: "toolu-review-state",
+      version: 1,
+      findings: [],
+      history: [
+        {
+          sha: headSha.slice(0, 7),
+          ts: 1_700_000_000,
+          verdict: "changes",
+          counts: { new: 1, open: 0, resolved: 0, total: 1 },
+        },
+      ],
+      reviewed_sha: headSha,
+    });
+    const { octokit, rec } = fakeOctokit([
+      { id: 900, body: `### Code Review — old\n\n${priorMarker}` },
+    ]);
+
+    // The findings fixture flags src/util.ts:2 — a line in the PR diff, but NOT
+    // changed since the last reviewed sha (nothing is).
+    const result = await runReview({
+      inputs: baseInputs(),
+      octokit,
+      context: prContext(headSha),
+      fetch: replayFetch("findings"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    expect(result.verdict).toBe("approved");
+    expect(result.findingsCount).toBe(0);
+    expect(rec.addedLabels).toContainEqual(["merge-approved"]);
+    // No inline review posted for the dropped finding.
+    expect(rec.reviews).toEqual([]);
+    // The comment says out-of-scope findings were not re-raised.
+    expect(rec.updated.at(-1)?.body).toContain("Incremental review");
+  });
+
+  it("the same finding on a FIRST review (no reviewed_sha) still requests changes", async () => {
+    // Control: without a prior reviewed_sha the scope is null → full review, and
+    // the fixture's finding blocks as before. The filter only ever narrows
+    // RE-reviews; it can never weaken round one.
+    const { dir, headSha } = track(featureRepoWithChange());
+    const { octokit, rec } = fakeOctokit();
+
+    const result = await runReview({
+      inputs: baseInputs(),
+      octokit,
+      context: prContext(headSha),
+      fetch: replayFetch("findings"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    expect(result.verdict).toBe("changes");
+    expect(result.findingsCount).toBe(1);
+    expect(rec.addedLabels).toContainEqual(["request-changes"]);
+  });
+
+  it("the NEXT round's marker records this round's reviewed sha", async () => {
+    const { dir, headSha } = track(featureRepoWithChange());
+    const { octokit, rec } = fakeOctokit();
+
+    await runReview({
+      inputs: baseInputs(),
+      octokit,
+      context: prContext(headSha),
+      fetch: replayFetch("findings"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    const lastBody = rec.updated.at(-1)?.body ?? rec.created.at(-1)?.body ?? "";
+    const marker = extractMarker(lastBody);
+    expect(marker).not.toBeNull();
+    const state = decodeMarker(marker ?? "");
+    expect("reviewed_sha" in state && state.reviewed_sha).toBe(headSha);
   });
 });
