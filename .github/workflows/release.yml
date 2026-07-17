@@ -34,19 +34,32 @@ jobs:
     # runs for pushes to main / manual dispatch.
     if: github.event_name != 'release'
     runs-on: ubuntu-latest
+    env:
+      HAS_APP: ${{ secrets.APP_ID != '' }}
     outputs:
       release_created: ${{ steps.rp.outputs.release_created }}
       tag_name: ${{ steps.rp.outputs.tag_name }}
       major: ${{ steps.rp.outputs.major }}
     steps:
+      # Prefer a GitHub App installation token: unlike a fine-grained PAT it
+      # never expires (the 2026-07 release outage was a PAT hitting its 30-day
+      # default expiry — "Bad credentials"). continue-on-error keeps the
+      # fallback chain alive when the app is missing or not installed here.
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        if: env.HAS_APP == 'true'
+        continue-on-error: true
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - uses: googleapis/release-please-action@v4
         id: rp
         with:
-          # A PAT or GitHub App token lets the release PR trigger other
-          # workflows (tests) AND must belong to an account with write access
-          # to this repo. Falls back to GITHUB_TOKEN, under which the release PR
-          # will NOT run CI — set RELEASE_TOOLU_ACTIONS_TOKEN to fix that.
-          token: ${{ secrets.RELEASE_TOOLU_ACTIONS_TOKEN || github.token }}
+          # An app token or PAT lets the release PR trigger other workflows
+          # (tests) AND must belong to an identity with write access to this
+          # repo. Falls back to GITHUB_TOKEN, under which the release PR will
+          # NOT run CI.
+          token: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOOLU_ACTIONS_TOKEN || github.token }}
           config-file: .github/release-please-config.json
           manifest-file: .github/release-please-manifest.json
 
@@ -120,11 +133,10 @@ jobs:
     if: ${{ !cancelled() && needs.version.result == 'success' }}
     runs-on: ubuntu-latest
     # Job-level env can read `secrets`; a step `if:` cannot. This lets the job
-    # skip cleanly until RELEASE_TOOLU_ACTIONS_TOKEN + the mirror repos exist, instead
-    # of failing every release red during setup. Reuses the repo-owner PAT that
-    # release-please already uses — its repo scope covers pushing to the owner's
-    # public mirror repos.
+    # skip cleanly until a push credential (GitHub App install or PAT) + the
+    # mirror repos exist, instead of failing every release red during setup.
     env:
+      HAS_APP: ${{ secrets.APP_ID != '' }}
       HAS_PUSH_TOKEN: ${{ secrets.RELEASE_TOOLU_ACTIONS_TOKEN != '' }}
     strategy:
       fail-fast: false
@@ -132,25 +144,40 @@ jobs:
         include:
           - action: code-review
             mirror_repo: Falconiere/toolu-code-review
+            mirror_name: toolu-code-review
           - action: cloudflare-tunnel
             mirror_repo: Falconiere/toolu-cloudflare-tunnel
+            mirror_name: toolu-cloudflare-tunnel
           - action: expo-builder
             mirror_repo: Falconiere/toolu-expo-builder
+            mirror_name: toolu-expo-builder
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - name: Skip notice (no push token)
-        if: env.HAS_PUSH_TOKEN != 'true'
-        run: echo "::notice::RELEASE_TOOLU_ACTIONS_TOKEN not set — skipping ${{ matrix.action }} mirror. Create the mirror repos to enable Marketplace publishing."
+      # Cross-repo token: the app must be INSTALLED on the mirror repo for this
+      # mint to succeed (`repositories:` takes bare names under `owner`).
+      # continue-on-error → fall back to the PAT, then to a clean skip.
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        if: env.HAS_APP == 'true'
+        continue-on-error: true
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ matrix.mirror_name }}
+      - name: Skip notice (no push credential)
+        if: steps.app-token.outputs.token == '' && env.HAS_PUSH_TOKEN != 'true'
+        run: echo "::notice::No GitHub App install or RELEASE_TOOLU_ACTIONS_TOKEN for ${{ matrix.mirror_repo }} — skipping ${{ matrix.action }} mirror. Install the app on the mirror repo (or set the PAT) to enable Marketplace publishing."
       - name: Sync ${{ matrix.action }} to ${{ matrix.mirror_repo }}
-        if: env.HAS_PUSH_TOKEN == 'true'
+        if: steps.app-token.outputs.token != '' || env.HAS_PUSH_TOKEN == 'true'
         run: scripts/mirror-action.sh "$RUNNER_TEMP/mirror"
         env:
           ACTION: ${{ matrix.action }}
           TAG: ${{ needs.version.outputs.tag }}
           MAJOR: ${{ needs.version.outputs.major }}
           MIRROR_REPO: ${{ matrix.mirror_repo }}
-          MIRROR_TOKEN: ${{ secrets.RELEASE_TOOLU_ACTIONS_TOKEN }}
+          MIRROR_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOOLU_ACTIONS_TOKEN }}
           SOURCE_REPO: ${{ github.repository }}
           SOURCE_SHA: ${{ github.sha }}
