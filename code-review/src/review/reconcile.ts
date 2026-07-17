@@ -45,7 +45,7 @@ function matches(f: ReconcileFinding, t: PriorThread): boolean {
 }
 
 /** How far (in lines) a prior thread's coverage reaches for a reworded finding. */
-const NEARBY_LINE_RADIUS = 10;
+export const NEARBY_LINE_RADIUS = 10;
 
 /** The `_(CATEGORY)_` tag the bot renders in its inline root comments, normalised
  *  for comparison; null when the body carries none. */
@@ -80,6 +80,13 @@ function matchesResolved(f: ReconcileFinding, t: PriorThread): boolean {
   if (matches(f, t)) return true;
   if (f.severity === "blocker") return false;
   return matchesNearby(f, t);
+}
+
+/** True when ANY prior thread covers this finding, strictly or nearby — the
+ *  incremental scope keeps such findings in play (adjudication of an existing
+ *  discussion), while genuinely new out-of-scope findings are dropped. */
+export function coveredByThread(f: ReconcileFinding, threads: PriorThread[]): boolean {
+  return threads.some((t) => matches(f, t) || matchesNearby(f, t));
 }
 
 /** True when the last comment in the thread is the author's (a reply the bot hasn't answered). */

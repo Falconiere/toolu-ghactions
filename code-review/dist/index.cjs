@@ -32146,6 +32146,37 @@ function resolveHeadSha(reviewHead, contextSha, cwd) {
   if (reviewHead === "HEAD") return contextSha;
   return gitOrNull2(["rev-parse", reviewHead], cwd) ?? contextSha;
 }
+function sinceChangedLines(opts) {
+  const { reviewedSha, reviewHead, excludeGlobs, cwd } = opts;
+  if (reviewedSha === void 0 || reviewedSha === "") return null;
+  if (gitOrNull2(["rev-parse", "--verify", `${reviewedSha}^{commit}`], cwd) === null) return null;
+  if (gitOrNull2(["merge-base", "--is-ancestor", reviewedSha, reviewHead], cwd) === null) {
+    process.stderr.write(
+      `  Note: last reviewed sha ${reviewedSha.slice(0, 7)} is not an ancestor of ${reviewHead} \u2014 full review
+`
+    );
+    return null;
+  }
+  try {
+    const diff = fetchDiff({
+      baseBranch: reviewedSha,
+      reviewHead,
+      githubBaseRef: reviewedSha,
+      excludeGlobs,
+      maxFiles: 0,
+      maxDiffLines: 0,
+      cwd
+    });
+    if (diff.error !== void 0) return null;
+    return new Map(diff.files.map((f) => [f.path, new Set(f.changed_lines)]));
+  } catch (err) {
+    process.stderr.write(
+      `  Note: could not compute the incremental scope (${err instanceof Error ? err.message.split("\n")[0] : String(err)}) \u2014 full review
+`
+    );
+    return null;
+  }
+}
 function readFileAt(reviewHead, cwd) {
   return (path) => {
     try {
@@ -32187,7 +32218,11 @@ var ReviewStateSchema = external_exports.object({
   schema: external_exports.literal("toolu-review-state"),
   version: external_exports.literal(1),
   findings: external_exports.array(StoredFindingSchema).catch([]),
-  history: external_exports.array(HistoryEntrySchema).catch([])
+  history: external_exports.array(HistoryEntrySchema).catch([]),
+  // Full head sha of the last COMPLETED review round — the base for the next
+  // round's incremental scope. Optional: markers written before this field
+  // (or by the bash action) simply trigger a full review.
+  reviewed_sha: external_exports.string().optional().catch(void 0)
 });
 function canonString(f) {
   const path = f.path ?? "";
@@ -32271,7 +32306,14 @@ function diffState(input) {
     resolved,
     counts,
     history_entry,
-    next_state: { schema: "toolu-review-state", version: 1, findings: current, history }
+    next_state: {
+      schema: "toolu-review-state",
+      version: 1,
+      findings: current,
+      history,
+      // The FULL head sha this round reviewed — next round's incremental base.
+      reviewed_sha: input.head_sha
+    }
   };
 }
 
@@ -40174,6 +40216,9 @@ function matchesResolved(f, t) {
   if (f.severity === "blocker") return false;
   return matchesNearby(f, t);
 }
+function coveredByThread(f, threads) {
+  return threads.some((t) => matches(f, t) || matchesNearby(f, t));
+}
 function authorHasLastWord(thread) {
   const last = thread.replies.at(-1);
   if (!last) return false;
@@ -40215,9 +40260,41 @@ function reconcile(findings, priorThreads) {
   return { toCreate, toReply, toResolve };
 }
 
+// src/review/incremental.ts
+function coveredByPriorFinding(f, prior) {
+  return prior.some((p) => {
+    if (p.fp !== void 0 && p.fp === f.fp) return true;
+    if (p.path !== f.path) return false;
+    return typeof p.line === "number" && Math.abs(f.line - p.line) <= NEARBY_LINE_RADIUS;
+  });
+}
+function dropOutOfScope(findings, scope, priorThreads, priorFindings) {
+  if (scope === null) return { kept: findings, dropped: [] };
+  const kept = [];
+  const dropped = [];
+  for (const f of findings) {
+    const inScope = scope.get(f.path)?.has(f.line) === true;
+    const carried = coveredByThread(f, priorThreads) || coveredByPriorFinding(f, priorFindings);
+    (inScope || carried ? kept : dropped).push(f);
+  }
+  return { kept, dropped };
+}
+
 // src/pipeline/publish.ts
 function settleVerdict(input) {
-  const { kept: findings, suppressed } = dropResolved(input.stamped, input.priorThreads);
+  const scoped = dropOutOfScope(
+    input.stamped,
+    input.scope,
+    input.priorThreads,
+    input.prior?.findings ?? []
+  );
+  if (scoped.dropped.length > 0) {
+    process.stdout.write(
+      `  Dropped ${scoped.dropped.length} finding(s) about code unchanged since the last review
+`
+    );
+  }
+  const { kept: findings, suppressed } = dropResolved(scoped.kept, input.priorThreads);
   if (suppressed.length > 0) {
     process.stdout.write(
       `  Suppressed ${suppressed.length} finding(s) already resolved on existing threads
@@ -40226,7 +40303,8 @@ function settleVerdict(input) {
   }
   const validated = { ...input.result, findings };
   let verdict = resolveVerdict(validated.verdict, findings.length);
-  if (verdict === "changes" && findings.length === 0 && suppressed.length > 0) {
+  const removed = suppressed.length + scoped.dropped.length;
+  if (verdict === "changes" && findings.length === 0 && removed > 0) {
     verdict = "approved";
     validated.verdict = "approved";
   }
@@ -40243,6 +40321,12 @@ function settleVerdict(input) {
     capNote = `Round cap reached (MAX_ROUNDS=${input.inputs.maxRounds}): no blocker findings after ${input.inputs.maxRounds} review rounds \u2014 verdict auto-approved; the findings below are advisory.`;
     process.stdout.write(`  ${capNote}
 `);
+  }
+  if (scoped.dropped.length > 0) {
+    const note = `Incremental review: ${scoped.dropped.length} finding(s) about code unchanged since the last review were not re-raised \u2014 comment \`@toolu review\` for a full re-review.`;
+    capNote = capNote === "" ? note : `${capNote}
+
+${note}`;
   }
   return { validated, findings, verdict, capNote };
 }
@@ -40350,7 +40434,8 @@ async function runReview(deps) {
   const stickyId = await postInProgress(octokit, target, context2, found);
   const priorThreads = await fetchReviewThreads(octokit, target);
   target.headSha = resolveHeadSha(reviewHead, context2.sha, cwd);
-  const { result, stamped, mechanical } = await reviewAndValidate({
+  const scope = incrementalScope(deps, found, reviewHead, cwd);
+  const reviewed = await reviewAndValidate({
     inputs,
     diff,
     event,
@@ -40366,17 +40451,27 @@ async function runReview(deps) {
     target,
     inputs,
     diff,
-    result,
-    stamped,
     priorThreads,
-    prior: found.prior,
-    stickyId,
-    mechanical,
-    fullReview: event.full_review,
+    scope,
     reviewHead,
     baseBranch,
+    result: reviewed.result,
+    stamped: reviewed.stamped,
+    mechanical: reviewed.mechanical,
+    prior: found.prior,
+    stickyId,
+    fullReview: event.full_review,
     startMs,
     now
+  });
+}
+function incrementalScope(deps, found, reviewHead, cwd) {
+  if (!deps.inputs.reviewMemory || deps.context.eventName !== "pull_request") return null;
+  return sinceChangedLines({
+    reviewedSha: found.prior?.reviewed_sha,
+    reviewHead,
+    excludeGlobs: deps.inputs.excludeGlobs,
+    cwd
   });
 }
 async function resolveTrigger(deps) {

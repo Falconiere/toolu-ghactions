@@ -22,8 +22,10 @@ import { setVerdictLabel } from "./github/label.js";
 import type { LabelTarget } from "./github/label.js";
 import { upsertComment } from "./github/comment.js";
 import type { ReviewTarget } from "./github/review.js";
-import { resolveHeadSha } from "./pipeline/git.js";
+import { resolveHeadSha, sinceChangedLines } from "./pipeline/git.js";
 import { locatePrior, postInProgress } from "./pipeline/sticky.js";
+import type { PriorSticky } from "./pipeline/sticky.js";
+import type { IncrementalScope } from "./review/incremental.js";
 import { reviewAndValidate } from "./pipeline/reviewCall.js";
 import { publish } from "./pipeline/publish.js";
 import { skipBody, noopBody } from "./pipeline/bodies.js";
@@ -72,7 +74,9 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
   const priorThreads = await fetchReviewThreads(octokit, target);
   target.headSha = resolveHeadSha(reviewHead, context.sha, cwd);
 
-  const { result, stamped, mechanical } = await reviewAndValidate({
+  const scope = incrementalScope(deps, found, reviewHead, cwd);
+
+  const reviewed = await reviewAndValidate({
     inputs,
     diff,
     event,
@@ -89,17 +93,41 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     target,
     inputs,
     diff,
-    result,
-    stamped,
     priorThreads,
-    prior: found.prior,
-    stickyId,
-    mechanical,
-    fullReview: event.full_review,
+    scope,
     reviewHead,
     baseBranch,
+    result: reviewed.result,
+    stamped: reviewed.stamped,
+    mechanical: reviewed.mechanical,
+    prior: found.prior,
+    stickyId,
+    fullReview: event.full_review,
     startMs,
     now,
+  });
+}
+
+/**
+ * The incremental scope for this run: lines changed since the last reviewed sha.
+ * Applies only to pull_request pushes — a manual `@toolu review` re-trigger
+ * (issue_comment) is the explicit full-re-review escape hatch. Null → full
+ * review (first round, manual re-trigger, memory off, or the last reviewed sha
+ * is gone/rewritten) — genuinely NEW findings may otherwise only come from this
+ * scope (see review/incremental.ts).
+ */
+function incrementalScope(
+  deps: ReviewDeps,
+  found: PriorSticky,
+  reviewHead: string,
+  cwd: string,
+): IncrementalScope | null {
+  if (!deps.inputs.reviewMemory || deps.context.eventName !== "pull_request") return null;
+  return sinceChangedLines({
+    reviewedSha: found.prior?.reviewed_sha,
+    reviewHead,
+    excludeGlobs: deps.inputs.excludeGlobs,
+    cwd,
   });
 }
 

@@ -62,6 +62,10 @@ const ReviewStateSchema = z.object({
   version: z.literal(1),
   findings: z.array(StoredFindingSchema).catch([]),
   history: z.array(HistoryEntrySchema).catch([]),
+  // Full head sha of the last COMPLETED review round — the base for the next
+  // round's incremental scope. Optional: markers written before this field
+  // (or by the bash action) simply trigger a full review.
+  reviewed_sha: z.string().optional().catch(undefined),
 });
 
 /** The persisted cross-push review memory carried in the sticky-comment marker. */
@@ -70,6 +74,8 @@ export interface ReviewState {
   version: 1;
   findings: Finding[];
   history: HistoryEntry[];
+  /** Full head sha of the last completed round (incremental-scope base). */
+  reviewed_sha?: string | undefined;
 }
 
 /**
@@ -222,6 +228,13 @@ export function diffState(input: DiffInput): DiffResult {
     resolved,
     counts,
     history_entry,
-    next_state: { schema: "toolu-review-state", version: 1, findings: current, history },
+    next_state: {
+      schema: "toolu-review-state",
+      version: 1,
+      findings: current,
+      history,
+      // The FULL head sha this round reviewed — next round's incremental base.
+      reviewed_sha: input.head_sha,
+    },
   };
 }
