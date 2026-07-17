@@ -1,5 +1,21 @@
 # Changelog
 
+## [6.5.0](https://github.com/Falconiere/toolu-ghactions/compare/v6.4.0...v6.5.0) (2026-07-17)
+
+
+### Features
+
+* **code-review:** incremental re-review scope — converge without a surrender cap ([c02e660](https://github.com/Falconiere/toolu-ghactions/commit/c02e66069d45af47cb32406a2ff4b5cfc994c2b9))
+
+
+### Bug Fixes
+
+* **code-review:** address round-2 review — silent git probes, @/ test imports ([d4399df](https://github.com/Falconiere/toolu-ghactions/commit/d4399df5df8c6b7cc72089c9ed49a47272d1c1e5))
+* **code-review:** converge incremental series on the PR head sha ([8d3671e](https://github.com/Falconiere/toolu-ghactions/commit/8d3671e5cd76683c9c9cdbc69083b11fed8531f5))
+* **code-review:** converge reviews — marker survives cancelled runs, loose open-thread matching ([d52a7d6](https://github.com/Falconiere/toolu-ghactions/commit/d52a7d6e1a5c3509f649a90019521e7caa1b0cf1))
+* **release:** prefer a GitHub App token over the expiring PAT ([192d89e](https://github.com/Falconiere/toolu-ghactions/commit/192d89e7132405088408dfc922549009eafa710f))
+* **release:** warn loudly when the app token mint fails ([7e27c9f](https://github.com/Falconiere/toolu-ghactions/commit/7e27c9ff7879398ca94d71b367fcbb4f2887bada))
+
 ## [6.4.0](https://github.com/Falconiere/toolu-ghactions/compare/v6.3.0...v6.4.0) (2026-07-15)
 
 
