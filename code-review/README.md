@@ -254,11 +254,11 @@ enable it on repos that accept fork PRs. Everything else (priority order,
 `RULES_GLOB`, `RULES_MAX_BYTES`) behaves identically; an unrecognized value warns
 and falls back to `base`.
 
-### Convergence: resolved threads & the round cap
+### Convergence: settled threads & the round cap
 
 A generative reviewer re-derives its findings from the diff on every push, so left alone it can produce a *fresh* batch each round — reworded text (new fingerprint), drifted line anchors, findings wandering into untouched files — and a PR can accumulate dozens of findings without ever reaching the zero-findings verdict. Two mechanisms make the review converge:
 
-- **Resolved threads suppress re-raises (always on).** A human resolving one of the bot's inline threads is a decision. A finding covered by a resolved thread is dropped everywhere — verdict count, summary comment, inline posting. Coverage is deliberately wider than an exact match: same fingerprint, same `path:line`, same path within **10 lines** (a reworded finding drifts), or — when the resolved thread has gone outdated after a push (GitHub detaches its line) — same path and same finding category. **Blocker-severity findings only ever match exactly**, so the loosening can never hide a genuine showstopper.
+- **Settled threads suppress re-raises (always on).** A human resolving one of the bot's inline threads is a decision — and so is [dismissing it in a reply](#dismissing-a-finding-without-resolving-the-thread), either with `@toolu dismiss` or by holding your position after the bot's one rebuttal. A finding covered by a settled thread is dropped everywhere — verdict count, summary comment, inline posting. Coverage is deliberately wider than an exact match: same fingerprint, same `path:line`, same path within **10 lines** (a reworded finding drifts), or — when the settled thread has gone outdated after a push (GitHub detaches its line) — same path and same finding category. **Blocker-severity findings only ever match exactly**, so the loosening can never hide a genuine showstopper, and an *argued-out* thread never suppresses a blocker at all.
 - **`MAX_ROUNDS` surrender (opt-in).** Set `MAX_ROUNDS: 5` and the fifth review round (counted from the `REVIEW_MEMORY` history) that would still say `changes` with **only sub-blocker findings** is downgraded to `approved`: the findings stay listed as advisory, the comment carries an explicit `🔁 Round cap` callout, and `FAIL_ON` stops failing the job. One blocker finding disables the cap for that round. `0` (default) keeps the old block-forever behavior.
 
 ### Inline comments & suggestions
@@ -491,6 +491,34 @@ earlier inline threads instead of blindly re-posting every finding:
   new fingerprint and often a new line — is suppressed at the source instead of
   slipping past the deterministic match.
 
+### Dismissing a finding without resolving the thread
+
+Resolving a thread used to be the *only* way to settle a finding, so an author who
+**refused or explained a finding in a reply** got it raised again on every run. Two
+more channels close that:
+
+- 🙅 **`@toolu dismiss`** — reply to the bot's thread with the trigger phrase plus
+  `dismiss` (any explanation may follow: `@toolu dismiss — intentional, see ADR-12`).
+  The finding is settled exactly as if you had resolved the thread: dropped from the
+  verdict, the comment, and inline posting, fed to the model as dismissed, and the
+  thread is closed with a note. A deliberate ruling, so it silences **any** severity —
+  including a `blocker` — but only on an exact match, never on a reworded variant
+  nearby. The phrase follows `TRIGGER_PHRASE`, and a command inside a `>` blockquote is
+  ignored so quoting one does not fire it.
+- 🤝 **argued out** — if the bot already answered your reply and you hold your position,
+  the disagreement is settled automatically: the finding is suppressed and the thread
+  closed with a standing-disagreement note rather than the same rebuttal a fourth time.
+  You always get the bot's one rebuttal first — your *first* reply is not a dismissal.
+  This is the reviewer conceding an argument, not a ruling on the finding, so it never
+  silences a `blocker` (the same rule [`MAX_ROUNDS`](#convergence-settled-threads--the-round-cap)
+  follows).
+
+Both are gated on the **same repo permission** as the `@mention` re-trigger
+(`MIN_TRIGGER_PERMISSION`, default `write`) and **fail closed** — an unprivileged
+commenter cannot silence the reviewer, and a failing permissions API leaves the finding
+standing. That matches GitHub's own model: resolving a thread already requires write or
+triage access.
+
 Threads are matched to findings by the same line-independent fingerprint used by
 [Review memory](#review-memory), carried in a hidden marker on each inline comment.
 Only the bot's own threads are touched — human review threads are never modified.
@@ -525,8 +553,8 @@ Thread reads/writes are best-effort: a GitHub API hiccup degrades to the previou
 | `TOKEN` | no | `${{ github.token }}` | GitHub token for posting and editing comments. |
 | `APP_ID` | no | — | GitHub App id. Set together with `APP_PRIVATE_KEY` to post as a custom-branded App (`Toolu — Code Review`) instead of `github-actions[bot]`. Both must be set or the action falls back to the default identity. See [Custom identity](#custom-identity-github-app). |
 | `APP_PRIVATE_KEY` | no | — | GitHub App private key — raw PEM **or** base64-encoded PEM (auto-decoded). Pair with `APP_ID`. Pass via a secret; never inline. Used only to mint a short-lived installation token — never logged. |
-| `TRIGGER_PHRASE` | no | `@toolu` | Mention prefix that re-triggers a review from a PR comment, e.g. `@toolu review focus on auth`. Requires the workflow to also listen on `issue_comment`. See [@mention re-trigger](#mention-re-trigger). |
-| `MIN_TRIGGER_PERMISSION` | no | `write` | Minimum repo permission a commenter needs to trigger a review via `@mention`: `write` or `admin`. The check fails closed (denied on any error). |
+| `TRIGGER_PHRASE` | no | `@toolu` | Mention prefix for the bot's two comment commands: `@toolu review [focus on …]` re-triggers a review (requires the workflow to also listen on `issue_comment` — see [@mention re-trigger](#mention-re-trigger)), and `@toolu dismiss` in a reply on one of the bot's inline threads settles that finding (see [Dismissing a finding](#dismissing-a-finding-without-resolving-the-thread)). |
+| `MIN_TRIGGER_PERMISSION` | no | `write` | Minimum repo permission a commenter needs to trigger a review via `@mention` **or** dismiss a finding on a bot thread: `write` or `admin`. The check fails closed (denied on any error). |
 | `BOT_NAME` | no | `Toolu — Code Review` | Display name shown in the comment body header. |
 | `BOT_LOGO_URL` | no | `…/code-review/assets/logo.png` | Logo image shown in the comment body header. |
 | `REVIEW_MEMORY` | no | `true` | Recap what changed since the last review (resolved / still-open / new) and keep a collapsed history, using a hidden state marker in the sticky comment. Set `false` to disable. See [Review memory](#review-memory). |

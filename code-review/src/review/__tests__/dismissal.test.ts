@@ -1,0 +1,187 @@
+// dismissal.test.ts — author-side dismissal detection: the explicit
+// `<TRIGGER_PHRASE> dismiss` command, the ARGUED-OUT stalemate, and the
+// fail-closed permission gate that keeps a drive-by commenter from silencing
+// the reviewer on a public PR.
+import { describe, expect, it, vi } from "vitest";
+import { argumentExhausted, classifyDismissals, explicitDismissReply } from "@/review/dismissal.js";
+import type { DismissalOptions } from "@/review/dismissal.js";
+import { BOT, authorReply, botReply, thread } from "@/review/__tests__/reconcile-helpers.js";
+
+/** The author login every seeded reply uses (matches reconcile-helpers). */
+const AUTHOR = "human-dev";
+
+/** A reply from the PR author with an arbitrary body. */
+function says(body: string, author = AUTHOR) {
+  return { author, body };
+}
+
+/** Options with a permission lookup that grants `write` to everyone. */
+function allowAll(over: Partial<DismissalOptions> = {}): DismissalOptions {
+  return {
+    triggerPhrase: "@toolu",
+    minPermission: "write",
+    lookupPermission: async () => "write",
+    ...over,
+  };
+}
+
+describe("explicitDismissReply", () => {
+  it("finds the `<phrase> dismiss` command in an author reply", () => {
+    const t = thread({ replies: [says("@toolu dismiss — intentional, see ADR-12")] });
+    expect(explicitDismissReply(t, "@toolu")?.body).toContain("ADR-12");
+  });
+
+  it("is case-insensitive and tolerates extra whitespace", () => {
+    const t = thread({ replies: [says("@TOOLU   Dismiss")] });
+    expect(explicitDismissReply(t, "@toolu")).not.toBeNull();
+  });
+
+  it("takes the LAST command when the author argued first and dismissed later", () => {
+    const t = thread({ replies: [says("no, this is fine"), says("@toolu dismiss final answer")] });
+    expect(explicitDismissReply(t, "@toolu")?.body).toContain("final answer");
+  });
+
+  it("ignores `dismissive` and other words that merely start with dismiss", () => {
+    const t = thread({ replies: [says("@toolu dismissive tone aside, here is why...")] });
+    expect(explicitDismissReply(t, "@toolu")).toBeNull();
+  });
+
+  it("ignores the command inside a markdown blockquote (a QUOTED dismissal)", () => {
+    const t = thread({ replies: [says("> @toolu dismiss\n\nI would not do that — here is why.")] });
+    expect(explicitDismissReply(t, "@toolu")).toBeNull();
+  });
+
+  it("never accepts the command from the bot's own reply", () => {
+    const t = thread({ replies: [{ author: BOT, body: "you could reply `@toolu dismiss`" }] });
+    expect(explicitDismissReply(t, "@toolu")).toBeNull();
+  });
+
+  it("ignores an unattributable (empty-login) reply", () => {
+    const t = thread({ replies: [says("@toolu dismiss", "")] });
+    expect(explicitDismissReply(t, "@toolu")).toBeNull();
+  });
+
+  it("honours a custom trigger phrase and escapes its regex metacharacters", () => {
+    const t = thread({ replies: [says("[bot.v2] dismiss")] });
+    expect(explicitDismissReply(t, "[bot.v2]")).not.toBeNull();
+    // The escaped phrase must not match a regex-wildcard variant of itself.
+    expect(explicitDismissReply(thread({ replies: [says("[botXv2] dismiss")] }), "[bot.v2]")).toBe(
+      null,
+    );
+  });
+
+  it("returns null for an empty trigger phrase (no command to match)", () => {
+    const t = thread({ replies: [says("dismiss")] });
+    expect(explicitDismissReply(t, "  ")).toBeNull();
+  });
+});
+
+describe("argumentExhausted", () => {
+  it("is null on the author's FIRST reply — the bot is owed one rebuttal", () => {
+    expect(argumentExhausted(thread({ replies: [authorReply] }))).toBeNull();
+  });
+
+  it("fires when the author answers again after the bot's rebuttal", () => {
+    const t = thread({ replies: [authorReply, botReply, says("still no — it is intentional")] });
+    expect(argumentExhausted(t)?.body).toContain("intentional");
+  });
+
+  it("is null while the BOT has the last word (the author has not answered yet)", () => {
+    expect(argumentExhausted(thread({ replies: [authorReply, botReply] }))).toBeNull();
+  });
+
+  it("is null on a thread with no replies at all", () => {
+    expect(argumentExhausted(thread({ replies: [] }))).toBeNull();
+  });
+
+  it("is null when the last reply is unattributable (empty login)", () => {
+    const t = thread({ replies: [authorReply, botReply, says("ghost", "")] });
+    expect(argumentExhausted(t)).toBeNull();
+  });
+
+  it("is null when the bot login is unknown — its own replies are indistinguishable", () => {
+    const t = thread({ botLogin: "", replies: [authorReply, botReply, says("again")] });
+    expect(argumentExhausted(t)).toBeNull();
+  });
+});
+
+describe("classifyDismissals", () => {
+  it("stamps `explicit` on a command from an authorized login", async () => {
+    const t = thread({ replies: [says("@toolu dismiss")] });
+    const [out] = await classifyDismissals([t], allowAll());
+    expect(out?.dismissal).toBe("explicit");
+  });
+
+  it("stamps `exhausted` on a stalemate from an authorized login", async () => {
+    const t = thread({ replies: [authorReply, botReply, says("no")] });
+    const [out] = await classifyDismissals([t], allowAll());
+    expect(out?.dismissal).toBe("exhausted");
+  });
+
+  it("prefers `explicit` over `exhausted` when both apply", async () => {
+    const t = thread({ replies: [authorReply, botReply, says("@toolu dismiss")] });
+    const [out] = await classifyDismissals([t], allowAll());
+    expect(out?.dismissal).toBe("explicit");
+  });
+
+  it("leaves an already-resolved thread untouched (GitHub already settled it)", async () => {
+    const t = thread({ isResolved: true, replies: [says("@toolu dismiss")] });
+    const [out] = await classifyDismissals([t], allowAll());
+    expect(out?.dismissal).toBeUndefined();
+    expect(out).toBe(t); // returned verbatim, not copied
+  });
+
+  it("leaves a thread with neither channel undismissed", async () => {
+    const [out] = await classifyDismissals([thread({ replies: [authorReply] })], allowAll());
+    expect(out?.dismissal).toBeUndefined();
+  });
+
+  // --- FAIL-CLOSED permission gate ---
+
+  it("refuses a dismissal from a login below the permission floor", async () => {
+    const t = thread({ replies: [says("@toolu dismiss")] });
+    const [out] = await classifyDismissals([t], allowAll({ lookupPermission: async () => "read" }));
+    expect(out?.dismissal).toBeUndefined();
+  });
+
+  it("refuses a dismissal when the permission lookup throws", async () => {
+    const t = thread({ replies: [says("@toolu dismiss")] });
+    const opts = allowAll({
+      lookupPermission: async () => {
+        throw new Error("403");
+      },
+    });
+    const [out] = await classifyDismissals([t], opts);
+    expect(out?.dismissal).toBeUndefined();
+  });
+
+  it("refuses every dismissal when no permission lookup is injected", async () => {
+    const t = thread({ replies: [says("@toolu dismiss")] });
+    const [out] = await classifyDismissals([t], allowAll({ lookupPermission: undefined }));
+    expect(out?.dismissal).toBeUndefined();
+  });
+
+  it("enforces MIN_TRIGGER_PERMISSION=admin (a write collaborator cannot dismiss)", async () => {
+    const t = thread({ replies: [says("@toolu dismiss")] });
+    const [out] = await classifyDismissals([t], allowAll({ minPermission: "admin" }));
+    expect(out?.dismissal).toBeUndefined();
+    const [admin] = await classifyDismissals(
+      [t],
+      allowAll({ minPermission: "admin", lookupPermission: async () => "admin" }),
+    );
+    expect(admin?.dismissal).toBe("explicit");
+  });
+
+  it("memoises the permission lookup per login across threads", async () => {
+    const lookupPermission = vi.fn(async () => "write");
+    const threads = [
+      thread({ threadId: "T_1", replies: [says("@toolu dismiss")] }),
+      thread({ threadId: "T_2", replies: [says("@toolu dismiss")] }),
+      thread({ threadId: "T_3", replies: [says("@toolu dismiss")] }),
+    ];
+    const out = await classifyDismissals(threads, allowAll({ lookupPermission }));
+    expect(out.map((t) => t.dismissal)).toEqual(["explicit", "explicit", "explicit"]);
+    expect(lookupPermission).toHaveBeenCalledTimes(1);
+    expect(lookupPermission).toHaveBeenCalledWith(AUTHOR);
+  });
+});

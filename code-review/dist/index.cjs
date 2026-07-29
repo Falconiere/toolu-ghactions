@@ -31841,8 +31841,9 @@ async function resolveIssueComment(payload, opts) {
     return deny("permission-check-failed", { commenter });
   }
   if (!permission) return deny("permission-check-failed", { commenter });
-  const allowed = minPermission === "admin" ? permission === "admin" : permission === "admin" || permission === "write";
-  if (!allowed) return deny("insufficient-permission", { commenter });
+  if (!meetsPermission(permission, minPermission)) {
+    return deny("insufficient-permission", { commenter });
+  }
   let baseRef = "";
   if (prNumber !== void 0 && opts.lookupBaseRef) {
     try {
@@ -31863,6 +31864,10 @@ async function resolveIssueComment(payload, opts) {
     commenter,
     ...commentId !== void 0 ? { comment_id: commentId } : {}
   };
+}
+function meetsPermission(permission, min) {
+  if (min === "admin") return permission === "admin";
+  return permission === "admin" || permission === "write";
 }
 function deny(reason, extra = {}) {
   return {
@@ -32004,6 +32009,67 @@ async function replyToThread(client, target, rootCommentId, body) {
       body
     });
     return true;
+  } catch {
+    return false;
+  }
+}
+
+// src/review/dismissal.ts
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function stripQuotes(body) {
+  return body.split("\n").filter((line) => !/^\s*>/.test(line)).join("\n");
+}
+function explicitDismissReply(thread, triggerPhrase) {
+  const phrase = triggerPhrase.trim();
+  if (phrase === "") return null;
+  const command = new RegExp(`${escapeRegExp(phrase)}\\s+dismiss(?![a-z])`, "i");
+  for (let i = thread.replies.length - 1; i >= 0; i--) {
+    const reply = thread.replies[i];
+    if (!reply || reply.author === "" || reply.author === thread.botLogin) continue;
+    if (command.test(stripQuotes(reply.body))) return reply;
+  }
+  return null;
+}
+function argumentExhausted(thread) {
+  if (thread.botLogin === "") return null;
+  const last = thread.replies.at(-1);
+  if (!last || last.author === "" || last.author === thread.botLogin) return null;
+  const botArgued = thread.replies.slice(0, -1).some((r) => r.author === thread.botLogin);
+  return botArgued ? last : null;
+}
+async function classifyDismissals(threads, opts) {
+  const seen = /* @__PURE__ */ new Map();
+  const authorize = (login) => {
+    const hit = seen.get(login);
+    if (hit) return hit;
+    const pending = isAuthorized(login, opts);
+    seen.set(login, pending);
+    return pending;
+  };
+  const out = [];
+  for (const thread of threads) {
+    out.push(await classifyOne(thread, opts, authorize));
+  }
+  return out;
+}
+async function classifyOne(thread, opts, authorize) {
+  if (thread.isResolved) return thread;
+  const explicit = explicitDismissReply(thread, opts.triggerPhrase);
+  if (explicit && await authorize(explicit.author)) {
+    return { ...thread, dismissal: "explicit" };
+  }
+  const closing = argumentExhausted(thread);
+  if (closing && await authorize(closing.author)) {
+    return { ...thread, dismissal: "exhausted" };
+  }
+  return thread;
+}
+async function isAuthorized(login, opts) {
+  if (login === "" || !opts.lookupPermission) return false;
+  try {
+    return meetsPermission(await opts.lookupPermission(login), opts.minPermission);
   } catch {
     return false;
   }
@@ -32236,7 +32302,7 @@ function encodeMarker(state) {
 }
 function decodeMarker(body) {
   const re2 = new RegExp(
-    `${escapeRegExp(MARKER_PREFIX2)}([A-Za-z0-9+/=]*)${escapeRegExp(MARKER_SUFFIX)}`
+    `${escapeRegExp2(MARKER_PREFIX2)}([A-Za-z0-9+/=]*)${escapeRegExp2(MARKER_SUFFIX)}`
   );
   const m = body.match(re2);
   const payload = m?.[1];
@@ -32262,12 +32328,12 @@ function decodeMarker(body) {
     return {};
   }
 }
-function escapeRegExp(s) {
+function escapeRegExp2(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function extractMarker(body) {
   const re2 = new RegExp(
-    `${escapeRegExp(MARKER_PREFIX2)}[A-Za-z0-9+/=]*${escapeRegExp(MARKER_SUFFIX)}`
+    `${escapeRegExp2(MARKER_PREFIX2)}[A-Za-z0-9+/=]*${escapeRegExp2(MARKER_SUFFIX)}`
   );
   return body.match(re2)?.[0] ?? null;
 }
@@ -32595,22 +32661,30 @@ function sanitizeInstruction(raw) {
   s = s.replace(/^ +/, "").replace(/ +$/, "");
   return s.slice(0, 500);
 }
+function isSettledContext(t) {
+  return t.resolved === true || t.dismissal !== void 0;
+}
+function settledReason(t) {
+  if (t.resolved === true) return "the author RESOLVED this thread";
+  if (t.dismissal === "explicit") return "the author DISMISSED this explicitly";
+  return "ARGUED OUT (you already made this case and the author held their position)";
+}
 function renderPriorThreadsBlock(threads) {
   let out = "";
-  const dismissed = threads.filter((t) => t.resolved === true);
+  const dismissed = threads.filter(isSettledContext);
   if (dismissed.length > 0) {
     const lines = dismissed.map((t) => {
       const loc = t.line != null ? `${t.path}:${t.line}` : t.path;
-      return `- At \`${loc}\`: "${sanitizeInstruction(t.finding)}"`;
+      return `- At \`${loc}\` \u2014 ${settledReason(t)}: "${sanitizeInstruction(t.finding)}"`;
     });
     out += `
 
-## Dismissed findings (author resolved these threads \u2014 SETTLED)
-The author RESOLVED each of these earlier review threads on GitHub; every one is a settled decision. Do NOT raise these findings again \u2014 not verbatim, not reworded, and not as a variation of the same concern at a nearby location. Raise something touching the same code only when it is a genuinely DIFFERENT defect.
+## Dismissed findings (the author has settled these \u2014 do NOT re-raise)
+Each of these earlier review threads is a settled decision. Do NOT raise these findings again \u2014 not verbatim, not reworded, and not as a variation of the same concern at a nearby location. Raise something touching the same code only when it is a genuinely DIFFERENT defect. The ONE exception: an item marked ARGUED OUT may be raised once more only if it is a true blocker (data loss, security hole, broken build); anything less, let it stand.
 
 ` + lines.join("\n");
   }
-  const withReplies = threads.filter((t) => t.resolved !== true && t.replies.length > 0);
+  const withReplies = threads.filter((t) => !isSettledContext(t) && t.replies.length > 0);
   if (withReplies.length === 0) return out;
   const blocks = withReplies.map((t) => {
     const loc = t.line != null ? `${t.path}:${t.line}` : t.path;
@@ -39833,7 +39907,8 @@ function buildThreadContexts(priorThreads) {
     line: t.line,
     finding: cleanFindingBody(t.rootBody),
     replies: t.replies,
-    resolved: t.isResolved
+    resolved: t.isResolved,
+    ...t.dismissal !== void 0 ? { dismissal: t.dismissal } : {}
   }));
 }
 function cleanFindingBody(body) {
@@ -40205,9 +40280,14 @@ function matchesNearby(f, t) {
   const category = threadCategory(t.rootBody);
   return category !== null && category === (f.category ?? "").trim().toLowerCase();
 }
-function matchesResolved(f, t) {
+function isSettled(t) {
+  return t.isResolved || t.dismissal !== void 0;
+}
+function matchesSettled(f, t) {
+  const blocker = f.severity === "blocker";
+  if (blocker && t.dismissal === "exhausted") return false;
   if (matches(f, t)) return true;
-  if (f.severity === "blocker") return false;
+  if (blocker) return false;
   return matchesNearby(f, t);
 }
 function coveredByThread(f, threads) {
@@ -40219,12 +40299,12 @@ function authorHasLastWord(thread) {
   if (last.author === "" || thread.botLogin === "") return false;
   return last.author !== thread.botLogin;
 }
-function dropResolved(findings, priorThreads) {
-  const resolved = priorThreads.filter((t) => t.isResolved);
+function dropSettled(findings, priorThreads) {
+  const settled = priorThreads.filter(isSettled);
   const kept = [];
   const suppressed = [];
   for (const f of findings) {
-    (resolved.some((t) => matchesResolved(f, t)) ? suppressed : kept).push(f);
+    (settled.some((t) => matchesSettled(f, t)) ? suppressed : kept).push(f);
   }
   return { kept, suppressed };
 }
@@ -40288,10 +40368,10 @@ function settleVerdict(input) {
 `
     );
   }
-  const { kept: findings, suppressed } = dropResolved(scoped.kept, input.priorThreads);
+  const { kept: findings, suppressed } = dropSettled(scoped.kept, input.priorThreads);
   if (suppressed.length > 0) {
     process.stdout.write(
-      `  Suppressed ${suppressed.length} finding(s) already resolved on existing threads
+      `  Suppressed ${suppressed.length} finding(s) already settled on existing threads (resolved or dismissed by the author)
 `
     );
   }
@@ -40391,14 +40471,19 @@ async function postInline(input, findings) {
   }
   for (const thread of plan.toResolve) {
     if (!thread.isOutdated) {
-      await replyToThread(
-        octokit,
-        target,
-        thread.rootCommentId,
-        "Re-reviewed \u2014 this no longer applies (addressed, or point taken). Resolving."
-      );
+      await replyToThread(octokit, target, thread.rootCommentId, resolveNote(thread));
     }
     await resolveThread(octokit, thread.threadId);
+  }
+}
+function resolveNote(thread) {
+  switch (thread.dismissal) {
+    case "explicit":
+      return "Dismissed by the author \u2014 not raising this again. Resolving.";
+    case "exhausted":
+      return "Re-reviewed and we still read this differently. The point stands as stated above; deferring to the author rather than repeating it. Resolving.";
+    default:
+      return "Re-reviewed \u2014 this no longer applies (addressed, or point taken). Resolving.";
   }
 }
 
@@ -40426,7 +40511,11 @@ async function runReview(deps) {
   const diff = resolved.diff;
   const found = await locatePrior(octokit, target, inputs.reviewMemory);
   const stickyId = await postInProgress(octokit, target, context2, found);
-  const priorThreads = await fetchReviewThreads(octokit, target);
+  const priorThreads = await classifyDismissals(await fetchReviewThreads(octokit, target), {
+    triggerPhrase: inputs.triggerPhrase,
+    minPermission: inputs.minTriggerPermission,
+    lookupPermission: deps.lookupPermission
+  });
   target.headSha = resolveHeadSha(reviewHead, context2.sha, cwd);
   const reviewedSha = event.head_sha ?? target.headSha;
   const scope = incrementalScope(deps, found, reviewHead, cwd);

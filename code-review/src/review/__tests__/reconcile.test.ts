@@ -3,7 +3,7 @@
 // cleanup, and resolved-thread suppression on exact matches. The loose prongs
 // (line radius, detached-thread category) live in reconcile-loose.test.ts.
 import { describe, expect, it } from "vitest";
-import { dropResolved, reconcile } from "@/review/reconcile.js";
+import { dropSettled, reconcile } from "@/review/reconcile.js";
 import { authorReply, botReply, finding, thread } from "@/review/__tests__/reconcile-helpers.js";
 
 describe("reconcile", () => {
@@ -150,11 +150,11 @@ describe("reconcile", () => {
   });
 });
 
-describe("dropResolved", () => {
+describe("dropSettled", () => {
   it("suppresses a finding whose resolved thread matches by fingerprint (line drifted)", () => {
     const f = finding({ fp: "fp-done", line: 42 });
     const t = thread({ fp: "fp-done", line: 10, isResolved: true });
-    const { kept, suppressed } = dropResolved([f], [t]);
+    const { kept, suppressed } = dropSettled([f], [t]);
     expect(kept).toEqual([]);
     expect(suppressed).toEqual([f]);
   });
@@ -162,7 +162,7 @@ describe("dropResolved", () => {
   it("suppresses a reworded finding whose resolved thread matches by exact path+line", () => {
     const f = finding({ fp: "fp-reworded", path: "src/a.ts", line: 10 });
     const t = thread({ fp: "fp-original", path: "src/a.ts", line: 10, isResolved: true });
-    const { kept, suppressed } = dropResolved([f], [t]);
+    const { kept, suppressed } = dropSettled([f], [t]);
     expect(kept).toEqual([]);
     expect(suppressed).toEqual([f]);
   });
@@ -170,14 +170,14 @@ describe("dropResolved", () => {
   it("keeps a finding whose matching thread is NOT resolved", () => {
     const f = finding({ fp: "fp-open" });
     const t = thread({ fp: "fp-open", isResolved: false });
-    const { kept, suppressed } = dropResolved([f], [t]);
+    const { kept, suppressed } = dropSettled([f], [t]);
     expect(kept).toEqual([f]);
     expect(suppressed).toEqual([]);
   });
 
   it("keeps everything when there are no prior threads", () => {
     const f = finding({ fp: "fp-any" });
-    const { kept, suppressed } = dropResolved([f], []);
+    const { kept, suppressed } = dropSettled([f], []);
     expect(kept).toEqual([f]);
     expect(suppressed).toEqual([]);
   });
@@ -187,8 +187,72 @@ describe("dropResolved", () => {
     const live = finding({ fp: "fp-live", path: "src/l.ts", line: 4 });
     const resolvedThread = thread({ fp: "fp-done", path: "src/d.ts", line: 3, isResolved: true });
     const openThread = thread({ fp: "fp-live", path: "src/l.ts", line: 4, isResolved: false });
-    const { kept, suppressed } = dropResolved([done, live], [resolvedThread, openThread]);
+    const { kept, suppressed } = dropSettled([done, live], [resolvedThread, openThread]);
     expect(kept).toEqual([live]);
     expect(suppressed).toEqual([done]);
+  });
+
+  // --- Author-side dismissals on UNRESOLVED threads (review/dismissal.ts stamps
+  // `.dismissal`; suppression must treat them exactly like a GitHub resolution). ---
+
+  it("suppresses a finding whose UNRESOLVED thread the author dismissed explicitly", () => {
+    const f = finding({ fp: "fp-refused" });
+    const t = thread({ fp: "fp-refused", isResolved: false, dismissal: "explicit" });
+    const { kept, suppressed } = dropSettled([f], [t]);
+    expect(kept).toEqual([]);
+    expect(suppressed).toEqual([f]);
+  });
+
+  it("suppresses a finding whose thread was ARGUED OUT (bot argued, author held)", () => {
+    const f = finding({ fp: "fp-stalemate" });
+    const t = thread({ fp: "fp-stalemate", isResolved: false, dismissal: "exhausted" });
+    const { kept, suppressed } = dropSettled([f], [t]);
+    expect(kept).toEqual([]);
+    expect(suppressed).toEqual([f]);
+  });
+
+  it("an EXPLICIT dismissal silences a blocker on an exact match (a human ruling)", () => {
+    const f = finding({ fp: "fp-blocker", severity: "blocker" });
+    const t = thread({ fp: "fp-blocker", dismissal: "explicit" });
+    const { suppressed } = dropSettled([f], [t]);
+    expect(suppressed).toEqual([f]);
+  });
+
+  it("an EXHAUSTED thread NEVER silences a blocker, even on an exact match", () => {
+    // Exhaustion is the bot conceding an argument, not the author ruling on the
+    // finding — a real showstopper must survive it (same rule as applyRoundCap).
+    const f = finding({ fp: "fp-blocker", severity: "blocker" });
+    const t = thread({ fp: "fp-blocker", dismissal: "exhausted" });
+    const { kept, suppressed } = dropSettled([f], [t]);
+    expect(kept).toEqual([f]);
+    expect(suppressed).toEqual([]);
+  });
+
+  it("an EXHAUSTED thread still suppresses a non-blocker via the loose line radius", () => {
+    const f = finding({ fp: "fp-reworded", line: 15, severity: "high" });
+    const t = thread({ fp: "fp-original", line: 10, dismissal: "exhausted" });
+    const { suppressed } = dropSettled([f], [t]);
+    expect(suppressed).toEqual([f]);
+  });
+});
+
+describe("reconcile on a dismissed thread", () => {
+  it("resolves a dismissed thread once its finding has been suppressed upstream", () => {
+    // dropSettled runs first, so by the time reconcile sees the run the dismissed
+    // thread has no matching finding left — it closes rather than being re-argued.
+    const t = thread({ fp: "fp-refused", dismissal: "explicit", replies: [authorReply] });
+    const plan = reconcile([], [t]);
+    expect(plan.toResolve).toEqual([t]);
+    expect(plan.toReply).toEqual([]);
+    expect(plan.toCreate).toEqual([]);
+  });
+
+  it("still answers a surviving blocker on an ARGUED OUT thread (not resolved)", () => {
+    const f = finding({ fp: "fp-blocker", severity: "blocker" });
+    const t = thread({ fp: "fp-blocker", dismissal: "exhausted", replies: [authorReply] });
+    const plan = reconcile([f], [t]);
+    expect(plan.toResolve).toEqual([]);
+    expect(plan.toReply.map((r) => r.thread.threadId)).toEqual(["T_1"]);
+    expect(plan.toCreate).toEqual([]);
   });
 });

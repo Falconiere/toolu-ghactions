@@ -1,19 +1,19 @@
 // reconcile-loose.test.ts — the LOOSE matching prongs (line radius + detached-
-// thread category) on both resolved-thread suppression (dropResolved) and open-
+// thread category) on both settled-thread suppression (dropSettled) and open-
 // thread reconciliation (reconcile). A re-raised finding is usually reworded
 // (new fp) and line-drifted, so strict-only matching either resurrects settled
 // findings forever or resolve-then-reinvents open ones — the non-convergence
 // these prongs exist to stop. Split from reconcile.test.ts (file-size budget).
 import { describe, expect, it } from "vitest";
-import { dropResolved, reconcile } from "@/review/reconcile.js";
+import { dropSettled, reconcile } from "@/review/reconcile.js";
 import { authorReply, finding, thread } from "@/review/__tests__/reconcile-helpers.js";
 
-describe("dropResolved loose matching (resolved-thread convergence)", () => {
+describe("dropSettled loose matching (settled-thread convergence)", () => {
   it("suppresses a reworded finding within the line radius of a resolved thread", () => {
     // New fp (reworded) + drifted line: both strict prongs miss, radius covers it.
     const f = finding({ fp: "fp-reworded", line: 17 });
     const t = thread({ fp: "fp-original", line: 10, isResolved: true });
-    const { kept, suppressed } = dropResolved([f], [t]);
+    const { kept, suppressed } = dropSettled([f], [t]);
     expect(kept).toEqual([]);
     expect(suppressed).toEqual([f]);
   });
@@ -21,7 +21,7 @@ describe("dropResolved loose matching (resolved-thread convergence)", () => {
   it("keeps a finding outside the line radius", () => {
     const f = finding({ fp: "fp-reworded", line: 25 });
     const t = thread({ fp: "fp-original", line: 10, isResolved: true });
-    const { kept, suppressed } = dropResolved([f], [t]);
+    const { kept, suppressed } = dropSettled([f], [t]);
     expect(kept).toEqual([f]);
     expect(suppressed).toEqual([]);
   });
@@ -29,14 +29,14 @@ describe("dropResolved loose matching (resolved-thread convergence)", () => {
   it("never loose-suppresses a blocker (radius hit but severity blocker)", () => {
     const f = finding({ fp: "fp-reworded", line: 11, severity: "blocker" });
     const t = thread({ fp: "fp-original", line: 10, isResolved: true });
-    const { kept } = dropResolved([f], [t]);
+    const { kept } = dropSettled([f], [t]);
     expect(kept).toEqual([f]);
   });
 
   it("still suppresses a blocker on an exact fingerprint match (strict prong)", () => {
     const f = finding({ fp: "fp-shared", severity: "blocker" });
     const t = thread({ fp: "fp-shared", isResolved: true });
-    const { suppressed } = dropResolved([f], [t]);
+    const { suppressed } = dropSettled([f], [t]);
     expect(suppressed).toEqual([f]);
   });
 
@@ -50,7 +50,7 @@ describe("dropResolved loose matching (resolved-thread convergence)", () => {
       isOutdated: true,
       rootBody: "**medium** _(CORRECTNESS)_: some text\n\n<!-- toolu-fp:fp-original -->",
     });
-    const { suppressed } = dropResolved([f], [t]);
+    const { suppressed } = dropSettled([f], [t]);
     expect(suppressed).toEqual([f]);
   });
 
@@ -63,7 +63,7 @@ describe("dropResolved loose matching (resolved-thread convergence)", () => {
       isOutdated: true,
       rootBody: "**medium** _(CORRECTNESS)_: some text\n\n<!-- toolu-fp:fp-original -->",
     });
-    const { kept } = dropResolved([f], [t]);
+    const { kept } = dropSettled([f], [t]);
     expect(kept).toEqual([f]);
   });
 
@@ -75,21 +75,21 @@ describe("dropResolved loose matching (resolved-thread convergence)", () => {
       isResolved: true,
       rootBody: "**low** _(DOC/COMMENT ACCURACY · high)_: text\n\n<!-- toolu-fp:fp-original -->",
     });
-    const { suppressed } = dropResolved([f], [t]);
+    const { suppressed } = dropSettled([f], [t]);
     expect(suppressed).toEqual([f]);
   });
 
   it("an UNRESOLVED nearby thread never suppresses", () => {
     const f = finding({ fp: "fp-reworded", line: 11 });
     const t = thread({ fp: "fp-original", line: 10, isResolved: false });
-    const { kept } = dropResolved([f], [t]);
+    const { kept } = dropSettled([f], [t]);
     expect(kept).toEqual([f]);
   });
 
   it("a resolved thread in a different path never suppresses", () => {
     const f = finding({ fp: "fp-reworded", line: 10, path: "src/b.ts" });
     const t = thread({ fp: "fp-original", line: 10, path: "src/a.ts", isResolved: true });
-    const { kept } = dropResolved([f], [t]);
+    const { kept } = dropSettled([f], [t]);
     expect(kept).toEqual([f]);
   });
 });

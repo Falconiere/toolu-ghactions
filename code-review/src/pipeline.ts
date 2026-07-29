@@ -18,6 +18,7 @@ import { resolveEvent } from "./github/event.js";
 import type { EventResolution } from "./github/event.js";
 import type { CommentTarget } from "./github/comment.js";
 import { fetchReviewThreads } from "./github/threads.js";
+import { classifyDismissals } from "./review/dismissal.js";
 import { setVerdictLabel } from "./github/label.js";
 import type { LabelTarget } from "./github/label.js";
 import { upsertComment } from "./github/comment.js";
@@ -71,7 +72,15 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
   // cancel-in-progress mid-review keeps memory intact) + the bot's prior threads.
   const found = await locatePrior(octokit, target, inputs.reviewMemory);
   const stickyId = await postInProgress(octokit, target, context, found);
-  const priorThreads = await fetchReviewThreads(octokit, target);
+  // Threads carry the author's side of the conversation; classify which of them the
+  // author has SETTLED without resolving on GitHub (an authorized `<phrase> dismiss`
+  // reply, or a stalemate the bot already argued once) so those findings stop being
+  // re-raised. Fail-closed on the same permission floor as the @mention re-trigger.
+  const priorThreads = await classifyDismissals(await fetchReviewThreads(octokit, target), {
+    triggerPhrase: inputs.triggerPhrase,
+    minPermission: inputs.minTriggerPermission,
+    lookupPermission: deps.lookupPermission,
+  });
   target.headSha = resolveHeadSha(reviewHead, context.sha, cwd);
   // The sha the incremental series is stored on. Prefer the PR HEAD sha over
   // target.headSha: on pull_request events the latter is GITHUB_SHA — the

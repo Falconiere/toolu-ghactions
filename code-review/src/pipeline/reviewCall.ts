@@ -45,8 +45,9 @@ export interface ReviewCallOutput {
 }
 
 /**
- * Map the bot's prior threads to the prompt's context block: accept-or-argue
- * for open threads, DISMISSED (settled, do not re-raise or reword) for resolved.
+ * Map the bot's prior threads to the prompt's context block: accept-or-argue for
+ * still-live threads, DISMISSED (settled, do not re-raise or reword) for those the
+ * author resolved on GitHub or dismissed in a reply (see review/dismissal.ts).
  */
 export function buildThreadContexts(priorThreads: PriorThread[]): PriorThreadContext[] {
   return priorThreads.map((t) => ({
@@ -55,6 +56,7 @@ export function buildThreadContexts(priorThreads: PriorThread[]): PriorThreadCon
     finding: cleanFindingBody(t.rootBody),
     replies: t.replies,
     resolved: t.isResolved,
+    ...(t.dismissal !== undefined ? { dismissal: t.dismissal } : {}),
   }));
 }
 
