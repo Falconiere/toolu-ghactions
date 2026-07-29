@@ -503,8 +503,9 @@ more channels close that:
   verdict, the comment, and inline posting, fed to the model as dismissed, and the
   thread is closed with a note. A deliberate ruling, so it silences **any** severity —
   including a `blocker` — but only on an exact match, never on a reworded variant
-  nearby. The phrase follows `TRIGGER_PHRASE`, and a command inside a `>` blockquote is
-  ignored so quoting one does not fire it.
+  nearby. The phrase follows `TRIGGER_PHRASE`, and a command inside quoted text — a `>`
+  blockquote, a fenced block, or an inline `` `code span` `` — is ignored, so showing the
+  syntax while arguing the opposite never fires it.
 - 🤝 **argued out** — if the bot already answered your reply and you hold your position,
   the disagreement is settled automatically: the finding is suppressed and the thread
   closed with a standing-disagreement note rather than the same rebuttal a fourth time.

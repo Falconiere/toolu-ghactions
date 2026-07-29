@@ -46,9 +46,41 @@ describe("explicitDismissReply", () => {
     expect(explicitDismissReply(t, "@toolu")).toBeNull();
   });
 
+  it("requires the whole word: digits or underscores after `dismiss` are not the command", () => {
+    for (const body of ["@toolu dismiss3", "@toolu dismiss_it", "@toolu dismissAll"]) {
+      expect(explicitDismissReply(thread({ replies: [says(body)] }), "@toolu")).toBeNull();
+    }
+  });
+
   it("ignores the command inside a markdown blockquote (a QUOTED dismissal)", () => {
     const t = thread({ replies: [says("> @toolu dismiss\n\nI would not do that — here is why.")] });
     expect(explicitDismissReply(t, "@toolu")).toBeNull();
+  });
+
+  it("ignores the command inside an inline code span (SHOWING the syntax, not using it)", () => {
+    const t = thread({
+      replies: [says("You could reply `@toolu dismiss`, but I think this is a real bug.")],
+    });
+    expect(explicitDismissReply(t, "@toolu")).toBeNull();
+  });
+
+  it("ignores the command inside a fenced code block", () => {
+    const t = thread({
+      replies: [says("Docs snippet:\n\n```\n@toolu dismiss\n```\n\nNot doing it.")],
+    });
+    expect(explicitDismissReply(t, "@toolu")).toBeNull();
+  });
+
+  it("ignores the command after an UNTERMINATED fence (everything after renders as code)", () => {
+    const t = thread({ replies: [says("Example:\n\n```\n@toolu dismiss")] });
+    expect(explicitDismissReply(t, "@toolu")).toBeNull();
+  });
+
+  it("still fires on a real command in the same reply as a quoted one", () => {
+    const t = thread({
+      replies: [says("The syntax is `@toolu dismiss` — and yes:\n\n@toolu dismiss, by design.")],
+    });
+    expect(explicitDismissReply(t, "@toolu")?.body).toContain("by design");
   });
 
   it("never accepts the command from the bot's own reply", () => {
@@ -103,6 +135,32 @@ describe("argumentExhausted", () => {
     const t = thread({ botLogin: "", replies: [authorReply, botReply, says("again")] });
     expect(argumentExhausted(t)).toBeNull();
   });
+
+  it("stays exhausted when the bot's closing note landed but the resolve mutation failed", () => {
+    // publish.ts replies THEN resolves, both best-effort. A failed resolve leaves the
+    // bot as the last speaker on a thread whose argument already ended; re-reading it
+    // as live would un-suppress the finding next run — the very loop this closes.
+    const t = thread({
+      replies: [
+        authorReply,
+        botReply,
+        says("Still intentional."),
+        { author: BOT, body: "Re-reviewed and we still read this differently. Resolving." },
+      ],
+    });
+    expect(argumentExhausted(t)?.body).toBe("Still intentional.");
+  });
+
+  it("is still null when trailing bot replies leave only the author's FIRST reply", () => {
+    // Stripping trailing bot replies must not manufacture exhaustion: [author, bot]
+    // is the bot's one owed rebuttal, not a stalemate.
+    expect(argumentExhausted(thread({ replies: [authorReply, botReply] }))).toBeNull();
+    expect(argumentExhausted(thread({ replies: [authorReply, botReply, botReply] }))).toBeNull();
+  });
+
+  it("is null when only the bot has ever replied", () => {
+    expect(argumentExhausted(thread({ replies: [botReply] }))).toBeNull();
+  });
 });
 
 describe("classifyDismissals", () => {
@@ -141,6 +199,31 @@ describe("classifyDismissals", () => {
   it("refuses a dismissal from a login below the permission floor", async () => {
     const t = thread({ replies: [says("@toolu dismiss")] });
     const [out] = await classifyDismissals([t], allowAll({ lookupPermission: async () => "read" }));
+    expect(out?.dismissal).toBeUndefined();
+  });
+
+  it("refuses an EXHAUSTED stalemate from a login below the permission floor", async () => {
+    // The realistic case: a fork-PR author holds only `read` on the base repo, so the
+    // auto-surrender channel must be gated exactly like the explicit command.
+    const t = thread({ replies: [authorReply, botReply, says("no")] });
+    const [out] = await classifyDismissals([t], allowAll({ lookupPermission: async () => "read" }));
+    expect(out?.dismissal).toBeUndefined();
+  });
+
+  it("refuses an EXHAUSTED stalemate when no permission lookup is injected", async () => {
+    const t = thread({ replies: [authorReply, botReply, says("no")] });
+    const [out] = await classifyDismissals([t], allowAll({ lookupPermission: undefined }));
+    expect(out?.dismissal).toBeUndefined();
+  });
+
+  it("refuses an EXHAUSTED stalemate when the permission lookup throws", async () => {
+    const t = thread({ replies: [authorReply, botReply, says("no")] });
+    const opts = allowAll({
+      lookupPermission: async () => {
+        throw new Error("500");
+      },
+    });
+    const [out] = await classifyDismissals([t], opts);
     expect(out?.dismissal).toBeUndefined();
   });
 

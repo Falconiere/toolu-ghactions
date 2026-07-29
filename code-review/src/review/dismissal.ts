@@ -45,14 +45,29 @@ function escapeRegExp(s: string): string {
 }
 
 /**
- * Drop markdown blockquote lines before scanning for the command, so QUOTING a
- * dismissal (`> @toolu dismiss`) while arguing against it cannot fire the real one.
+ * Drop every QUOTED region before scanning for the command, so a reply that merely
+ * SHOWS the syntax while arguing the opposite — "you could reply `@toolu dismiss`,
+ * but I think this is a real bug" — cannot fire the real thing. Covers all three
+ * ways markdown quotes text: fenced blocks, inline code spans, and `>` blockquotes.
+ *
+ * An UNTERMINATED fence swallows the rest of the body: everything after it renders
+ * as code, and erring toward "no command found" only ever leaves a finding standing
+ * — the same direction every other gate in this module fails.
  */
-function stripQuotes(body: string): string {
-  return body
-    .split("\n")
-    .filter((line) => !/^\s*>/.test(line))
-    .join("\n");
+function stripQuoted(body: string): string {
+  return (
+    body
+      // Paired fences first: they may legitimately contain backticks and `>` lines.
+      .replace(/^[ \t]*(`{3,}|~{3,})[\s\S]*?^[ \t]*\1[ \t]*$/gm, "")
+      // A dangling opener has no close — drop from it to the end.
+      .replace(/^[ \t]*(?:`{3,}|~{3,})[\s\S]*$/m, "")
+      // Then inline spans (single or multi-backtick, never spanning a line).
+      .replace(/`+[^`\n]*`+/g, "")
+      // Then blockquote lines.
+      .split("\n")
+      .filter((line) => !/^\s*>/.test(line))
+      .join("\n")
+  );
 }
 
 /**
@@ -60,7 +75,8 @@ function stripQuotes(body: string): string {
  * may argue first and dismiss later in the same thread. The bot's own replies are
  * skipped (it must never dismiss on its own words), as are unattributable ones (a
  * null GitHub author surfaces as `""` and is indistinguishable from the bot).
- * `dismiss` must end the word — `@toolu dismissive` is prose, not a command.
+ * `dismiss` must END the word — `@toolu dismissive`, `dismiss3` and `dismiss_it` are
+ * prose or some other token, not this command (hence `\w`, not just letters).
  */
 export function explicitDismissReply(
   thread: PriorThread,
@@ -68,11 +84,11 @@ export function explicitDismissReply(
 ): ThreadComment | null {
   const phrase = triggerPhrase.trim();
   if (phrase === "") return null;
-  const command = new RegExp(`${escapeRegExp(phrase)}\\s+dismiss(?![a-z])`, "i");
+  const command = new RegExp(`${escapeRegExp(phrase)}\\s+dismiss(?!\\w)`, "i");
   for (let i = thread.replies.length - 1; i >= 0; i--) {
     const reply = thread.replies[i];
     if (!reply || reply.author === "" || reply.author === thread.botLogin) continue;
-    if (command.test(stripQuotes(reply.body))) return reply;
+    if (command.test(stripQuoted(reply.body))) return reply;
   }
   return null;
 }
@@ -83,12 +99,21 @@ export function explicitDismissReply(
  * after that: the author's first reply is not exhaustion — it is exactly the input the
  * model is asked to weigh this run, and the bot is owed one rebuttal. A second author
  * reply after that rebuttal means neither side is moving.
+ *
+ * TRAILING bot replies are ignored, so the verdict is IDEMPOTENT once the argument has
+ * ended. publish.ts posts its closing note before the resolveReviewThread mutation and
+ * both are best-effort: when the note lands but the resolve fails, the bot is the last
+ * speaker on a thread whose argument really did end. Reading that as "still live" would
+ * un-suppress the finding on the next run — with no reply posted to explain it, since
+ * the bot then holds the last word — resurrecting the exact loop this module closes.
  */
 export function argumentExhausted(thread: PriorThread): ThreadComment | null {
   if (thread.botLogin === "") return null; // can't tell our replies from theirs
-  const last = thread.replies.at(-1);
-  if (!last || last.author === "" || last.author === thread.botLogin) return null;
-  const botArgued = thread.replies.slice(0, -1).some((r) => r.author === thread.botLogin);
+  let end = thread.replies.length;
+  while (end > 0 && thread.replies[end - 1]?.author === thread.botLogin) end--;
+  const last = thread.replies[end - 1];
+  if (!last || last.author === "") return null;
+  const botArgued = thread.replies.slice(0, end - 1).some((r) => r.author === thread.botLogin);
   return botArgued ? last : null;
 }
 

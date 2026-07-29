@@ -32018,25 +32018,27 @@ async function replyToThread(client, target, rootCommentId, body) {
 function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-function stripQuotes(body) {
-  return body.split("\n").filter((line) => !/^\s*>/.test(line)).join("\n");
+function stripQuoted(body) {
+  return body.replace(/^[ \t]*(`{3,}|~{3,})[\s\S]*?^[ \t]*\1[ \t]*$/gm, "").replace(/^[ \t]*(?:`{3,}|~{3,})[\s\S]*$/m, "").replace(/`+[^`\n]*`+/g, "").split("\n").filter((line) => !/^\s*>/.test(line)).join("\n");
 }
 function explicitDismissReply(thread, triggerPhrase) {
   const phrase = triggerPhrase.trim();
   if (phrase === "") return null;
-  const command = new RegExp(`${escapeRegExp(phrase)}\\s+dismiss(?![a-z])`, "i");
+  const command = new RegExp(`${escapeRegExp(phrase)}\\s+dismiss(?!\\w)`, "i");
   for (let i = thread.replies.length - 1; i >= 0; i--) {
     const reply = thread.replies[i];
     if (!reply || reply.author === "" || reply.author === thread.botLogin) continue;
-    if (command.test(stripQuotes(reply.body))) return reply;
+    if (command.test(stripQuoted(reply.body))) return reply;
   }
   return null;
 }
 function argumentExhausted(thread) {
   if (thread.botLogin === "") return null;
-  const last = thread.replies.at(-1);
-  if (!last || last.author === "" || last.author === thread.botLogin) return null;
-  const botArgued = thread.replies.slice(0, -1).some((r) => r.author === thread.botLogin);
+  let end = thread.replies.length;
+  while (end > 0 && thread.replies[end - 1]?.author === thread.botLogin) end--;
+  const last = thread.replies[end - 1];
+  if (!last || last.author === "") return null;
+  const botArgued = thread.replies.slice(0, end - 1).some((r) => r.author === thread.botLogin);
   return botArgued ? last : null;
 }
 async function classifyDismissals(threads, opts) {
