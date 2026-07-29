@@ -815,9 +815,7 @@ describe("runReview — thread-aware inline reconciliation", () => {
     // The prompt sent on the wire carries the dismissed block with the thread's
     // finding text and the do-not-reword instruction.
     const user = captured.body?.messages?.find((m) => m.role === "user");
-    expect(user?.content).toContain(
-      "## Dismissed findings (author resolved these threads — SETTLED)",
-    );
+    expect(user?.content).toContain("## Dismissed findings (the author has settled these");
     // The seeded thread's root body is `**finding** at <path>` (see fakeOctokit);
     // cleanFindingBody + sanitizeInstruction keep that text, so its presence
     // proves the THREAD's finding text reached the dismissed block.
@@ -825,6 +823,135 @@ describe("runReview — thread-aware inline reconciliation", () => {
     expect(user?.content).toContain("not verbatim, not reworded");
     // And it is NOT presented as an open accept-or-argue thread.
     expect(user?.content).not.toContain("## Prior review threads");
+  });
+
+  // --- Author-side dismissals: the author refuses or explains a finding in a REPLY
+  // without resolving the thread. Before this, the model re-raised it every run and
+  // the bot re-posted the same counter-argument forever. ---
+
+  it("an authorized `@toolu dismiss` reply suppresses the finding and closes the thread", async () => {
+    const { dir, headSha } = track(featureRepoWithChange());
+    const f0 = fixtureFinding("findings", 0); // src/util.ts:2 — the fixture re-raises it
+    const seed: SeedThread = {
+      threadId: "T_refused",
+      rootCommentId: 8010,
+      fp: fingerprint(f0),
+      path: f0.path,
+      line: 2,
+      replies: [{ author: "human-dev", body: "@toolu dismiss — callers expect the delta." }],
+    };
+    const { octokit, rec } = fakeOctokit([], [seed]);
+
+    const result = await runReview({
+      inputs: baseInputs(),
+      octokit,
+      context: prContext(headSha),
+      fetch: replayFetch("findings"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+      lookupPermission: async () => "write",
+    });
+
+    // Gone from the count and the verdict, not merely from re-posting.
+    expect(result.findingsCount).toBe(0);
+    expect(result.verdict).toBe("approved");
+    expect(rec.reviews.length).toBe(0);
+    expect(rec.resolved).toEqual(["T_refused"]);
+    const bodies = rec.replies.map((r) => r.body).join("\n");
+    expect(bodies).toContain("Dismissed by the author");
+    expect(bodies).not.toContain("Still flagging");
+  });
+
+  it("an UNAUTHORIZED dismiss reply changes nothing (fail-closed permission gate)", async () => {
+    const { dir, headSha } = track(featureRepoWithChange());
+    const f0 = fixtureFinding("findings", 0);
+    const seed: SeedThread = {
+      threadId: "T_refused",
+      rootCommentId: 8010,
+      fp: fingerprint(f0),
+      path: f0.path,
+      line: 2,
+      replies: [{ author: "drive-by", body: "@toolu dismiss" }],
+    };
+    const { octokit, rec } = fakeOctokit([], [seed]);
+
+    const result = await runReview({
+      inputs: baseInputs(),
+      octokit,
+      context: prContext(headSha),
+      fetch: replayFetch("findings"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+      lookupPermission: async () => "read", // below the MIN_TRIGGER_PERMISSION floor
+    });
+
+    expect(result.findingsCount).toBe(1);
+    expect(result.verdict).toBe("changes");
+    expect(rec.resolved).toEqual([]);
+    expect(rec.replies.map((r) => r.body).join("\n")).toContain("Still flagging");
+  });
+
+  it("stops re-arguing once the author holds their position past the bot's rebuttal", async () => {
+    const { dir, headSha } = track(featureRepoWithChange());
+    const f0 = fixtureFinding("findings", 0);
+    const seed: SeedThread = {
+      threadId: "T_stalemate",
+      rootCommentId: 8020,
+      fp: fingerprint(f0),
+      path: f0.path,
+      line: 2,
+      replies: [
+        { author: "human-dev", body: "Intentional — callers expect a delta." },
+        { author: "toolu-bot", body: "**Still flagging after re-review.** The name says add." },
+        { author: "human-dev", body: "Still intentional. Not changing it." },
+      ],
+    };
+    const { octokit, rec } = fakeOctokit([], [seed]);
+
+    const result = await runReview({
+      inputs: baseInputs(),
+      octokit,
+      context: prContext(headSha),
+      fetch: replayFetch("findings"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+      lookupPermission: async () => "write",
+    });
+
+    expect(result.findingsCount).toBe(0);
+    expect(result.verdict).toBe("approved");
+    expect(rec.resolved).toEqual(["T_stalemate"]);
+    const bodies = rec.replies.map((r) => r.body).join("\n");
+    expect(bodies).toContain("deferring to the author");
+    expect(bodies).not.toContain("Still flagging"); // the argument is over, not repeated
+  });
+
+  it("the author's FIRST reply is still answered — the bot is owed one rebuttal", async () => {
+    const { dir, headSha } = track(featureRepoWithChange());
+    const f0 = fixtureFinding("findings", 0);
+    const seed: SeedThread = {
+      threadId: "T_first",
+      rootCommentId: 8030,
+      fp: fingerprint(f0),
+      path: f0.path,
+      line: 2,
+      replies: [{ author: "human-dev", body: "Intentional — callers expect a delta." }],
+    };
+    const { octokit, rec } = fakeOctokit([], [seed]);
+
+    const result = await runReview({
+      inputs: baseInputs(),
+      octokit,
+      context: prContext(headSha),
+      fetch: replayFetch("findings"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+      lookupPermission: async () => "write",
+    });
+
+    expect(result.findingsCount).toBe(1);
+    expect(rec.resolved).toEqual([]);
+    expect(rec.replies.map((r) => r.body).join("\n")).toContain("Still flagging");
   });
 
   it("with NO prior threads, posts every finding (matches the old behaviour)", async () => {

@@ -59,6 +59,10 @@ export interface PriorThreadContext {
   /** True when a human resolved the thread on GitHub — the finding is a settled
    *  decision and goes into the DISMISSED block instead of accept-or-argue. */
   resolved?: boolean;
+  /** Author-side dismissal on an unresolved thread (see review/dismissal.ts). Like
+   *  `resolved`, it moves the finding into the DISMISSED block — `"exhausted"` with a
+   *  blocker-only escape hatch, mirroring what reconcile.ts enforces deterministically. */
+  dismissal?: "explicit" | "exhausted";
 }
 
 /**
@@ -109,6 +113,19 @@ export function sanitizeInstruction(raw: string): string {
   return s.slice(0, 500);
 }
 
+/** A thread the author has settled: resolved on GitHub, or dismissed in a reply. */
+function isSettledContext(t: PriorThreadContext): boolean {
+  return t.resolved === true || t.dismissal !== undefined;
+}
+
+/** Why a settled thread is settled, stated so the model can weigh the ARGUED OUT
+ *  exception (blocker-only re-raise) against the two human decisions, which have none. */
+function settledReason(t: PriorThreadContext): string {
+  if (t.resolved === true) return "the author RESOLVED this thread";
+  if (t.dismissal === "explicit") return "the author DISMISSED this explicitly";
+  return "ARGUED OUT (you already made this case and the author held their position)";
+}
+
 /**
  * Render the accept-or-argue block: the bot's earlier findings the author replied to,
  * plus those replies. Only threads WITH at least one reply are included (a thread with no
@@ -119,26 +136,28 @@ export function sanitizeInstruction(raw: string): string {
 function renderPriorThreadsBlock(threads: PriorThreadContext[]): string {
   let out = "";
 
-  // Human-resolved threads are SETTLED: rendering them as dismissals lets the
-  // model suppress rewordings and near-variants that deterministic fp/line
-  // matching cannot catch (a reworded finding gets a new fingerprint, and the
-  // line often drifts with the fix).
-  const dismissed = threads.filter((t) => t.resolved === true);
+  // Settled threads (resolved on GitHub, or dismissed by the author in a reply):
+  // rendering them as dismissals lets the model suppress rewordings and near-variants
+  // that deterministic fp/line matching cannot catch (a reworded finding gets a new
+  // fingerprint, and the line often drifts with the fix).
+  const dismissed = threads.filter(isSettledContext);
   if (dismissed.length > 0) {
     const lines = dismissed.map((t) => {
       const loc = t.line != null ? `${t.path}:${t.line}` : t.path;
-      return `- At \`${loc}\`: "${sanitizeInstruction(t.finding)}"`;
+      return `- At \`${loc}\` — ${settledReason(t)}: "${sanitizeInstruction(t.finding)}"`;
     });
     out +=
-      `\n\n## Dismissed findings (author resolved these threads — SETTLED)\n` +
-      `The author RESOLVED each of these earlier review threads on GitHub; every one is a ` +
-      `settled decision. Do NOT raise these findings again — not verbatim, not reworded, and ` +
-      `not as a variation of the same concern at a nearby location. Raise something touching ` +
-      `the same code only when it is a genuinely DIFFERENT defect.\n\n` +
+      `\n\n## Dismissed findings (the author has settled these — do NOT re-raise)\n` +
+      `Each of these earlier review threads is a settled decision. Do NOT raise these ` +
+      `findings again — not verbatim, not reworded, and not as a variation of the same ` +
+      `concern at a nearby location. Raise something touching the same code only when it ` +
+      `is a genuinely DIFFERENT defect. The ONE exception: an item marked ARGUED OUT may ` +
+      `be raised once more only if it is a true blocker (data loss, security hole, broken ` +
+      `build); anything less, let it stand.\n\n` +
       lines.join("\n");
   }
 
-  const withReplies = threads.filter((t) => t.resolved !== true && t.replies.length > 0);
+  const withReplies = threads.filter((t) => !isSettledContext(t) && t.replies.length > 0);
   if (withReplies.length === 0) return out;
   const blocks = withReplies.map((t) => {
     const loc = t.line != null ? `${t.path}:${t.line}` : t.path;

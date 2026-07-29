@@ -159,12 +159,9 @@ async function resolveIssueComment(
     return deny("permission-check-failed", { commenter });
   }
   if (!permission) return deny("permission-check-failed", { commenter });
-
-  const allowed =
-    minPermission === "admin"
-      ? permission === "admin"
-      : permission === "admin" || permission === "write";
-  if (!allowed) return deny("insufficient-permission", { commenter });
+  if (!meetsPermission(permission, minPermission)) {
+    return deny("insufficient-permission", { commenter });
+  }
 
   // Allowed. Resolve the base ref best-effort (a throw → "").
   let baseRef = "";
@@ -188,6 +185,17 @@ async function resolveIssueComment(
     commenter,
     ...(commentId !== undefined ? { comment_id: commentId } : {}),
   };
+}
+
+/**
+ * True when a GitHub permission string clears the configured floor: `"write"`
+ * accepts {admin, write}, `"admin"` accepts {admin} only. An empty/unknown
+ * string never clears it — every caller is a FAIL-CLOSED gate. Shared with the
+ * thread-dismissal gate (review/dismissal.ts) so the two cannot drift.
+ */
+export function meetsPermission(permission: string, min: "write" | "admin"): boolean {
+  if (min === "admin") return permission === "admin";
+  return permission === "admin" || permission === "write";
 }
 
 /** Build a run=false decision with a reason and optional commenter. */

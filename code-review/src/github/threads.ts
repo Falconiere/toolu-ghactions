@@ -30,6 +30,14 @@ export interface PriorThread {
   isResolved: boolean;
   /** GitHub-side outdated flag (the anchored hunk was superseded by a later push). */
   isOutdated: boolean;
+  /**
+   * Author-side dismissal detected on an UNRESOLVED thread — set by
+   * {@link import("@/review/dismissal.js").classifyDismissals}, never by the
+   * GraphQL read. `"explicit"` = an authorized `<TRIGGER_PHRASE> dismiss` reply;
+   * `"exhausted"` = the bot already argued the point and the author answered
+   * again. Undefined on a thread with neither.
+   */
+  dismissal?: "explicit" | "exhausted";
   /** The root comment body (the bot's original finding, marker included). */
   rootBody: string;
   /** Comments after the root, in order — the conversation (author + bot replies). */

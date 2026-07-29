@@ -10,8 +10,11 @@
 //
 // A finding maps to a thread by fingerprint (stable across line drift) OR by exact
 // path+line (catches a reworded argument posted at the same spot). A finding that maps to
-// ANY prior thread — even a resolved one — is never re-posted, so a human-resolved thread
-// is respected rather than reopened.
+// ANY prior thread — even a settled one — is never re-posted, so a settled thread is
+// respected rather than reopened. "Settled" is a GitHub resolution OR an author-side
+// dismissal detected in the replies (see review/dismissal.ts); {@link dropSettled}
+// removes those findings BEFORE this plan is built, so a settled thread normally has
+// nothing left matching it and lands in toResolve.
 import type { PriorThread } from "@/github/threads.js";
 
 /** The finding fields reconciliation needs (validated finding + its attached fingerprint). */
@@ -75,15 +78,29 @@ function matchesNearby(f: ReconcileFinding, t: PriorThread): boolean {
   return category !== null && category === (f.category ?? "").trim().toLowerCase();
 }
 
+/** A thread the author has SETTLED: resolved on GitHub, or dismissed in a reply
+ *  (see review/dismissal.ts). Either way the finding is not the bot's to re-raise. */
+function isSettled(t: PriorThread): boolean {
+  return t.isResolved || t.dismissal !== undefined;
+}
+
 /**
- * Does a RESOLVED thread cover this finding? Strict {@link matches} widened by
+ * Does a SETTLED thread cover this finding? Strict {@link matches} widened by
  * {@link matchesNearby}. Blockers are exempt from the loose prongs: suppression
  * HIDES the finding (verdict, comment, inline), so only an exact match may
  * suppress a blocker — loosening can never hide a real showstopper.
+ *
+ * An `"exhausted"` thread is stricter still: it is the BOT surrendering an
+ * argument, not a human ruling on the finding, so it never silences a blocker at
+ * ANY match strength — the same rule {@link import("./gate.js").applyRoundCap}
+ * applies to the MAX_ROUNDS cap. A human decision (a GitHub resolution or an
+ * authorized `dismiss`) does silence one, on an exact match.
  */
-function matchesResolved(f: ReconcileFinding, t: PriorThread): boolean {
+function matchesSettled(f: ReconcileFinding, t: PriorThread): boolean {
+  const blocker = f.severity === "blocker";
+  if (blocker && t.dismissal === "exhausted") return false;
   if (matches(f, t)) return true;
-  if (f.severity === "blocker") return false;
+  if (blocker) return false;
   return matchesNearby(f, t);
 }
 
@@ -105,23 +122,24 @@ function authorHasLastWord(thread: PriorThread): boolean {
 }
 
 /**
- * Split this run's findings on whether a RESOLVED prior thread covers them. A human
- * resolving the bot's thread is a decision — the finding must vanish everywhere
- * (verdict count, verdict comment, inline posting), not just from re-posting.
- * Matching is {@link matchesResolved} — reconcile()'s strict rules widened with a
- * line radius and an outdated-thread category prong, because a re-raised finding
- * is usually reworded (new fp) and line-drifted while the resolved thread itself
- * has gone outdated (line null). Blockers only ever match strictly.
+ * Split this run's findings on whether a SETTLED prior thread covers them — one the
+ * author resolved on GitHub, or dismissed in a reply (review/dismissal.ts). Either is
+ * a decision, so the finding must vanish everywhere (verdict count, verdict comment,
+ * inline posting), not just from re-posting. Matching is {@link matchesSettled} —
+ * reconcile()'s strict rules widened with a line radius and an outdated-thread
+ * category prong, because a re-raised finding is usually reworded (new fp) and
+ * line-drifted while the settled thread itself has gone outdated (line null).
+ * Blockers only ever match strictly, and never at all on an `"exhausted"` thread.
  */
-export function dropResolved<F extends ReconcileFinding>(
+export function dropSettled<F extends ReconcileFinding>(
   findings: F[],
   priorThreads: PriorThread[],
 ): { kept: F[]; suppressed: F[] } {
-  const resolved = priorThreads.filter((t) => t.isResolved);
+  const settled = priorThreads.filter(isSettled);
   const kept: F[] = [];
   const suppressed: F[] = [];
   for (const f of findings) {
-    (resolved.some((t) => matchesResolved(f, t)) ? suppressed : kept).push(f);
+    (settled.some((t) => matchesSettled(f, t)) ? suppressed : kept).push(f);
   }
   return { kept, suppressed };
 }

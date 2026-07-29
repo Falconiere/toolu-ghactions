@@ -12,7 +12,7 @@ import { postInlineReview } from "@/github/review.js";
 import { setVerdictLabel } from "@/github/label.js";
 import { resolveThread, replyToThread } from "@/github/threads.js";
 import type { PriorThread } from "@/github/threads.js";
-import { dropResolved, reconcile } from "@/review/reconcile.js";
+import { dropSettled, reconcile } from "@/review/reconcile.js";
 import { dropOutOfScope } from "@/review/incremental.js";
 import type { IncrementalScope } from "@/review/incremental.js";
 import { applyRoundCap } from "@/review/gate.js";
@@ -72,9 +72,10 @@ interface SettledVerdict {
 /**
  * Settle the verdict deterministically: drop out-of-scope findings (incremental
  * review — new findings only from lines changed since the last reviewed sha),
- * respect human-resolved threads (a suppressed finding is dropped everywhere —
- * count, comment, inline posting), flip a now-findingless "changes" to
- * "approved", then apply the (optional) MAX_ROUNDS surrender cap.
+ * respect settled threads — resolved on GitHub or dismissed in a reply (a
+ * suppressed finding is dropped everywhere: count, comment, inline posting) —
+ * flip a now-findingless "changes" to "approved", then apply the (optional)
+ * MAX_ROUNDS surrender cap.
  */
 function settleVerdict(input: PublishInput): SettledVerdict {
   const scoped = dropOutOfScope(
@@ -88,19 +89,21 @@ function settleVerdict(input: PublishInput): SettledVerdict {
       `  Dropped ${scoped.dropped.length} finding(s) about code unchanged since the last review\n`,
     );
   }
-  const { kept: findings, suppressed } = dropResolved(scoped.kept, input.priorThreads);
+  const { kept: findings, suppressed } = dropSettled(scoped.kept, input.priorThreads);
   if (suppressed.length > 0) {
     process.stdout.write(
-      `  Suppressed ${suppressed.length} finding(s) already resolved on existing threads\n`,
+      `  Suppressed ${suppressed.length} finding(s) already settled on existing threads ` +
+        `(resolved or dismissed by the author)\n`,
     );
   }
   const validated: ProviderResult = { ...input.result, findings };
   let verdict = resolveVerdict(validated.verdict, findings.length);
   const removed = suppressed.length + scoped.dropped.length;
   if (verdict === "changes" && findings.length === 0 && removed > 0) {
-    // Every concrete finding was either human-resolved on its thread or out of
-    // the incremental scope; keeping the model's request-changes would re-block
-    // on code that was already reviewed or decisions a human already made.
+    // Every concrete finding was either settled on its thread (resolved or
+    // dismissed by the author) or out of the incremental scope; keeping the
+    // model's request-changes would re-block on code that was already reviewed
+    // or decisions a human already made.
     verdict = "approved";
     validated.verdict = "approved";
   }
@@ -230,16 +233,31 @@ async function postInline(input: PublishInput, findings: StampedFinding[]): Prom
   }
 
   // 3. Findings the bot dropped this run → resolve the thread (accepted / no longer
-  // applies). Leave a one-line note first unless the hunk is already outdated.
+  // applies / settled by the author). Leave a one-line note saying WHICH, unless the
+  // hunk is already outdated.
   for (const thread of plan.toResolve) {
     if (!thread.isOutdated) {
-      await replyToThread(
-        octokit,
-        target,
-        thread.rootCommentId,
-        "Re-reviewed — this no longer applies (addressed, or point taken). Resolving.",
-      );
+      await replyToThread(octokit, target, thread.rootCommentId, resolveNote(thread));
     }
     await resolveThread(octokit, thread.threadId);
+  }
+}
+
+/**
+ * The closing note for a thread being resolved. A thread the author settled says so
+ * — reusing the "no longer applies" line there would misreport a standing
+ * disagreement (or an explicit dismissal) as the bot agreeing the issue is gone.
+ */
+function resolveNote(thread: PriorThread): string {
+  switch (thread.dismissal) {
+    case "explicit":
+      return "Dismissed by the author — not raising this again. Resolving.";
+    case "exhausted":
+      return (
+        "Re-reviewed and we still read this differently. The point stands as stated " +
+        "above; deferring to the author rather than repeating it. Resolving."
+      );
+    default:
+      return "Re-reviewed — this no longer applies (addressed, or point taken). Resolving.";
   }
 }
