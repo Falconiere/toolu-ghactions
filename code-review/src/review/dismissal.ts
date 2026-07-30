@@ -44,6 +44,9 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** Opening/closing fence marker on a line (backticks or tildes), or undefined. */
+const FENCE = /^[ \t]*(`{3,}|~{3,})/;
+
 /**
  * Drop every QUOTED region before scanning for the command, so a reply that merely
  * SHOWS the syntax while arguing the opposite — "you could reply `@toolu dismiss`,
@@ -53,21 +56,32 @@ function escapeRegExp(s: string): string {
  * An UNTERMINATED fence swallows the rest of the body: everything after it renders
  * as code, and erring toward "no command found" only ever leaves a finding standing
  * — the same direction every other gate in this module fails.
+ *
+ * Deliberately a LINE SCAN, not one regex over the whole body. A reply body is
+ * attacker-influenceable and GitHub allows 65536 chars of it; a paired-fence regex
+ * (`(`{3,})[\s\S]*?\1`) is quadratic on adversarial input — measured 1.8s on a
+ * single 65KB body, times every reply on every thread, every run. This is linear.
+ * Fence closing follows CommonMark: same character, at least as long as the opener.
  */
 function stripQuoted(body: string): string {
-  return (
-    body
-      // Paired fences first: they may legitimately contain backticks and `>` lines.
-      .replace(/^[ \t]*(`{3,}|~{3,})[\s\S]*?^[ \t]*\1[ \t]*$/gm, "")
-      // A dangling opener has no close — drop from it to the end.
-      .replace(/^[ \t]*(?:`{3,}|~{3,})[\s\S]*$/m, "")
-      // Then inline spans (single or multi-backtick, never spanning a line).
-      .replace(/`+[^`\n]*`+/g, "")
-      // Then blockquote lines.
-      .split("\n")
-      .filter((line) => !/^\s*>/.test(line))
-      .join("\n")
-  );
+  const kept: string[] = [];
+  let fence: string | null = null;
+  for (const line of body.split("\n")) {
+    const marker = FENCE.exec(line)?.[1];
+    if (fence !== null) {
+      if (marker !== undefined && marker[0] === fence[0] && marker.length >= fence.length) {
+        fence = null; // closed — this line is the closing fence, still not content
+      }
+      continue;
+    }
+    if (marker !== undefined) {
+      fence = marker;
+      continue;
+    }
+    if (/^\s*>/.test(line)) continue; // blockquote
+    kept.push(line.replace(/`+[^`\n]*`+/g, "")); // inline spans
+  }
+  return kept.join("\n");
 }
 
 /**

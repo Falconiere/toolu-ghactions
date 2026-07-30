@@ -76,6 +76,23 @@ describe("explicitDismissReply", () => {
     expect(explicitDismissReply(t, "@toolu")).toBeNull();
   });
 
+  it("ignores the command in a tilde fence, an info-string fence, or a longer-closer fence", () => {
+    const quoted = [
+      "~~~\n@toolu dismiss\n~~~\n\nNot doing it.",
+      "```js\n@toolu dismiss\n```\n\nNot doing it.",
+      "````\n@toolu dismiss\n`````\n\nNot doing it.", // CommonMark: closer may be longer
+      "~~~\n```\n@toolu dismiss\n~~~\n\nNot doing it.", // backtick line cannot close a tilde fence
+    ];
+    for (const body of quoted) {
+      expect(explicitDismissReply(thread({ replies: [says(body)] }), "@toolu")).toBeNull();
+    }
+  });
+
+  it("fires on a real command AFTER a closed fence (the fence must not swallow the rest)", () => {
+    const t = thread({ replies: [says("```\nsome code\n```\n\n@toolu dismiss — by design.")] });
+    expect(explicitDismissReply(t, "@toolu")?.body).toContain("by design");
+  });
+
   it("still fires on a real command in the same reply as a quoted one", () => {
     const t = thread({
       replies: [says("The syntax is `@toolu dismiss` — and yes:\n\n@toolu dismiss, by design.")],
