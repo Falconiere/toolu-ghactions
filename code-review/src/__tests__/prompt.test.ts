@@ -388,7 +388,38 @@ describe("buildPrompt — prior review threads (accept-or-argue)", () => {
     expect(env.user).toContain("ARGUED OUT (you already made this case");
     // The escape hatch matches what reconcile.ts enforces: blockers only.
     expect(env.user).toContain("only if it is a true blocker");
+    // ARGUED OUT is the only re-raisable entry, so the author's reasoning rides along —
+    // the blocker judgment must not be made blind to the argument that ended it.
+    expect(env.user).toContain(`@human-dev: "still disagree"`);
     expect(env.user).not.toContain("## Prior review threads");
+  });
+
+  it("does NOT attach replies to resolved/explicit dismissals (no exception to inform)", () => {
+    const env = buildPrompt({
+      diff: sampleDiff(),
+      checklistPath: CHECKLIST_PATH,
+      priorThreads: [
+        {
+          path: "src/a.ts",
+          line: 1,
+          finding: "resolved concern",
+          replies: [{ author: "human-dev", body: "resolved rationale" }],
+          resolved: true,
+        },
+        {
+          path: "src/b.ts",
+          line: 2,
+          finding: "explicitly dismissed concern",
+          replies: [{ author: "human-dev", body: "explicit rationale" }],
+          resolved: false,
+          dismissal: "explicit",
+        },
+      ],
+    });
+    expect(env.user).toContain("resolved concern");
+    expect(env.user).toContain("explicitly dismissed concern");
+    expect(env.user).not.toContain("resolved rationale");
+    expect(env.user).not.toContain("explicit rationale");
   });
 
   it("sanitizes the dismissed finding text (injection cannot ride a resolved thread)", () => {

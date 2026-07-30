@@ -32695,7 +32695,12 @@ function renderPriorThreadsBlock(threads) {
   if (dismissed.length > 0) {
     const lines = dismissed.map((t) => {
       const loc = t.line != null ? `${t.path}:${t.line}` : t.path;
-      return `- At \`${loc}\` \u2014 ${settledReason(t)}: "${sanitizeInstruction(t.finding)}"`;
+      const head = `- At \`${loc}\` \u2014 ${settledReason(t)}: "${sanitizeInstruction(t.finding)}"`;
+      if (t.dismissal !== "exhausted") return head;
+      return [
+        head,
+        ...t.replies.map((r) => `  - @${r.author}: "${sanitizeInstruction(r.body)}"`)
+      ].join("\n");
     });
     out += `
 

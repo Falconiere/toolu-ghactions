@@ -144,7 +144,16 @@ function renderPriorThreadsBlock(threads: PriorThreadContext[]): string {
   if (dismissed.length > 0) {
     const lines = dismissed.map((t) => {
       const loc = t.line != null ? `${t.path}:${t.line}` : t.path;
-      return `- At \`${loc}\` — ${settledReason(t)}: "${sanitizeInstruction(t.finding)}"`;
+      const head = `- At \`${loc}\` — ${settledReason(t)}: "${sanitizeInstruction(t.finding)}"`;
+      // ARGUED OUT is the ONE entry that may still be re-raised (blockers only), so it
+      // is the one that needs the author's reasoning attached — judging whether this is
+      // a true blocker blind to the argument that ended it is exactly the wrong input.
+      // The other two reasons admit no exception, so their replies would be noise.
+      if (t.dismissal !== "exhausted") return head;
+      return [
+        head,
+        ...t.replies.map((r) => `  - @${r.author}: "${sanitizeInstruction(r.body)}"`),
+      ].join("\n");
     });
     out +=
       `\n\n## Dismissed findings (the author has settled these — do NOT re-raise)\n` +
