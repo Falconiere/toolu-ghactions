@@ -32018,8 +32018,26 @@ async function replyToThread(client, target, rootCommentId, body) {
 function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+var FENCE = /^[ \t]*(`{3,}|~{3,})/;
 function stripQuoted(body) {
-  return body.replace(/^[ \t]*(`{3,}|~{3,})[\s\S]*?^[ \t]*\1[ \t]*$/gm, "").replace(/^[ \t]*(?:`{3,}|~{3,})[\s\S]*$/m, "").replace(/`+[^`\n]*`+/g, "").split("\n").filter((line) => !/^\s*>/.test(line)).join("\n");
+  const kept = [];
+  let fence = null;
+  for (const line of body.split("\n")) {
+    const marker17 = FENCE.exec(line)?.[1];
+    if (fence !== null) {
+      if (marker17 !== void 0 && marker17[0] === fence[0] && marker17.length >= fence.length) {
+        fence = null;
+      }
+      continue;
+    }
+    if (marker17 !== void 0) {
+      fence = marker17;
+      continue;
+    }
+    if (/^\s*>/.test(line)) continue;
+    kept.push(line.replace(/`+[^`\n]*`+/g, ""));
+  }
+  return kept.join("\n");
 }
 function explicitDismissReply(thread, triggerPhrase) {
   const phrase = triggerPhrase.trim();
