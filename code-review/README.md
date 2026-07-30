@@ -508,7 +508,7 @@ more channels close that:
   syntax while arguing the opposite never fires it.
 - 🤝 **argued out** — if the bot already answered your reply and you hold your position,
   the disagreement is settled automatically: the finding is suppressed and the thread
-  closed with a standing-disagreement note rather than the same rebuttal a fourth time.
+  closed with a standing-disagreement note rather than a repeat of the same rebuttal.
   You always get the bot's one rebuttal first — your *first* reply is not a dismissal.
   This is the reviewer conceding an argument, not a ruling on the finding, so it never
   silences a `blocker` (the same rule [`MAX_ROUNDS`](#convergence-settled-threads--the-round-cap)
