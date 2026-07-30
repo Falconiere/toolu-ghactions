@@ -5,8 +5,9 @@
 // findings forever or resolve-then-reinvents open ones — the non-convergence
 // these prongs exist to stop. Split from reconcile.test.ts (file-size budget).
 import { describe, expect, it } from "vitest";
+import { ACCEPTED_RESOLUTION_NOTE } from "@/github/threads.js";
 import { dropSettled, reconcile } from "@/review/reconcile.js";
-import { authorReply, finding, thread } from "@/review/__tests__/reconcile-helpers.js";
+import { BOT, authorReply, finding, thread } from "@/review/__tests__/reconcile-helpers.js";
 
 describe("dropSettled loose matching (settled-thread convergence)", () => {
   it("suppresses a reworded finding within the line radius of a resolved thread", () => {
@@ -141,6 +142,22 @@ describe("reconcile loose matching (open-thread convergence)", () => {
     const plan = reconcile([f], [t]);
     expect(plan.toCreate).toEqual([]);
     expect(plan.toReply).toHaveLength(1);
+  });
+
+  it("a nearby-matched blocker on a noted thread is left alone, not swept into the retried resolve", () => {
+    // The thread's last reply is the bot's own accepted-resolution note (an earlier
+    // resolve mutation failed), but the blocker only NEARBY-matches it — same rule as
+    // matchesSettled: a blocker is silenced/closed only on an EXACT match, never a loose one.
+    const f = finding({ fp: "fp-reworded", line: 12, severity: "blocker" });
+    const t = thread({
+      fp: "fp-original",
+      line: 10,
+      replies: [{ author: BOT, body: ACCEPTED_RESOLUTION_NOTE }],
+    });
+    const plan = reconcile([f], [t]);
+    expect(plan.toResolve).toEqual([]);
+    expect(plan.toReply).toEqual([]);
+    expect(plan.toCreate).toEqual([]);
   });
 
   it("strict match wins over a nearby candidate when both exist", () => {

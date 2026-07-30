@@ -172,7 +172,11 @@ export function reconcile<F extends ReconcileFinding>(
     const matched = idx >= 0 ? findings[idx] : undefined;
     if (matched) covered.add(idx);
     if (thread.isResolved) continue; // respect an existing resolution: never re-act
-    if (hasAcceptedResolutionNote(thread)) {
+    // A blocker that only NEARBY-matches (not exact) stays live even on a noted thread —
+    // the same strict-match-only rule matchesSettled applies to blocker suppression, so a
+    // reworded blocker is never swept into a retried resolve alongside a stale note.
+    const blockerStillOpen = matched?.severity === "blocker" && !matches(matched, thread);
+    if (hasAcceptedResolutionNote(thread) && !blockerStillOpen) {
       // The acknowledgement landed on an earlier run but resolveReviewThread did
       // not. Retry the mutation even if the model has re-raised the same finding.
       toResolve.push(thread);
