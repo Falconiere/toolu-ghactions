@@ -40351,7 +40351,8 @@ function reconcile(findings, priorThreads) {
     const matched = idx >= 0 ? findings[idx] : void 0;
     if (matched) covered.add(idx);
     if (thread.isResolved) continue;
-    if (hasAcceptedResolutionNote(thread)) {
+    const blockerStillOpen = matched?.severity === "blocker" && !matches(matched, thread);
+    if (hasAcceptedResolutionNote(thread) && !blockerStillOpen) {
       toResolve.push(thread);
       continue;
     }
