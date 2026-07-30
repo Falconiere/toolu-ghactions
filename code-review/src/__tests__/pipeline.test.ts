@@ -788,6 +788,40 @@ describe("runReview — thread-aware inline reconciliation", () => {
     expect(bodies).toContain("no longer applies");
   });
 
+  it("retries an unresolved accepted thread without duplicating its closing note", async () => {
+    const { dir, headSha } = track(featureRepoWithChange());
+    const f0 = fixtureFinding("findings", 0);
+    const seed: SeedThread = {
+      threadId: "T_accept_retry",
+      rootCommentId: 8004,
+      fp: fingerprint(f0),
+      path: f0.path,
+      line: 2,
+      replies: [
+        {
+          author: "toolu-bot",
+          body: "Re-reviewed — this no longer applies (addressed, or point taken). Resolving.",
+        },
+      ],
+    };
+    const { octokit, rec } = fakeOctokit([], [seed]);
+
+    const result = await runReview({
+      inputs: baseInputs(),
+      octokit,
+      context: prContext(headSha),
+      fetch: replayFetch("findings"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    expect(result.findingsCount).toBe(0);
+    expect(result.verdict).toBe("approved");
+    expect(rec.resolved).toEqual(["T_accept_retry"]);
+    expect(rec.replies).toEqual([]);
+    expect(rec.reviews).toEqual([]);
+  });
+
   it("a RESOLVED thread reaches the model prompt as a DISMISSED finding (do-not-reword)", async () => {
     const { dir, headSha } = track(featureRepoWithChange());
     const f0 = fixtureFinding("findings", 0);

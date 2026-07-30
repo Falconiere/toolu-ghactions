@@ -10,7 +10,12 @@ import type { ReviewState } from "@/state.js";
 import { upsertComment } from "@/github/comment.js";
 import { postInlineReview } from "@/github/review.js";
 import { setVerdictLabel } from "@/github/label.js";
-import { resolveThread, replyToThread } from "@/github/threads.js";
+import {
+  ACCEPTED_RESOLUTION_NOTE,
+  hasAcceptedResolutionNote,
+  resolveThread,
+  replyToThread,
+} from "@/github/threads.js";
 import type { PriorThread } from "@/github/threads.js";
 import { dropSettled, reconcile } from "@/review/reconcile.js";
 import { dropOutOfScope } from "@/review/incremental.js";
@@ -93,7 +98,7 @@ function settleVerdict(input: PublishInput): SettledVerdict {
   if (suppressed.length > 0) {
     process.stdout.write(
       `  Suppressed ${suppressed.length} finding(s) already settled on existing threads ` +
-        `(resolved or dismissed by the author)\n`,
+        `(resolved, accepted, or dismissed by the author)\n`,
     );
   }
   const validated: ProviderResult = { ...input.result, findings };
@@ -236,7 +241,7 @@ async function postInline(input: PublishInput, findings: StampedFinding[]): Prom
   // applies / settled by the author). Leave a one-line note saying WHICH, unless the
   // hunk is already outdated.
   for (const thread of plan.toResolve) {
-    if (!thread.isOutdated) {
+    if (!thread.isOutdated && !hasAcceptedResolutionNote(thread)) {
       await replyToThread(octokit, target, thread.rootCommentId, resolveNote(thread));
     }
     await resolveThread(octokit, thread.threadId);
@@ -258,6 +263,6 @@ function resolveNote(thread: PriorThread): string {
         "above; deferring to the author rather than repeating it. Resolving."
       );
     default:
-      return "Re-reviewed — this no longer applies (addressed, or point taken). Resolving.";
+      return ACCEPTED_RESOLUTION_NOTE;
   }
 }

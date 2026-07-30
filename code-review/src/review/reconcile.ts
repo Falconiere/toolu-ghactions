@@ -11,10 +11,12 @@
 // A finding maps to a thread by fingerprint (stable across line drift) OR by exact
 // path+line (catches a reworded argument posted at the same spot). A finding that maps to
 // ANY prior thread — even a settled one — is never re-posted, so a settled thread is
-// respected rather than reopened. "Settled" is a GitHub resolution OR an author-side
-// dismissal detected in the replies (see review/dismissal.ts); {@link dropSettled}
-// removes those findings BEFORE this plan is built, so a settled thread normally has
-// nothing left matching it and lands in toResolve.
+// respected rather than reopened. "Settled" is a GitHub resolution, an author-side
+// dismissal detected in the replies (see review/dismissal.ts), OR the bot's durable
+// acceptance note left behind when an earlier resolve mutation failed. {@link
+// dropSettled} removes those findings BEFORE this plan is built, so a settled thread
+// normally has nothing left matching it and lands in toResolve.
+import { hasAcceptedResolutionNote } from "@/github/threads.js";
 import type { PriorThread } from "@/github/threads.js";
 
 /** The finding fields reconciliation needs (validated finding + its attached fingerprint). */
@@ -78,10 +80,11 @@ function matchesNearby(f: ReconcileFinding, t: PriorThread): boolean {
   return category !== null && category === (f.category ?? "").trim().toLowerCase();
 }
 
-/** A thread the author has SETTLED: resolved on GitHub, or dismissed in a reply
- *  (see review/dismissal.ts). Either way the finding is not the bot's to re-raise. */
+/** A settled thread: resolved on GitHub, dismissed by the author, or carrying
+ *  the bot's accepted-resolution note after an earlier resolve mutation failed.
+ *  In every case the finding is not the bot's to re-raise. */
 function isSettled(t: PriorThread): boolean {
-  return t.isResolved || t.dismissal !== undefined;
+  return t.isResolved || t.dismissal !== undefined || hasAcceptedResolutionNote(t);
 }
 
 /**
@@ -122,10 +125,11 @@ function authorHasLastWord(thread: PriorThread): boolean {
 }
 
 /**
- * Split this run's findings on whether a SETTLED prior thread covers them — one the
- * author resolved on GitHub, or dismissed in a reply (review/dismissal.ts). Either is
- * a decision, so the finding must vanish everywhere (verdict count, verdict comment,
- * inline posting), not just from re-posting. Matching is {@link matchesSettled} —
+ * Split this run's findings on whether a SETTLED prior thread covers them — one
+ * resolved on GitHub, dismissed in a reply (review/dismissal.ts), or carrying the
+ * bot's accepted-resolution note after a failed mutation. Each is a decision, so
+ * the finding must vanish everywhere (verdict count, verdict comment, inline
+ * posting), not just from re-posting. Matching is {@link matchesSettled} —
  * reconcile()'s strict rules widened with a line radius and an outdated-thread
  * category prong, because a re-raised finding is usually reworded (new fp) and
  * line-drifted while the settled thread itself has gone outdated (line null).
@@ -168,6 +172,12 @@ export function reconcile<F extends ReconcileFinding>(
     const matched = idx >= 0 ? findings[idx] : undefined;
     if (matched) covered.add(idx);
     if (thread.isResolved) continue; // respect an existing resolution: never re-act
+    if (hasAcceptedResolutionNote(thread)) {
+      // The acknowledgement landed on an earlier run but resolveReviewThread did
+      // not. Retry the mutation even if the model has re-raised the same finding.
+      toResolve.push(thread);
+      continue;
+    }
     if (!matched) {
       toResolve.push(thread); // finding dropped this run → close the thread (accepted)
       continue;

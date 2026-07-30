@@ -3,8 +3,15 @@
 // cleanup, and resolved-thread suppression on exact matches. The loose prongs
 // (line radius, detached-thread category) live in reconcile-loose.test.ts.
 import { describe, expect, it } from "vitest";
+import { ACCEPTED_RESOLUTION_NOTE } from "@/github/threads.js";
 import { dropSettled, reconcile } from "@/review/reconcile.js";
-import { authorReply, botReply, finding, thread } from "@/review/__tests__/reconcile-helpers.js";
+import {
+  BOT,
+  authorReply,
+  botReply,
+  finding,
+  thread,
+} from "@/review/__tests__/reconcile-helpers.js";
 
 describe("reconcile", () => {
   it("posts a brand-new finding (no matching prior thread) via toCreate", () => {
@@ -45,6 +52,18 @@ describe("reconcile", () => {
     const plan = reconcile([], [t]);
     expect(plan.toResolve).toEqual([t]);
     expect(plan.toReply).toEqual([]);
+  });
+
+  it("retries resolution when the accepted note landed but the mutation failed", () => {
+    const f = finding({ fp: "fp-accepted" });
+    const t = thread({
+      fp: "fp-accepted",
+      replies: [{ author: BOT, body: ACCEPTED_RESOLUTION_NOTE }],
+    });
+    const plan = reconcile([f], [t]);
+    expect(plan.toResolve).toEqual([t]);
+    expect(plan.toReply).toEqual([]);
+    expect(plan.toCreate).toEqual([]);
   });
 
   it("replies in place when a persisting finding's thread has the author's last word", () => {
@@ -170,6 +189,28 @@ describe("dropSettled", () => {
   it("keeps a finding whose matching thread is NOT resolved", () => {
     const f = finding({ fp: "fp-open" });
     const t = thread({ fp: "fp-open", isResolved: false });
+    const { kept, suppressed } = dropSettled([f], [t]);
+    expect(kept).toEqual([f]);
+    expect(suppressed).toEqual([]);
+  });
+
+  it("suppresses a finding after the accepted note lands on an unresolved thread", () => {
+    const f = finding({ fp: "fp-accepted" });
+    const t = thread({
+      fp: "fp-accepted",
+      replies: [{ author: BOT, body: ACCEPTED_RESOLUTION_NOTE }],
+    });
+    const { kept, suppressed } = dropSettled([f], [t]);
+    expect(kept).toEqual([]);
+    expect(suppressed).toEqual([f]);
+  });
+
+  it("does not trust the accepted note when a non-bot commenter copies it", () => {
+    const f = finding({ fp: "fp-open" });
+    const t = thread({
+      fp: "fp-open",
+      replies: [{ author: "human-dev", body: ACCEPTED_RESOLUTION_NOTE }],
+    });
     const { kept, suppressed } = dropSettled([f], [t]);
     expect(kept).toEqual([f]);
     expect(suppressed).toEqual([]);
