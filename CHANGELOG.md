@@ -1,5 +1,13 @@
 # Changelog
 
+## [6.5.2](https://github.com/Falconiere/toolu-ghactions/compare/v6.5.1...v6.5.2) (2026-07-30)
+
+
+### Bug Fixes
+
+* **code-review:** keep a nearby-matched blocker off the retried resolve ([bd7dcc4](https://github.com/Falconiere/toolu-ghactions/commit/bd7dcc494883d0acfe36566a6e721a6b31cce446))
+* **code-review:** retry the resolve mutation when only the accepted-note reply landed ([888ccd5](https://github.com/Falconiere/toolu-ghactions/commit/888ccd5b8c6975351ebf3b0143000edad3de65eb))
+
 ## [6.5.1](https://github.com/Falconiere/toolu-ghactions/compare/v6.5.0...v6.5.1) (2026-07-30)
 
 
