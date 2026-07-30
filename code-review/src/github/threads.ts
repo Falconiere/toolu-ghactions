@@ -52,6 +52,27 @@ export interface ThreadComment {
   body: string;
 }
 
+/**
+ * The bot's durable acknowledgement that a finding no longer applies. Publishing
+ * the reply and resolving its thread are separate best-effort API calls, so the
+ * reply can land while the mutation fails. On a later run this exact bot-authored
+ * note is treated as a pending resolution and the mutation is retried.
+ */
+export const ACCEPTED_RESOLUTION_NOTE =
+  "Re-reviewed — this no longer applies (addressed, or point taken). Resolving.";
+
+/**
+ * True only for the action's exact acknowledgement posted by the same identity
+ * that opened the thread. Requiring both author equality and exact body equality
+ * prevents another commenter from settling a finding by copying the sentence.
+ */
+export function hasAcceptedResolutionNote(thread: PriorThread): boolean {
+  if (thread.botLogin === "") return false;
+  return thread.replies.some(
+    (reply) => reply.author === thread.botLogin && reply.body.trim() === ACCEPTED_RESOLUTION_NOTE,
+  );
+}
+
 /** Repo + PR coordinates a thread operation targets. */
 export interface ThreadTarget {
   owner: string;

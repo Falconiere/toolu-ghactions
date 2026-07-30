@@ -31890,6 +31890,13 @@ function extractFpMarker(body) {
 }
 
 // src/github/threads.ts
+var ACCEPTED_RESOLUTION_NOTE = "Re-reviewed \u2014 this no longer applies (addressed, or point taken). Resolving.";
+function hasAcceptedResolutionNote(thread) {
+  if (thread.botLogin === "") return false;
+  return thread.replies.some(
+    (reply) => reply.author === thread.botLogin && reply.body.trim() === ACCEPTED_RESOLUTION_NOTE
+  );
+}
 var GqlThreadSchema = external_exports.object({
   id: external_exports.string(),
   isResolved: external_exports.boolean(),
@@ -40306,7 +40313,7 @@ function matchesNearby(f, t) {
   return category !== null && category === (f.category ?? "").trim().toLowerCase();
 }
 function isSettled(t) {
-  return t.isResolved || t.dismissal !== void 0;
+  return t.isResolved || t.dismissal !== void 0 || hasAcceptedResolutionNote(t);
 }
 function matchesSettled(f, t) {
   const blocker = f.severity === "blocker";
@@ -40344,6 +40351,10 @@ function reconcile(findings, priorThreads) {
     const matched = idx >= 0 ? findings[idx] : void 0;
     if (matched) covered.add(idx);
     if (thread.isResolved) continue;
+    if (hasAcceptedResolutionNote(thread)) {
+      toResolve.push(thread);
+      continue;
+    }
     if (!matched) {
       toResolve.push(thread);
       continue;
@@ -40396,7 +40407,7 @@ function settleVerdict(input) {
   const { kept: findings, suppressed } = dropSettled(scoped.kept, input.priorThreads);
   if (suppressed.length > 0) {
     process.stdout.write(
-      `  Suppressed ${suppressed.length} finding(s) already settled on existing threads (resolved or dismissed by the author)
+      `  Suppressed ${suppressed.length} finding(s) already settled on existing threads (resolved, accepted, or dismissed by the author)
 `
     );
   }
@@ -40495,7 +40506,7 @@ async function postInline(input, findings) {
     );
   }
   for (const thread of plan.toResolve) {
-    if (!thread.isOutdated) {
+    if (!thread.isOutdated && !hasAcceptedResolutionNote(thread)) {
       await replyToThread(octokit, target, thread.rootCommentId, resolveNote(thread));
     }
     await resolveThread(octokit, thread.threadId);
@@ -40508,7 +40519,7 @@ function resolveNote(thread) {
     case "exhausted":
       return "Re-reviewed and we still read this differently. The point stands as stated above; deferring to the author rather than repeating it. Resolving.";
     default:
-      return "Re-reviewed \u2014 this no longer applies (addressed, or point taken). Resolving.";
+      return ACCEPTED_RESOLUTION_NOTE;
   }
 }
 

@@ -524,7 +524,11 @@ Threads are matched to findings by the same line-independent fingerprint used by
 [Review memory](#review-memory), carried in a hidden marker on each inline comment.
 Only the bot's own threads are touched — human review threads are never modified.
 Thread reads/writes are best-effort: a GitHub API hiccup degrades to the previous
-"post fresh" behavior and never fails the job.
+"post fresh" behavior and never fails the job. If the bot's
+`Re-reviewed — this no longer applies (addressed, or point taken). Resolving.`
+reply lands but GitHub's separate resolve mutation fails, that exact bot-authored
+note acts as a durable marker: the next run suppresses the finding and retries the
+resolution without posting the note again.
 
 ## Inputs
 
