@@ -1,5 +1,15 @@
 # Changelog
 
+## [6.5.1](https://github.com/Falconiere/toolu-ghactions/compare/v6.5.0...v6.5.1) (2026-07-30)
+
+
+### Bug Fixes
+
+* **code-review:** harden dismissal detection — address round-1 review ([1501ad7](https://github.com/Falconiere/toolu-ghactions/commit/1501ad78db3e133c44e9e4474c221ebdd7390a75))
+* **code-review:** make quoted-region stripping linear, not quadratic ([c089c15](https://github.com/Falconiere/toolu-ghactions/commit/c089c15d0a03cfafc065b620aa5df1b189df15b5))
+* **code-review:** show the author's reasoning on ARGUED OUT prompt entries ([956a3f8](https://github.com/Falconiere/toolu-ghactions/commit/956a3f8d684237da487cbc6da9de31784ba1b854))
+* **code-review:** stop re-raising findings the author refused in a reply ([f0cd99d](https://github.com/Falconiere/toolu-ghactions/commit/f0cd99d3baf8fc5fc790709950434a709cf55e0b))
+
 ## [6.5.0](https://github.com/Falconiere/toolu-ghactions/compare/v6.4.0...v6.5.0) (2026-07-17)
 
 
