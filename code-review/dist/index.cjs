@@ -31199,8 +31199,9 @@ function isSupportedProvider(s) {
 var DEFAULT_MODEL = {
   // OpenRouter id (slash namespace): 1M context, 384k output, structured-output capable.
   openrouter: "deepseek/deepseek-v4-pro",
-  // Native DeepSeek id (no namespace): deepseek-v4-flash is non-thinking, fast, cheap,
-  // 1M context. deepseek-chat/deepseek-reasoner are deprecated (2026-07-24) — don't use.
+  // Native DeepSeek id (no namespace): fast, cheap, 1M context. NOT non-thinking by
+  // default — see DEEPSEEK_PROVIDER_OPTIONS. deepseek-chat/deepseek-reasoner are
+  // deprecated (2026-07-24) — don't use.
   deepseek: "deepseek-v4-flash"
 };
 function defaultModelFor(provider) {
@@ -31213,6 +31214,12 @@ var OPENROUTER_EXTRA_BODY = {
   // Require the upstream provider to honor the structured-output parameters.
   provider: { require_parameters: true }
 };
+var DEEPSEEK_PROVIDER_OPTIONS = {
+  deepseek: { thinking: { type: "disabled" } }
+};
+function providerOptionsFor(provider) {
+  return provider === "deepseek" ? DEEPSEEK_PROVIDER_OPTIONS : void 0;
+}
 function resolveModel(opts) {
   const { provider, model, apiKey } = opts;
   const fetchOpt = opts.fetch ? { fetch: opts.fetch } : {};
@@ -39251,21 +39258,99 @@ var Verdict = external_exports.object({
 });
 var PartialVerdict = external_exports.object({
   review_plan: external_exports.string().optional(),
-  verdict: external_exports.enum(["approved", "changes"]).optional(),
-  findings: external_exports.array(external_exports.unknown()).optional()
+  verdict: external_exports.unknown().optional(),
+  findings: external_exports.array(external_exports.unknown()).optional(),
+  other_checks: external_exports.string().optional(),
+  top_must_fix: external_exports.array(external_exports.unknown()).optional()
 });
+var VERDICT_ALIASES = {
+  approved: "approved",
+  approve: "approved",
+  approval: "approved",
+  accept: "approved",
+  accepted: "approved",
+  lgtm: "approved",
+  pass: "approved",
+  changes: "changes",
+  change: "changes",
+  requestchanges: "changes",
+  changesrequested: "changes",
+  requestedchanges: "changes",
+  reject: "changes",
+  rejected: "changes",
+  block: "changes",
+  blocked: "changes"
+};
+var SEVERITY_ALIASES = {
+  blocker: "blocker",
+  blocking: "blocker",
+  critical: "blocker",
+  fatal: "blocker",
+  high: "high",
+  major: "high",
+  error: "high",
+  medium: "medium",
+  moderate: "medium",
+  warning: "medium",
+  warn: "medium",
+  low: "low",
+  minor: "low",
+  info: "low",
+  informational: "low",
+  nit: "nit",
+  nitpick: "nit",
+  style: "nit"
+};
+function aliasKey(value) {
+  if (typeof value !== "string") return null;
+  const key = value.toLowerCase().replace(/[^a-z]/g, "");
+  return key === "" ? null : key;
+}
+function normalizeVerdict(value) {
+  const key = aliasKey(value);
+  return key === null ? null : VERDICT_ALIASES[key] ?? null;
+}
+function normalizeLine(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? Math.trunc(value) : null;
+  if (typeof value !== "string") return null;
+  const match = /^\s*(-?\d+)/.exec(value);
+  return match?.[1] === void 0 ? null : Number.parseInt(match[1], 10);
+}
+function normalizeFinding(raw) {
+  const asObject = external_exports.record(external_exports.unknown()).safeParse(raw);
+  if (!asObject.success) return raw;
+  const out = { ...asObject.data };
+  const line = normalizeLine(out["line"]);
+  if (line === null) delete out["line"];
+  else out["line"] = line;
+  const endLine = normalizeLine(out["end_line"]);
+  if (endLine === null) delete out["end_line"];
+  else out["end_line"] = endLine;
+  const severity = aliasKey(out["severity"]);
+  if (severity !== null && SEVERITY_ALIASES[severity] !== void 0) {
+    out["severity"] = SEVERITY_ALIASES[severity];
+  }
+  if (out["confidence"] !== "high" && out["confidence"] !== "medium") delete out["confidence"];
+  const source = out["source"];
+  if (source !== "llm" && source !== "gitleaks" && source !== "opengrep" && source !== "eslint") {
+    delete out["source"];
+  }
+  return out;
+}
 
 // src/llm/reviewWithModel.ts
 var REQUEST_TIMEOUT_MS = 18e4;
 var MAX_ATTEMPTS = 3;
 var MAX_TOKEN_CEILING = 32768;
 async function reviewWithModel(envelope, opts) {
+  const provider = opts.provider ?? "openrouter";
   const model = resolveModel({
-    provider: opts.provider ?? "openrouter",
+    provider,
     model: opts.model,
     apiKey: opts.apiKey,
     ...opts.fetch ? { fetch: opts.fetch } : {}
   });
+  const providerOptions = providerOptionsFor(provider);
   const perAttemptMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
   const maxAttempts = opts.maxAttempts ?? MAX_ATTEMPTS;
   let budget = envelope.max_tokens;
@@ -39287,7 +39372,8 @@ async function reviewWithModel(envelope, opts) {
         temperature: 0,
         maxTokens: budget,
         maxRetries: opts.maxRetries ?? 2,
-        abortSignal: controller.signal
+        abortSignal: controller.signal,
+        providerOptions
       });
       return {
         verdict: object2.verdict,
@@ -39303,14 +39389,12 @@ async function reviewWithModel(envelope, opts) {
         });
         continue;
       }
-      if (isLengthTruncation(err) && hasPartialOutput(err)) {
-        if (budget < MAX_TOKEN_CEILING && attempt < maxAttempts) {
-          budget = Math.min(budget * 2, MAX_TOKEN_CEILING);
-          continue;
-        }
-        const salvaged = salvageTruncated(err);
-        if (salvaged !== null) return salvaged;
+      if (isLengthTruncation(err) && hasPartialOutput(err) && budget < MAX_TOKEN_CEILING && attempt < maxAttempts) {
+        budget = Math.min(budget * 2, MAX_TOKEN_CEILING);
+        continue;
       }
+      const recovered = recover(err);
+      if (recovered !== null) return recovered;
       return abstain(err);
     } finally {
       clearTimeout(timeout);
@@ -39324,8 +39408,9 @@ function isLengthTruncation(err) {
 function hasPartialOutput(err) {
   return NoObjectGeneratedError.isInstance(err) && typeof err.text === "string" && err.text.trim() !== "";
 }
-function salvageTruncated(err) {
+function recover(err) {
   if (!NoObjectGeneratedError.isInstance(err) || typeof err.text !== "string") return null;
+  if (err.text.trim() === "") return null;
   let repaired;
   try {
     repaired = JSON.parse(jsonrepair(err.text));
@@ -39334,26 +39419,32 @@ function salvageTruncated(err) {
   }
   const loose = PartialVerdict.safeParse(repaired);
   if (!loose.success) return null;
+  const raw = loose.data.findings ?? [];
   const findings = [];
-  for (const f of loose.data.findings ?? []) {
-    const r = Finding.safeParse(f);
+  for (const f of raw) {
+    const r = Finding.safeParse(normalizeFinding(f));
     if (r.success) findings.push(r.data);
   }
-  if (findings.length === 0) return null;
-  return {
-    // Salvage only returns when findings survived, so the verdict is necessarily
-    // "changes" — never carry a truncated "approved" forward alongside findings.
-    verdict: "changes",
+  const dropped = raw.length - findings.length;
+  const verdict = findings.length > 0 ? "changes" : normalizeVerdict(loose.data.verdict);
+  if (verdict === null) return null;
+  if (findings.length === 0 && dropped > 0) return null;
+  const truncated = isLengthTruncation(err);
+  const result = {
+    verdict,
     findings,
-    // Match the main-path cap: PartialVerdict leaves review_plan unbounded, so truncate
-    // here too rather than carry an over-length plan that the strict path would reject.
+    // Match the main-path caps: PartialVerdict leaves these unbounded, so truncate here
+    // too rather than carry over-length text the strict path would have rejected.
     review_plan: (loose.data.review_plan ?? "").slice(0, 280),
-    other_checks: "",
-    top_must_fix: [],
-    partial: true,
-    finishReason: "length",
-    error: `output truncated at the token limit \u2014 recovered ${findings.length} finding(s) completed before the cut; later findings may be missing. Raise MAX_TOKENS to avoid.`
+    other_checks: (loose.data.other_checks ?? "").slice(0, 600),
+    top_must_fix: (loose.data.top_must_fix ?? []).filter((s) => typeof s === "string")
   };
+  if (truncated) result.finishReason = "length";
+  if (truncated || dropped > 0) {
+    result.partial = true;
+    result.error = truncated ? `output truncated at the token limit \u2014 recovered ${findings.length} finding(s) completed before the cut; later findings may be missing. Raise MAX_TOKENS to avoid.` : `${dropped} finding(s) did not match the required shape and were dropped; ${findings.length} recovered.`;
+  }
+  return result;
 }
 function abstain(err) {
   const result = {
