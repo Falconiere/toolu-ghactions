@@ -110,6 +110,29 @@ describe("reviewWithModel", () => {
     expect(result.error).toContain("truncated");
   });
 
+  it("abstains when truncation cut before the first finding, despite a readable verdict", async () => {
+    // deepseek-truncated-before-findings.json is a REAL recorded completion cut at
+    // exactly `"findings":[` — the verdict ("changes") had already been written, the
+    // findings had not. jsonrepair closes that to `findings: []`, which means UNKNOWN,
+    // not "clean": nothing was dropped, so the dropped-findings guard cannot catch it.
+    // Recovering here would post a blocking "changes requested" carrying zero findings,
+    // which the author cannot act on. A truncated pass must carry at least one recovered
+    // finding to be worth anything.
+    const result = await reviewWithModel(ENVELOPE, {
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      apiKey: "sk-test",
+      fetch: replayFetch(fixture("deepseek-truncated-before-findings")),
+      maxRetries: 0,
+      maxAttempts: 1,
+    });
+
+    expect(result.verdict).toBe("error");
+    expect(result.findings).toEqual([]);
+    expect(result.partial).toBeUndefined();
+    expect(result.finishReason).toBe("length");
+  });
+
   it("recovers a complete response whose values deviate from the strict schema", async () => {
     // Regression: https://github.com/Falconiere/comemory/pull/62 — "response did not
     // match schema. [finish_reason: stop]". The model answered fully and usefully but

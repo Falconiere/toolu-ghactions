@@ -39368,10 +39368,11 @@ function recover(err) {
     if (r.success) findings.push(r.data);
   }
   const dropped = raw.length - findings.length;
+  const truncated = isLengthTruncation(err);
+  if (truncated && findings.length === 0) return null;
   const verdict = findings.length > 0 ? "changes" : normalizeVerdict(loose.data.verdict);
   if (verdict === null) return null;
   if (findings.length === 0 && dropped > 0) return null;
-  const truncated = isLengthTruncation(err);
   const result = {
     verdict,
     findings,

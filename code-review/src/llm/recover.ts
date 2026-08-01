@@ -74,7 +74,15 @@ export function recover(err: unknown): ProviderResult | null {
     if (r.success) findings.push(r.data);
   }
   const dropped = raw.length - findings.length;
+  const truncated = isLengthTruncation(err);
 
+  // A truncated response's findings array is open-ended by construction: a cut landing
+  // before the first finding closes (or before any was written at all) jsonrepair-repairs
+  // to `[]`, which means "unknown", NOT "clean". So a truncated pass has to carry at
+  // least one recovered finding to be worth anything — otherwise all we salvaged is a
+  // verdict with nothing behind it, and a bare "changes requested" with zero findings is
+  // a blocking review the author cannot act on.
+  if (truncated && findings.length === 0) return null;
   // A pass that produced findings is a "changes" pass whatever the model labelled it —
   // never carry an "approved" forward alongside findings.
   const verdict = findings.length > 0 ? "changes" : normalizeVerdict(loose.data.verdict);
@@ -84,7 +92,6 @@ export function recover(err: unknown): ProviderResult | null {
   // review over defects it DID raise. Abstain instead.
   if (findings.length === 0 && dropped > 0) return null;
 
-  const truncated = isLengthTruncation(err);
   const result: ProviderResult = {
     verdict,
     findings,
