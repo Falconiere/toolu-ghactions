@@ -4,21 +4,26 @@
 // providers.ts; this file owns only the provider-agnostic review loop (timeout/abort,
 // retries, budget escalation, salvage, abstain). The export is reviewWithModel().
 //
-// REASONING-OFF / require_parameters: the OpenRouter-only request-body extras that
-// disable hidden reasoning and force schema honoring now live in providers.ts
-// (OPENROUTER_EXTRA_BODY). They are NOT sent on the native DeepSeek path, which rejects
-// them (deepseek-v4-flash is non-thinking by default). See request-shape.test.ts
-// (OpenRouter extras present) and deepseek.test.ts (native: extras absent) for the proof.
+// REASONING-OFF: every provider must have hidden reasoning DISABLED, because reasoning
+// tokens are billed against max_tokens — a thinking model spends the whole budget before
+// emitting a byte of JSON and returns finish_reason "length" with empty content. Each
+// backend spells it differently and both spellings live in providers.ts: OpenRouter's
+// `reasoning:{effort:"none"}` (plus require_parameters) is baked into the client via
+// OPENROUTER_EXTRA_BODY, while native DeepSeek's `thinking:{type:"disabled"}` rides on
+// the CALL via providerOptionsFor(). See request-shape.test.ts and deepseek.test.ts.
 //
-// ABSTAIN-ON-ERROR: generateObject throws on empty content, JSON parse failure,
-// schema-validation failure, or an API error (after retries). We CATCH every
-// throw and return a verdict:"error" ProviderResult — never throw to the caller,
-// never return a null verdict. A failed model call abstains; it does not block.
+// RECOVER-THEN-ABSTAIN: generateObject throws on empty content, JSON parse failure,
+// schema-validation failure, or an API error (after retries). We CATCH every throw.
+// recover() first tries to rescue a usable review from the raw output — a truncated
+// response's completed findings, or a complete response normalized back onto the schema.
+// Only when nothing trustworthy survives do we return a verdict:"error" ProviderResult.
+// Never throw to the caller, never return a null verdict: a failed model call abstains,
+// it does not block.
 import { generateObject, NoObjectGeneratedError } from "ai";
 import { jsonrepair } from "jsonrepair";
 import { errorMessage } from "@/errors.js";
-import { resolveModel, type ProviderId } from "./providers.js";
-import { Verdict, Finding, PartialVerdict } from "./schema.js";
+import { resolveModel, providerOptionsFor, type ProviderId } from "./providers.js";
+import { Verdict, Finding, PartialVerdict, normalizeFinding, normalizeVerdict } from "./schema.js";
 import type { Envelope } from "@/prompt.js";
 
 /**
@@ -107,12 +112,16 @@ export async function reviewWithModel(
   envelope: Envelope,
   opts: ReviewOptions,
 ): Promise<ProviderResult> {
+  const provider = opts.provider ?? "openrouter";
   const model = resolveModel({
-    provider: opts.provider ?? "openrouter",
+    provider,
     model: opts.model,
     apiKey: opts.apiKey,
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
+  // Per-CALL request-body extras (native DeepSeek's reasoning switch). OpenRouter's
+  // equivalent is baked into the client by resolveModel, so this is undefined there.
+  const providerOptions = providerOptionsFor(provider);
 
   const perAttemptMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
   const maxAttempts = opts.maxAttempts ?? MAX_ATTEMPTS;
@@ -147,6 +156,7 @@ export async function reviewWithModel(
         maxTokens: budget,
         maxRetries: opts.maxRetries ?? 2,
         abortSignal: controller.signal,
+        providerOptions,
       });
 
       return {
@@ -173,24 +183,29 @@ export async function reviewWithModel(
         continue;
       }
       // Length truncation (finish_reason "length") WITH partial output: the model hit
-      // the token limit mid-JSON, so the response is truncated but salvageable. Empty
-      // content + finish_reason "length" is instead the reasoning-budget bug this file
-      // exists to fix (the model burned the whole budget on hidden reasoning and emitted
-      // nothing) — a larger budget would only burn MORE reasoning tokens, so we neither
-      // escalate nor salvage that; we fall straight through to a fast abstain.
-      if (isLengthTruncation(err) && hasPartialOutput(err)) {
-        // Prefer a COMPLETE response: retry with a doubled output budget while there's
-        // room. Not an abort and not rate-limited, so no backoff. Capped at the ceiling.
-        if (budget < MAX_TOKEN_CEILING && attempt < maxAttempts) {
-          budget = Math.min(budget * 2, MAX_TOKEN_CEILING);
-          continue;
-        }
-        // No room left to grow the budget — salvage the findings completed before the
-        // cut so the chunk is a partial success, not a total loss.
-        const salvaged = salvageTruncated(err);
-        if (salvaged !== null) return salvaged;
+      // the token limit mid-JSON, so the response is truncated but salvageable — prefer
+      // a COMPLETE one by retrying with a doubled output budget while there's room. Not
+      // an abort and not rate-limited, so no backoff. Capped at the ceiling.
+      //
+      // Empty content + finish_reason "length" is instead the hidden-reasoning bug: the
+      // model burned the whole budget thinking and emitted nothing. A larger budget only
+      // buys MORE reasoning, so it is neither escalated nor recoverable here — the fix
+      // is to turn reasoning off in the request (see providers.ts).
+      if (
+        isLengthTruncation(err) &&
+        hasPartialOutput(err) &&
+        budget < MAX_TOKEN_CEILING &&
+        attempt < maxAttempts
+      ) {
+        budget = Math.min(budget * 2, MAX_TOKEN_CEILING);
+        continue;
       }
-      // Empty content, schema mismatch, or unsalvageable truncation: abstain.
+      // Recover what the response DID contain rather than discarding a whole pass:
+      // the findings completed before a truncation cut, or a complete response whose
+      // values deviate from the strict schema. Returns null when nothing is usable.
+      const recovered = recover(err);
+      if (recovered !== null) return recovered;
+      // Empty content, or nothing recoverable: abstain.
       return abstain(err);
     } finally {
       clearTimeout(timeout);
@@ -224,14 +239,26 @@ function hasPartialOutput(err: unknown): boolean {
 }
 
 /**
- * Recover the findings completed before a length-truncation cut. The raw (truncated)
- * model output is on {@link NoObjectGeneratedError.text}; jsonrepair closes the open
- * JSON, then each finding is validated INDIVIDUALLY so the incomplete trailing one is
- * dropped while the finished ones survive — turning a total chunk loss into a partial
- * success. Returns null when nothing usable can be recovered (caller then abstains).
+ * Recover a usable review from a response the strict {@link Verdict} rejected, so one
+ * bad value does not discard a whole pass. Covers both rejection shapes:
+ *
+ * - **Truncated** (finish_reason "length"): the raw output on
+ *   {@link NoObjectGeneratedError.text} is cut mid-JSON. jsonrepair closes the open
+ *   JSON and the incomplete trailing finding fails its own validation, so the ones
+ *   completed before the cut survive.
+ * - **Complete but nonconforming** (finish_reason "stop"): the model answered fully and
+ *   plausibly but off-schema — "request_changes" for the verdict, a quoted line number,
+ *   "CRITICAL" for a severity. {@link normalizeVerdict}/{@link normalizeFinding} map
+ *   those back onto the enums WITHOUT inventing data; whatever is still invalid is
+ *   dropped per-finding.
+ *
+ * Returns null when nothing trustworthy survives — no finding AND no recognizable
+ * verdict, or an "approved" that would paper over findings we had to drop. The caller
+ * then abstains, which is the honest outcome: a false clean is worse than no review.
  */
-function salvageTruncated(err: unknown): ProviderResult | null {
+function recover(err: unknown): ProviderResult | null {
   if (!NoObjectGeneratedError.isInstance(err) || typeof err.text !== "string") return null;
+  if (err.text.trim() === "") return null;
   let repaired: unknown;
   try {
     repaired = JSON.parse(jsonrepair(err.text));
@@ -240,28 +267,44 @@ function salvageTruncated(err: unknown): ProviderResult | null {
   }
   const loose = PartialVerdict.safeParse(repaired);
   if (!loose.success) return null;
+
+  const raw = loose.data.findings ?? [];
   const findings: Finding[] = [];
-  for (const f of loose.data.findings ?? []) {
-    const r = Finding.safeParse(f);
+  for (const f of raw) {
+    const r = Finding.safeParse(normalizeFinding(f));
     if (r.success) findings.push(r.data);
   }
-  if (findings.length === 0) return null;
-  return {
-    // Salvage only returns when findings survived, so the verdict is necessarily
-    // "changes" — never carry a truncated "approved" forward alongside findings.
-    verdict: "changes",
+  const dropped = raw.length - findings.length;
+
+  // A pass that produced findings is a "changes" pass whatever the model labelled it —
+  // never carry an "approved" forward alongside findings.
+  const verdict = findings.length > 0 ? "changes" : normalizeVerdict(loose.data.verdict);
+  if (verdict === null) return null;
+  if (findings.length === 0 && dropped > 0) return null;
+
+  const truncated = isLengthTruncation(err);
+  const result: ProviderResult = {
+    verdict,
     findings,
-    // Match the main-path cap: PartialVerdict leaves review_plan unbounded, so truncate
-    // here too rather than carry an over-length plan that the strict path would reject.
+    // Match the main-path caps: PartialVerdict leaves these unbounded, so truncate here
+    // too rather than carry over-length text the strict path would have rejected.
     review_plan: (loose.data.review_plan ?? "").slice(0, 280),
-    other_checks: "",
-    top_must_fix: [],
-    partial: true,
-    finishReason: "length",
-    error:
-      `output truncated at the token limit — recovered ${findings.length} finding(s) ` +
-      `completed before the cut; later findings may be missing. Raise MAX_TOKENS to avoid.`,
+    other_checks: (loose.data.other_checks ?? "").slice(0, 600),
+    top_must_fix: (loose.data.top_must_fix ?? []).filter((s): s is string => typeof s === "string"),
   };
+  if (truncated) result.finishReason = "length";
+  // Only a LOSSY recovery is partial. A complete response that merely used the wrong
+  // spelling loses nothing once normalized, so it stays a plain success — flagging it
+  // would mark the PR's files unreviewed when they were in fact fully reviewed.
+  if (truncated || dropped > 0) {
+    result.partial = true;
+    result.error = truncated
+      ? `output truncated at the token limit — recovered ${findings.length} finding(s) ` +
+        `completed before the cut; later findings may be missing. Raise MAX_TOKENS to avoid.`
+      : `${dropped} finding(s) did not match the required shape and were dropped; ` +
+        `${findings.length} recovered.`;
+  }
+  return result;
 }
 
 /**

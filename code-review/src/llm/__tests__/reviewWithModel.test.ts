@@ -110,6 +110,92 @@ describe("reviewWithModel", () => {
     expect(result.error).toContain("truncated");
   });
 
+  it("recovers a complete response whose values deviate from the strict schema", async () => {
+    // Regression: https://github.com/Falconiere/comemory/pull/62 — "response did not
+    // match schema. [finish_reason: stop]". The model answered fully and usefully but
+    // off-schema, and the whole pass was thrown away as a provider error.
+    //
+    // deepseek-schema-mismatch.json is a REAL recorded api.deepseek.com completion whose
+    // content carries every deviation at once: verdict "request_changes" (outside the
+    // enum), a quoted line "42", severity "CRITICAL", confidence "low" (outside the
+    // optional enum), and a third finding with no line at all.
+    const result = await reviewWithModel(ENVELOPE, {
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      apiKey: "sk-test",
+      fetch: replayFetch(fixture("deepseek-schema-mismatch")),
+      maxRetries: 0,
+      maxAttempts: 1,
+    });
+
+    expect(result.verdict).toBe("changes");
+    // Two findings normalize cleanly; the third (no line, so nothing to anchor it to)
+    // is dropped — a lossy recovery, hence partial.
+    expect(result.findings).toHaveLength(2);
+    expect(result.findings[0]?.line).toBe(42);
+    expect(result.findings[0]?.severity).toBe("blocker");
+    // "low" is not in the confidence enum: the field is dropped, the finding survives.
+    expect(result.findings[0]?.confidence).toBeUndefined();
+    expect(result.findings[1]?.severity).toBe("medium");
+    expect(result.review_plan).toBe("Checked the auth handler.");
+    expect(result.top_must_fix).toEqual(["Fix the token comparison."]);
+    expect(result.partial).toBe(true);
+    expect(result.error).toContain("dropped");
+    // Not a length truncation — the model stopped normally.
+    expect(result.finishReason).toBeUndefined();
+  });
+
+  it("abstains rather than reporting a clean review when every finding is dropped", async () => {
+    // The honesty guard on recovery. deepseek-unusable-findings.json is a REAL recorded
+    // completion that says verdict "approved" while carrying a finding with no path, no
+    // line and an unrankable severity ("showstopper"). Recovering the "approved" would
+    // report a clean review over a defect the model DID raise — worse than no review, so
+    // recovery declines and the caller abstains.
+    const result = await reviewWithModel(ENVELOPE, {
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      apiKey: "sk-test",
+      fetch: replayFetch(fixture("deepseek-unusable-findings")),
+      maxRetries: 0,
+      maxAttempts: 1,
+    });
+
+    expect(result.verdict).toBe("error");
+    expect(result.findings).toEqual([]);
+  });
+
+  it("abstains without escalating when thinking burned the budget (empty content, length)", async () => {
+    // Regression: https://github.com/Falconiere/toolu-conventions/pull/3 — "3/3 chunks
+    // failed (after a retry) ... could not parse the response. [finish_reason: length]".
+    // deepseek-thinking-length.json is a REAL api.deepseek.com completion recorded with
+    // thinking left at its DEFAULT (enabled): all 200 completion tokens went to
+    // reasoning_tokens and content came back "". The request-shape assertion in
+    // deepseek.test.ts is the actual fix; this pins the failure mode it prevents, and
+    // that recovery does not paper over it with a fabricated verdict.
+    let calls = 0;
+    const countingFetch: typeof fetch = async () => {
+      calls++;
+      return new Response(JSON.stringify(fixture("deepseek-thinking-length")), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const result = await reviewWithModel(ENVELOPE, {
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      apiKey: "sk-test",
+      fetch: countingFetch,
+      maxRetries: 0,
+      maxAttempts: 3,
+    });
+
+    expect(result.verdict).toBe("error");
+    expect(result.finishReason).toBe("length");
+    // No output to grow into: one call, no budget-escalation retries.
+    expect(calls).toBe(1);
+  });
+
   it("aborts every hung attempt and abstains after exhausting the ceiling (verdict error, no hang)", async () => {
     // A fetch that never resolves on its own — it only settles when the per-attempt
     // AbortController fires (real fetch rejects with an AbortError on signal abort).

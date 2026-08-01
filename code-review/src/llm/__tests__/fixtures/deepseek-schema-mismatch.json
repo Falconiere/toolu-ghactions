@@ -1,0 +1,28 @@
+{
+  "id": "b7b2d990-b482-4f96-9dab-d36264de0da0",
+  "object": "chat.completion",
+  "created": 1785619930,
+  "model": "deepseek-v4-flash",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "{\"review_plan\":\"Checked the auth handler.\",\"verdict\":\"request_changes\",\"findings\":[{\"path\":\"src/a.ts\",\"line\":\"42\",\"severity\":\"CRITICAL\",\"confidence\":\"low\",\"text\":\"Token compared with ==.\"},{\"path\":\"src/b.ts\",\"line\":7,\"severity\":\"medium\",\"text\":\"Unbounded retry loop.\"},{\"path\":\"src/c.ts\",\"severity\":\"low\",\"text\":\"Missing doc comment.\"}],\"other_checks\":\"none\",\"top_must_fix\":[\"Fix the token comparison.\"]}"
+      },
+      "logprobs": null,
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 164,
+    "completion_tokens": 114,
+    "total_tokens": 278,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "prompt_cache_hit_tokens": 0,
+    "prompt_cache_miss_tokens": 164
+  },
+  "system_fingerprint": "fp_a18b46594c_prod0820_fp8_kvcache_20260402"
+}
