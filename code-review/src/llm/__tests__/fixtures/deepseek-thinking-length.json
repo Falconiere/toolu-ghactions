@@ -1,0 +1,32 @@
+{
+  "id": "54bbb4ff-5a46-4d8d-8620-63ba383d6e4a",
+  "object": "chat.completion",
+  "created": 1785619927,
+  "model": "deepseek-v4-flash",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "",
+        "reasoning_content": "We need answer as JSON only. Need review diff exhaustively. Diff is many duplicate lines \"+ const x = 1; // line\". We need identify defects. Repeated const x redeclaration in same scope is SyntaxError (Identifier 'x' has already been declared) for const. Also massive duplication. Need produce JSON with review_plan, verdict \"changes\", findings list, other_checks, top_must_fix. Need reason at length in review_plan maybe. Must be exhaustive. Need include all possible defects: duplicate const declarations, syntax error, meaningless comments, no semicolon? There is semicolon. If multiple lines each const x in same block, invalid JS. Also if intended different scopes? In diff all plus lines, probably same file. Also \"const x = 1;\" repeated 300+ times. Need maybe count? Let's count lines? Diff has many. We'll mention. Need output only JSON. Findings with severity, line maybe"
+      },
+      "logprobs": null,
+      "finish_reason": "length"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 4168,
+    "completion_tokens": 200,
+    "total_tokens": 4368,
+    "prompt_tokens_details": {
+      "cached_tokens": 4096
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 200
+    },
+    "prompt_cache_hit_tokens": 4096,
+    "prompt_cache_miss_tokens": 72
+  },
+  "system_fingerprint": "fp_a18b46594c_prod0820_fp8_kvcache_20260402"
+}

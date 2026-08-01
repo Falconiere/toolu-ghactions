@@ -20,6 +20,7 @@ interface CapturedBody {
   max_tokens?: number;
   reasoning?: unknown;
   provider?: unknown;
+  thinking?: unknown;
 }
 interface Captured {
   url: string | null;
@@ -68,9 +69,13 @@ describe("native DeepSeek provider", () => {
     expect(body.temperature).toBe(0);
     expect(body.max_tokens).toBe(4096);
     // The OpenRouter-only extras must NOT ride on the native DeepSeek request — the
-    // native API rejects them and deepseek-v4-flash is non-thinking by default.
+    // native API rejects them. Its own reasoning switch is `thinking` (below).
     expect(body).not.toHaveProperty("reasoning");
     expect(body).not.toHaveProperty("provider");
+    // Thinking is ENABLED BY DEFAULT on api.deepseek.com and reasoning tokens are billed
+    // against max_tokens, so without this every chunk burned the whole budget thinking
+    // and came back finish_reason "length" with empty content — an unrecoverable abstain.
+    expect(body.thinking).toEqual({ type: "disabled" });
   });
 
   it("AC-7: parses the real recorded DeepSeek response into a ProviderResult", async () => {
