@@ -38552,6 +38552,131 @@ function trimStartOfStream() {
 }
 var HANGING_STREAM_WARNING_TIME_MS = 15 * 1e3;
 
+// src/llm/schema.ts
+var Finding = external_exports.object({
+  path: external_exports.string(),
+  line: external_exports.number().int(),
+  end_line: external_exports.number().int().optional(),
+  severity: external_exports.enum(["blocker", "high", "medium", "low", "nit"]),
+  category: external_exports.string().optional(),
+  confidence: external_exports.enum(["high", "medium"]).optional(),
+  quoted_line: external_exports.string().optional(),
+  suggestion: external_exports.string().optional().describe(
+    "Replacement CODE ONLY \u2014 the exact source text to substitute for lines [line..end_line]. GitHub renders it as a committable 'Suggested change', so it must be literal, directly-applicable code, never prose, commentary, or an instruction like 'remove this line'. Explanations go in `text`. Omit this field entirely when there is no clean code replacement."
+  ),
+  // Provenance: which layer surfaced this finding. Absent → an LLM-discovered finding
+  // (rendered as "llm"); set to a tool name when the model confirms a deterministic
+  // (gitleaks/opengrep) finding it was asked to triage.
+  source: external_exports.enum(["llm", "gitleaks", "opengrep", "eslint"]).optional(),
+  text: external_exports.string()
+});
+var Verdict = external_exports.object({
+  // Bounded: review_plan is emitted FIRST, so an unbounded plan eats the output
+  // budget before findings and starves them under truncation. The prompt asks for
+  // ≤ 2 short sentences (≤ 280 chars) and the JSON-schema maxLength nudges the model,
+  // but in JSON mode the provider only receives response_format:{type:"json_object"} —
+  // the schema (hence maxLength) is NOT enforced during decoding. So the cap is a soft
+  // backstop: an over-length plan is TRUNCATED via .catch rather than failing
+  // validation, which would otherwise throw the whole (complete, valid) review away as
+  // an abstention.
+  review_plan: external_exports.string().max(280).catch(({ input }) => typeof input === "string" ? input.slice(0, 280) : ""),
+  verdict: external_exports.enum(["approved", "changes"]),
+  findings: external_exports.array(Finding),
+  // Soft-capped like review_plan: other_checks is emitted AFTER findings, so in JSON
+  // mode its maxLength is a prompt nudge only, never enforced during decoding. The
+  // .catch TRUNCATES an over-length blurb to 600 rather than rejecting the whole (valid)
+  // review, and ALSO handles the absent-key case (a length-truncated response cut before
+  // this field) → "", preserving the prior .default("") truncation-resilience semantics.
+  other_checks: external_exports.string().max(600).catch(({ input }) => typeof input === "string" ? input.slice(0, 600) : ""),
+  top_must_fix: external_exports.array(external_exports.string()).default([])
+});
+var PartialVerdict = external_exports.object({
+  // Decorative fields: `.catch` drops a wrong-typed value (models routinely emit null
+  // here) instead of failing the parse, which would sink a recovery over prose.
+  review_plan: external_exports.string().optional().catch(void 0),
+  verdict: external_exports.unknown().optional(),
+  // NOT caught, deliberately: findings is load-bearing. A `findings` that is not an
+  // array must fail the whole recovery, because silently reading it as "no findings"
+  // would turn defects the model DID raise into a clean review.
+  findings: external_exports.array(external_exports.unknown()).optional(),
+  other_checks: external_exports.string().optional().catch(void 0),
+  top_must_fix: external_exports.array(external_exports.unknown()).optional().catch(void 0)
+});
+var VERDICT_ALIASES = {
+  approved: "approved",
+  approve: "approved",
+  approval: "approved",
+  accept: "approved",
+  accepted: "approved",
+  lgtm: "approved",
+  pass: "approved",
+  changes: "changes",
+  change: "changes",
+  requestchanges: "changes",
+  changesrequested: "changes",
+  requestedchanges: "changes",
+  reject: "changes",
+  rejected: "changes",
+  block: "changes",
+  blocked: "changes"
+};
+var SEVERITY_ALIASES = {
+  blocker: "blocker",
+  blocking: "blocker",
+  critical: "blocker",
+  fatal: "blocker",
+  high: "high",
+  major: "high",
+  error: "high",
+  medium: "medium",
+  moderate: "medium",
+  warning: "medium",
+  warn: "medium",
+  low: "low",
+  minor: "low",
+  info: "low",
+  informational: "low",
+  nit: "nit",
+  nitpick: "nit",
+  style: "nit"
+};
+function aliasKey(value) {
+  if (typeof value !== "string") return null;
+  const key = value.toLowerCase().replace(/[^a-z]/g, "");
+  return key === "" ? null : key;
+}
+function normalizeVerdict(value) {
+  const key = aliasKey(value);
+  return key === null ? null : VERDICT_ALIASES[key] ?? null;
+}
+function normalizeLine(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? Math.trunc(value) : null;
+  if (typeof value !== "string") return null;
+  const match = /^\s*(-?\d+)/.exec(value);
+  return match?.[1] === void 0 ? null : Number.parseInt(match[1], 10);
+}
+function normalizeFinding(raw) {
+  const asObject = external_exports.record(external_exports.unknown()).safeParse(raw);
+  if (!asObject.success) return raw;
+  const out = { ...asObject.data };
+  const line = normalizeLine(out["line"]);
+  if (line === null) delete out["line"];
+  else out["line"] = line;
+  const endLine = normalizeLine(out["end_line"]);
+  if (endLine === null) delete out["end_line"];
+  else out["end_line"] = endLine;
+  const severity = aliasKey(out["severity"]);
+  if (severity !== null && SEVERITY_ALIASES[severity] !== void 0) {
+    out["severity"] = SEVERITY_ALIASES[severity];
+  }
+  if (out["confidence"] !== "high" && out["confidence"] !== "medium") delete out["confidence"];
+  const source = out["source"];
+  if (source !== "llm" && source !== "gitleaks" && source !== "opengrep" && source !== "eslint") {
+    delete out["source"];
+  }
+  return out;
+}
+
 // node_modules/jsonrepair/lib/esm/utils/JSONRepairError.js
 var JSONRepairError = class extends Error {
   constructor(message, position) {
@@ -39218,124 +39343,50 @@ function atEndOfBlockComment(text2, i) {
   return text2[i] === "*" && text2[i + 1] === "/";
 }
 
-// src/llm/schema.ts
-var Finding = external_exports.object({
-  path: external_exports.string(),
-  line: external_exports.number().int(),
-  end_line: external_exports.number().int().optional(),
-  severity: external_exports.enum(["blocker", "high", "medium", "low", "nit"]),
-  category: external_exports.string().optional(),
-  confidence: external_exports.enum(["high", "medium"]).optional(),
-  quoted_line: external_exports.string().optional(),
-  suggestion: external_exports.string().optional().describe(
-    "Replacement CODE ONLY \u2014 the exact source text to substitute for lines [line..end_line]. GitHub renders it as a committable 'Suggested change', so it must be literal, directly-applicable code, never prose, commentary, or an instruction like 'remove this line'. Explanations go in `text`. Omit this field entirely when there is no clean code replacement."
-  ),
-  // Provenance: which layer surfaced this finding. Absent → an LLM-discovered finding
-  // (rendered as "llm"); set to a tool name when the model confirms a deterministic
-  // (gitleaks/opengrep) finding it was asked to triage.
-  source: external_exports.enum(["llm", "gitleaks", "opengrep", "eslint"]).optional(),
-  text: external_exports.string()
-});
-var Verdict = external_exports.object({
-  // Bounded: review_plan is emitted FIRST, so an unbounded plan eats the output
-  // budget before findings and starves them under truncation. The prompt asks for
-  // ≤ 2 short sentences (≤ 280 chars) and the JSON-schema maxLength nudges the model,
-  // but in JSON mode the provider only receives response_format:{type:"json_object"} —
-  // the schema (hence maxLength) is NOT enforced during decoding. So the cap is a soft
-  // backstop: an over-length plan is TRUNCATED via .catch rather than failing
-  // validation, which would otherwise throw the whole (complete, valid) review away as
-  // an abstention.
-  review_plan: external_exports.string().max(280).catch(({ input }) => typeof input === "string" ? input.slice(0, 280) : ""),
-  verdict: external_exports.enum(["approved", "changes"]),
-  findings: external_exports.array(Finding),
-  // Soft-capped like review_plan: other_checks is emitted AFTER findings, so in JSON
-  // mode its maxLength is a prompt nudge only, never enforced during decoding. The
-  // .catch TRUNCATES an over-length blurb to 600 rather than rejecting the whole (valid)
-  // review, and ALSO handles the absent-key case (a length-truncated response cut before
-  // this field) → "", preserving the prior .default("") truncation-resilience semantics.
-  other_checks: external_exports.string().max(600).catch(({ input }) => typeof input === "string" ? input.slice(0, 600) : ""),
-  top_must_fix: external_exports.array(external_exports.string()).default([])
-});
-var PartialVerdict = external_exports.object({
-  review_plan: external_exports.string().optional(),
-  verdict: external_exports.unknown().optional(),
-  findings: external_exports.array(external_exports.unknown()).optional(),
-  other_checks: external_exports.string().optional(),
-  top_must_fix: external_exports.array(external_exports.unknown()).optional()
-});
-var VERDICT_ALIASES = {
-  approved: "approved",
-  approve: "approved",
-  approval: "approved",
-  accept: "approved",
-  accepted: "approved",
-  lgtm: "approved",
-  pass: "approved",
-  changes: "changes",
-  change: "changes",
-  requestchanges: "changes",
-  changesrequested: "changes",
-  requestedchanges: "changes",
-  reject: "changes",
-  rejected: "changes",
-  block: "changes",
-  blocked: "changes"
-};
-var SEVERITY_ALIASES = {
-  blocker: "blocker",
-  blocking: "blocker",
-  critical: "blocker",
-  fatal: "blocker",
-  high: "high",
-  major: "high",
-  error: "high",
-  medium: "medium",
-  moderate: "medium",
-  warning: "medium",
-  warn: "medium",
-  low: "low",
-  minor: "low",
-  info: "low",
-  informational: "low",
-  nit: "nit",
-  nitpick: "nit",
-  style: "nit"
-};
-function aliasKey(value) {
-  if (typeof value !== "string") return null;
-  const key = value.toLowerCase().replace(/[^a-z]/g, "");
-  return key === "" ? null : key;
+// src/llm/recover.ts
+function isLengthTruncation(err) {
+  return NoObjectGeneratedError.isInstance(err) && err.finishReason === "length";
 }
-function normalizeVerdict(value) {
-  const key = aliasKey(value);
-  return key === null ? null : VERDICT_ALIASES[key] ?? null;
+function hasPartialOutput(err) {
+  return NoObjectGeneratedError.isInstance(err) && typeof err.text === "string" && err.text.trim() !== "";
 }
-function normalizeLine(value) {
-  if (typeof value === "number") return Number.isFinite(value) ? Math.trunc(value) : null;
-  if (typeof value !== "string") return null;
-  const match = /^\s*(-?\d+)/.exec(value);
-  return match?.[1] === void 0 ? null : Number.parseInt(match[1], 10);
-}
-function normalizeFinding(raw) {
-  const asObject = external_exports.record(external_exports.unknown()).safeParse(raw);
-  if (!asObject.success) return raw;
-  const out = { ...asObject.data };
-  const line = normalizeLine(out["line"]);
-  if (line === null) delete out["line"];
-  else out["line"] = line;
-  const endLine = normalizeLine(out["end_line"]);
-  if (endLine === null) delete out["end_line"];
-  else out["end_line"] = endLine;
-  const severity = aliasKey(out["severity"]);
-  if (severity !== null && SEVERITY_ALIASES[severity] !== void 0) {
-    out["severity"] = SEVERITY_ALIASES[severity];
+function recover(err) {
+  if (!NoObjectGeneratedError.isInstance(err) || typeof err.text !== "string") return null;
+  if (err.text.trim() === "") return null;
+  let repaired;
+  try {
+    repaired = JSON.parse(jsonrepair(err.text));
+  } catch {
+    return null;
   }
-  if (out["confidence"] !== "high" && out["confidence"] !== "medium") delete out["confidence"];
-  const source = out["source"];
-  if (source !== "llm" && source !== "gitleaks" && source !== "opengrep" && source !== "eslint") {
-    delete out["source"];
+  const loose = PartialVerdict.safeParse(repaired);
+  if (!loose.success) return null;
+  const raw = loose.data.findings ?? [];
+  const findings = [];
+  for (const f of raw) {
+    const r = Finding.safeParse(normalizeFinding(f));
+    if (r.success) findings.push(r.data);
   }
-  return out;
+  const dropped = raw.length - findings.length;
+  const verdict = findings.length > 0 ? "changes" : normalizeVerdict(loose.data.verdict);
+  if (verdict === null) return null;
+  if (findings.length === 0 && dropped > 0) return null;
+  const truncated = isLengthTruncation(err);
+  const result = {
+    verdict,
+    findings,
+    // Match the main-path caps: PartialVerdict leaves these unbounded, so truncate here
+    // too rather than carry over-length text the strict path would have rejected.
+    review_plan: (loose.data.review_plan ?? "").slice(0, 280),
+    other_checks: (loose.data.other_checks ?? "").slice(0, 600),
+    top_must_fix: (loose.data.top_must_fix ?? []).filter((s) => typeof s === "string")
+  };
+  if (truncated) result.finishReason = "length";
+  if (truncated || dropped > 0) {
+    result.partial = true;
+    result.error = truncated ? `output truncated at the token limit \u2014 recovered ${findings.length} finding(s) completed before the cut; later findings may be missing. Raise MAX_TOKENS to avoid.` : `${dropped} finding(s) did not match the required shape and were dropped; ${findings.length} recovered.`;
+  }
+  return result;
 }
 
 // src/llm/reviewWithModel.ts
@@ -39401,50 +39452,6 @@ async function reviewWithModel(envelope, opts) {
     }
   }
   return abstain(new Error("OpenRouter request failed"));
-}
-function isLengthTruncation(err) {
-  return NoObjectGeneratedError.isInstance(err) && err.finishReason === "length";
-}
-function hasPartialOutput(err) {
-  return NoObjectGeneratedError.isInstance(err) && typeof err.text === "string" && err.text.trim() !== "";
-}
-function recover(err) {
-  if (!NoObjectGeneratedError.isInstance(err) || typeof err.text !== "string") return null;
-  if (err.text.trim() === "") return null;
-  let repaired;
-  try {
-    repaired = JSON.parse(jsonrepair(err.text));
-  } catch {
-    return null;
-  }
-  const loose = PartialVerdict.safeParse(repaired);
-  if (!loose.success) return null;
-  const raw = loose.data.findings ?? [];
-  const findings = [];
-  for (const f of raw) {
-    const r = Finding.safeParse(normalizeFinding(f));
-    if (r.success) findings.push(r.data);
-  }
-  const dropped = raw.length - findings.length;
-  const verdict = findings.length > 0 ? "changes" : normalizeVerdict(loose.data.verdict);
-  if (verdict === null) return null;
-  if (findings.length === 0 && dropped > 0) return null;
-  const truncated = isLengthTruncation(err);
-  const result = {
-    verdict,
-    findings,
-    // Match the main-path caps: PartialVerdict leaves these unbounded, so truncate here
-    // too rather than carry over-length text the strict path would have rejected.
-    review_plan: (loose.data.review_plan ?? "").slice(0, 280),
-    other_checks: (loose.data.other_checks ?? "").slice(0, 600),
-    top_must_fix: (loose.data.top_must_fix ?? []).filter((s) => typeof s === "string")
-  };
-  if (truncated) result.finishReason = "length";
-  if (truncated || dropped > 0) {
-    result.partial = true;
-    result.error = truncated ? `output truncated at the token limit \u2014 recovered ${findings.length} finding(s) completed before the cut; later findings may be missing. Raise MAX_TOKENS to avoid.` : `${dropped} finding(s) did not match the required shape and were dropped; ${findings.length} recovered.`;
-  }
-  return result;
 }
 function abstain(err) {
   const result = {

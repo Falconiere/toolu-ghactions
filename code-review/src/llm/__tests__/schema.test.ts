@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Verdict } from "@/llm/schema.js";
+import { Verdict, Finding, normalizeFinding, normalizeVerdict } from "@/llm/schema.js";
 
 describe("Verdict schema", () => {
   it("parses a valid verdict with findings", () => {
@@ -135,5 +135,108 @@ describe("Verdict schema", () => {
       expect(parsed.data.other_checks).toHaveLength(600);
       expect(parsed.data.other_checks).toBe(longChecks.slice(0, 600));
     }
+  });
+});
+
+describe("normalizeVerdict", () => {
+  it("maps the aliases models reach for onto the two enum values", () => {
+    expect(normalizeVerdict("approved")).toBe("approved");
+    expect(normalizeVerdict("LGTM")).toBe("approved");
+    expect(normalizeVerdict("Approve")).toBe("approved");
+    expect(normalizeVerdict("request_changes")).toBe("changes");
+    expect(normalizeVerdict("Request-Changes")).toBe("changes");
+    expect(normalizeVerdict("changes requested")).toBe("changes");
+    expect(normalizeVerdict("reject")).toBe("changes");
+  });
+
+  it("returns null for anything it cannot map, rather than guessing a verdict", () => {
+    // A guessed verdict is the one thing recovery must never do: "approved" invented
+    // here would announce a clean review the model never gave.
+    expect(normalizeVerdict("maybe")).toBeNull();
+    expect(normalizeVerdict("")).toBeNull();
+    expect(normalizeVerdict("!!!")).toBeNull();
+    expect(normalizeVerdict(null)).toBeNull();
+    expect(normalizeVerdict(undefined)).toBeNull();
+    expect(normalizeVerdict(7)).toBeNull();
+    expect(normalizeVerdict({ verdict: "approved" })).toBeNull();
+  });
+});
+
+describe("normalizeFinding", () => {
+  it("coerces a quoted line number and an alias severity into a valid Finding", () => {
+    const parsed = Finding.safeParse(
+      normalizeFinding({
+        path: "src/a.ts",
+        line: "42",
+        end_line: "44",
+        severity: "CRITICAL",
+        text: "Token compared with ==.",
+      }),
+    );
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.line).toBe(42);
+      expect(parsed.data.end_line).toBe(44);
+      expect(parsed.data.severity).toBe("blocker");
+    }
+  });
+
+  it("drops an unrecognized OPTIONAL enum value instead of failing the finding", () => {
+    const parsed = Finding.safeParse(
+      normalizeFinding({
+        path: "src/a.ts",
+        line: 1,
+        severity: "medium",
+        confidence: "low",
+        source: "sonarqube",
+        text: "Unbounded retry loop.",
+      }),
+    );
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.confidence).toBeUndefined();
+      expect(parsed.data.source).toBeUndefined();
+    }
+  });
+
+  it("leaves a finding invalid when it has no line or no rankable severity", () => {
+    // Both are load-bearing — a finding with no line cannot be anchored to the diff, and
+    // an unrankable severity cannot be gated on. Normalization must NOT invent either.
+    expect(
+      Finding.safeParse(normalizeFinding({ path: "src/a.ts", severity: "low", text: "x" })).success,
+    ).toBe(false);
+    expect(
+      Finding.safeParse(
+        normalizeFinding({ path: "src/a.ts", line: "not a number", severity: "low", text: "x" }),
+      ).success,
+    ).toBe(false);
+    expect(
+      Finding.safeParse(
+        normalizeFinding({ path: "src/a.ts", line: 1, severity: "showstopper", text: "x" }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("preserves a finding that was already valid, byte for byte", () => {
+    // The normalizer runs on EVERY recovered finding, so it must be a no-op on good input.
+    const good = {
+      path: "src/a.ts",
+      line: 3,
+      end_line: 5,
+      severity: "high",
+      category: "correctness",
+      confidence: "high",
+      quoted_line: "return a - b;",
+      suggestion: "return a + b;",
+      source: "llm",
+      text: "add() subtracts.",
+    };
+    expect(normalizeFinding(good)).toEqual(good);
+  });
+
+  it("passes a non-object through unchanged, so Finding produces the rejection", () => {
+    expect(normalizeFinding("nope")).toBe("nope");
+    expect(normalizeFinding(null)).toBeNull();
+    expect(normalizeFinding([1, 2])).toEqual([1, 2]);
   });
 });

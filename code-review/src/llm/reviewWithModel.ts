@@ -20,10 +20,10 @@
 // Never throw to the caller, never return a null verdict: a failed model call abstains,
 // it does not block.
 import { generateObject, NoObjectGeneratedError } from "ai";
-import { jsonrepair } from "jsonrepair";
 import { errorMessage } from "@/errors.js";
 import { resolveModel, providerOptionsFor, type ProviderId } from "./providers.js";
-import { Verdict, Finding, PartialVerdict, normalizeFinding, normalizeVerdict } from "./schema.js";
+import { Verdict, type Finding } from "./schema.js";
+import { recover, isLengthTruncation, hasPartialOutput } from "./recover.js";
 import type { Envelope } from "@/prompt.js";
 
 /**
@@ -215,96 +215,6 @@ export async function reviewWithModel(
   // Unreachable: every loop path either returns or continues, and the final attempt
   // always returns. Present so TypeScript sees a total function.
   return abstain(new Error("OpenRouter request failed"));
-}
-
-/**
- * True when generateObject failed because the model hit the output-token limit
- * mid-JSON (finish_reason "length"): the truncated response cannot be parsed.
- * Distinct from empty content / schema mismatch — those keep finishReason "stop".
- */
-function isLengthTruncation(err: unknown): boolean {
-  return NoObjectGeneratedError.isInstance(err) && err.finishReason === "length";
-}
-
-/**
- * True when a NoObjectGeneratedError carries non-empty raw model output. Separates a
- * real mid-JSON truncation (partial text present — worth a bigger budget + salvage)
- * from the reasoning-budget bug (empty content + finish_reason "length": the model
- * emitted nothing, so escalating the budget only burns more reasoning tokens).
- */
-function hasPartialOutput(err: unknown): boolean {
-  return (
-    NoObjectGeneratedError.isInstance(err) && typeof err.text === "string" && err.text.trim() !== ""
-  );
-}
-
-/**
- * Recover a usable review from a response the strict {@link Verdict} rejected, so one
- * bad value does not discard a whole pass. Covers both rejection shapes:
- *
- * - **Truncated** (finish_reason "length"): the raw output on
- *   {@link NoObjectGeneratedError.text} is cut mid-JSON. jsonrepair closes the open
- *   JSON and the incomplete trailing finding fails its own validation, so the ones
- *   completed before the cut survive.
- * - **Complete but nonconforming** (finish_reason "stop"): the model answered fully and
- *   plausibly but off-schema — "request_changes" for the verdict, a quoted line number,
- *   "CRITICAL" for a severity. {@link normalizeVerdict}/{@link normalizeFinding} map
- *   those back onto the enums WITHOUT inventing data; whatever is still invalid is
- *   dropped per-finding.
- *
- * Returns null when nothing trustworthy survives — no finding AND no recognizable
- * verdict, or an "approved" that would paper over findings we had to drop. The caller
- * then abstains, which is the honest outcome: a false clean is worse than no review.
- */
-function recover(err: unknown): ProviderResult | null {
-  if (!NoObjectGeneratedError.isInstance(err) || typeof err.text !== "string") return null;
-  if (err.text.trim() === "") return null;
-  let repaired: unknown;
-  try {
-    repaired = JSON.parse(jsonrepair(err.text));
-  } catch {
-    return null;
-  }
-  const loose = PartialVerdict.safeParse(repaired);
-  if (!loose.success) return null;
-
-  const raw = loose.data.findings ?? [];
-  const findings: Finding[] = [];
-  for (const f of raw) {
-    const r = Finding.safeParse(normalizeFinding(f));
-    if (r.success) findings.push(r.data);
-  }
-  const dropped = raw.length - findings.length;
-
-  // A pass that produced findings is a "changes" pass whatever the model labelled it —
-  // never carry an "approved" forward alongside findings.
-  const verdict = findings.length > 0 ? "changes" : normalizeVerdict(loose.data.verdict);
-  if (verdict === null) return null;
-  if (findings.length === 0 && dropped > 0) return null;
-
-  const truncated = isLengthTruncation(err);
-  const result: ProviderResult = {
-    verdict,
-    findings,
-    // Match the main-path caps: PartialVerdict leaves these unbounded, so truncate here
-    // too rather than carry over-length text the strict path would have rejected.
-    review_plan: (loose.data.review_plan ?? "").slice(0, 280),
-    other_checks: (loose.data.other_checks ?? "").slice(0, 600),
-    top_must_fix: (loose.data.top_must_fix ?? []).filter((s): s is string => typeof s === "string"),
-  };
-  if (truncated) result.finishReason = "length";
-  // Only a LOSSY recovery is partial. A complete response that merely used the wrong
-  // spelling loses nothing once normalized, so it stays a plain success — flagging it
-  // would mark the PR's files unreviewed when they were in fact fully reviewed.
-  if (truncated || dropped > 0) {
-    result.partial = true;
-    result.error = truncated
-      ? `output truncated at the token limit — recovered ${findings.length} finding(s) ` +
-        `completed before the cut; later findings may be missing. Raise MAX_TOKENS to avoid.`
-      : `${dropped} finding(s) did not match the required shape and were dropped; ` +
-        `${findings.length} recovered.`;
-  }
-  return result;
 }
 
 /**
