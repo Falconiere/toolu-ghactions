@@ -77,16 +77,137 @@ export const Verdict = z.object({
 });
 
 /**
- * Loose shape for salvaging a length-truncated response: only the fields that may
- * survive a mid-JSON cut, all optional. `findings` stays `unknown[]` so each element
- * is validated INDIVIDUALLY against {@link Finding} — the incomplete trailing one is
- * dropped while the finished ones survive.
+ * Loose shape for recovering a response the strict {@link Verdict} rejected — a
+ * length-truncated one (only some fields survived the cut) or a complete one whose
+ * values deviate from the schema. Every field is optional and the ones the model most
+ * often gets wrong stay `unknown`, so each is normalized and validated INDIVIDUALLY
+ * rather than sinking the whole response: `findings` elements against {@link Finding},
+ * `verdict` through {@link normalizeVerdict}.
  */
 export const PartialVerdict = z.object({
   review_plan: z.string().optional(),
-  verdict: z.enum(["approved", "changes"]).optional(),
+  verdict: z.unknown().optional(),
   findings: z.array(z.unknown()).optional(),
+  other_checks: z.string().optional(),
+  top_must_fix: z.array(z.unknown()).optional(),
 });
+
+/**
+ * Verdict aliases the model reaches for instead of the two enum values. `generateObject`
+ * validates against {@link Verdict} AFTER the response is complete, so a model that
+ * answers "request_changes" — a perfectly good review — fails validation and the whole
+ * pass is thrown away as an abstention. Recovery maps these back; anything unrecognized
+ * stays unrecognized (see {@link normalizeVerdict}).
+ */
+const VERDICT_ALIASES: Record<string, "approved" | "changes"> = {
+  approved: "approved",
+  approve: "approved",
+  approval: "approved",
+  accept: "approved",
+  accepted: "approved",
+  lgtm: "approved",
+  pass: "approved",
+  changes: "changes",
+  change: "changes",
+  requestchanges: "changes",
+  changesrequested: "changes",
+  requestedchanges: "changes",
+  reject: "changes",
+  rejected: "changes",
+  block: "changes",
+  blocked: "changes",
+};
+
+/**
+ * Severity aliases, same rationale as {@link VERDICT_ALIASES}. Only synonyms that map
+ * UNAMBIGUOUSLY onto the five-level scale are listed — an unrecognized severity cannot
+ * be ranked or gated on, so recovery drops that finding rather than inventing a level.
+ */
+const SEVERITY_ALIASES: Record<string, "blocker" | "high" | "medium" | "low" | "nit"> = {
+  blocker: "blocker",
+  blocking: "blocker",
+  critical: "blocker",
+  fatal: "blocker",
+  high: "high",
+  major: "high",
+  error: "high",
+  medium: "medium",
+  moderate: "medium",
+  warning: "medium",
+  warn: "medium",
+  low: "low",
+  minor: "low",
+  info: "low",
+  informational: "low",
+  nit: "nit",
+  nitpick: "nit",
+  style: "nit",
+};
+
+/** Lowercase + strip everything but letters, so "Request-Changes" and "request_changes"
+ *  collapse onto the same alias key. */
+function aliasKey(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const key = value.toLowerCase().replace(/[^a-z]/g, "");
+  return key === "" ? null : key;
+}
+
+/** Map a model-emitted verdict onto the enum, or null when it is unrecognizable. */
+export function normalizeVerdict(value: unknown): "approved" | "changes" | null {
+  const key = aliasKey(value);
+  return key === null ? null : (VERDICT_ALIASES[key] ?? null);
+}
+
+/**
+ * Coerce a model-emitted line number to an integer. Models routinely quote line numbers
+ * ("42") or emit "42:8"; both are unambiguous. Returns null when no integer is present,
+ * which fails the finding (a finding without a line cannot be anchored to the diff).
+ */
+function normalizeLine(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? Math.trunc(value) : null;
+  if (typeof value !== "string") return null;
+  const match = /^\s*(-?\d+)/.exec(value);
+  return match?.[1] === undefined ? null : Number.parseInt(match[1], 10);
+}
+
+/**
+ * Rewrite one raw finding into the shape {@link Finding} accepts, WITHOUT inventing
+ * data: line numbers are coerced from their string form, severity is alias-mapped, and
+ * an unrecognized value in an OPTIONAL enum (`confidence`, `source`) drops just that
+ * field instead of failing the whole finding. Anything still invalid — no path, no text,
+ * no rankable severity — is left to fail {@link Finding}, and the caller drops it.
+ *
+ * Returns the raw input unchanged when it is not an object, so the caller's
+ * `Finding.safeParse` produces the rejection.
+ */
+export function normalizeFinding(raw: unknown): unknown {
+  // z.record rejects null and arrays, so this both narrows and validates in one step —
+  // no cast needed to read the model's arbitrary keys.
+  const asObject = z.record(z.unknown()).safeParse(raw);
+  if (!asObject.success) return raw;
+  const out = { ...asObject.data };
+
+  const line = normalizeLine(out["line"]);
+  if (line === null) delete out["line"];
+  else out["line"] = line;
+
+  const endLine = normalizeLine(out["end_line"]);
+  if (endLine === null) delete out["end_line"];
+  else out["end_line"] = endLine;
+
+  const severity = aliasKey(out["severity"]);
+  if (severity !== null && SEVERITY_ALIASES[severity] !== undefined) {
+    out["severity"] = SEVERITY_ALIASES[severity];
+  }
+
+  // Optional enums: an unrecognized value is dropped, never allowed to sink the finding.
+  if (out["confidence"] !== "high" && out["confidence"] !== "medium") delete out["confidence"];
+  const source = out["source"];
+  if (source !== "llm" && source !== "gitleaks" && source !== "opengrep" && source !== "eslint") {
+    delete out["source"];
+  }
+  return out;
+}
 
 /** A review finding, inferred from the {@link Finding} schema. */
 export type Finding = z.infer<typeof Finding>;

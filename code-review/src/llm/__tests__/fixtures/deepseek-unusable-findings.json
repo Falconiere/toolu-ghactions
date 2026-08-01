@@ -1,0 +1,28 @@
+{
+  "id": "ef06f250-85bf-42ff-bf85-42ad2cd97a4d",
+  "object": "chat.completion",
+  "created": 1785620388,
+  "model": "deepseek-v4-flash",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "{\"review_plan\":\"Checked the auth handler.\",\"verdict\":\"approved\",\"findings\":[{\"severity\":\"showstopper\",\"text\":\"Something is wrong somewhere.\"}],\"other_checks\":\"none\",\"top_must_fix\":[]}"
+      },
+      "logprobs": null,
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 100,
+    "completion_tokens": 50,
+    "total_tokens": 150,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "prompt_cache_hit_tokens": 0,
+    "prompt_cache_miss_tokens": 100
+  },
+  "system_fingerprint": "fp_a18b46594c_prod0820_fp8_kvcache_20260402"
+}
