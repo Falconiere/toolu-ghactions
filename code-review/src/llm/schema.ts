@@ -88,6 +88,11 @@ export const PartialVerdict = z.object({
   // Decorative fields: `.catch` drops a wrong-typed value (models routinely emit null
   // here) instead of failing the parse, which would sink a recovery over prose.
   review_plan: z.string().optional().catch(undefined),
+  // `unknown` with NO `.catch`, deliberately — do not "fix" this to match its neighbours.
+  // The whole point of recovery is to rescue an off-enum verdict ("request_changes"),
+  // so the value must reach {@link normalizeVerdict} intact; it accepts any type and
+  // returns null when unmappable. A `.catch` here would silently discard exactly the
+  // strings recovery exists to map.
   verdict: z.unknown().optional(),
   // NOT caught, deliberately: findings is load-bearing. A `findings` that is not an
   // array must fail the whole recovery, because silently reading it as "no findings"

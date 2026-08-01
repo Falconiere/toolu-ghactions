@@ -196,6 +196,52 @@ describe("reviewWithModel", () => {
     expect(result.error).toBeUndefined();
   });
 
+  it("keeps a COMPLETE response's 'approved' even though findings rode along", async () => {
+    // The strict schema allows "approved" WITH findings — that is how nits ride along
+    // without blocking — and merge.ts/gate.ts key blocking off this field. So recovery
+    // must not upgrade the verdict: forcing "changes" here would block a PR the model
+    // approved, i.e. recovery would diverge from the happy path it stands in for.
+    // Real recorded completion: verdict "approved", one nit, line quoted as "12" (which
+    // is what makes the strict schema reject it and recovery run at all).
+    const result = await reviewWithModel(ENVELOPE, {
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      apiKey: "sk-test",
+      fetch: replayFetch(fixture("deepseek-approved-with-nit")),
+      maxRetries: 0,
+      maxAttempts: 1,
+    });
+
+    expect(result.verdict).toBe("approved");
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]?.line).toBe(12);
+    expect(result.findings[0]?.severity).toBe("nit");
+    // Nothing lost — the quoted line normalized cleanly, so this is a plain success.
+    expect(result.partial).toBeUndefined();
+    expect(result.error).toBeUndefined();
+  });
+
+  it("overrides a TRUNCATED response's 'approved' to changes", async () => {
+    // The mirror of the test above, and the reason the two cases cannot share a rule.
+    // deepseek-truncated-approved.json is a real completion that wrote "approved" and
+    // then got cut mid-findings. A verdict written BEFORE the cut is not the model's
+    // conclusion — it never saw the findings it had not written yet — so a recovered
+    // truncation carrying findings is "changes", never a stale "approved".
+    const result = await reviewWithModel(ENVELOPE, {
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      apiKey: "sk-test",
+      fetch: replayFetch(fixture("deepseek-truncated-approved")),
+      maxRetries: 0,
+      maxAttempts: 1,
+    });
+
+    expect(result.verdict).toBe("changes");
+    expect(result.findings.length).toBeGreaterThan(0);
+    expect(result.partial).toBe(true);
+    expect(result.finishReason).toBe("length");
+  });
+
   it("abstains on a complete response whose verdict is unrecognizable and findings empty", async () => {
     // deepseek-unrecognizable-verdict.json is a REAL recorded completion that answers
     // verdict "unsure" with no findings. Nothing was dropped, so the all-dropped guard

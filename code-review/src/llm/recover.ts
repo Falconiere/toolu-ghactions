@@ -88,13 +88,22 @@ export function recover(err: unknown): ProviderResult | null {
   // verdict with nothing behind it, and a bare "changes requested" with zero findings is
   // a blocking review the author cannot act on.
   if (truncated && findings.length === 0) return null;
-  // A pass that produced findings is a "changes" pass whatever the model labelled it —
-  // never carry an "approved" forward alongside findings.
-  const verdict = findings.length > 0 ? "changes" : normalizeVerdict(loose.data.verdict);
-  // No finding survived AND no recognizable verdict: nothing to report honestly.
+
+  // TRUNCATED: the model never finished deciding, so a verdict written before the cut is
+  // not its conclusion — a recovered truncation is always "changes" (findings survived,
+  // guarded above). COMPLETE: honour what the model actually said. The strict schema
+  // allows "approved" WITH findings — that is how nits ride along without blocking — and
+  // merge.ts/gate.ts key blocking off this field, so forcing "changes" here would block a
+  // PR the model approved and make recovery diverge from the happy path. Fall back to
+  // "changes" only when the label is unreadable AND findings survived: never INFER an
+  // "approved", but do err toward blocking when something was clearly flagged.
+  const stated = normalizeVerdict(loose.data.verdict);
+  const verdict = truncated ? "changes" : (stated ?? (findings.length > 0 ? "changes" : null));
+  // No finding survived AND no readable verdict: nothing to report honestly.
   if (verdict === null) return null;
-  // Every finding was dropped: reporting the model's verdict here would announce a clean
-  // review over defects it DID raise. Abstain instead.
+  // Every finding was dropped, so nothing actionable is left whatever the label says: an
+  // "approved" would paper over defects the model DID raise, and a "changes" would block
+  // the PR with no finding to act on. Abstain either way.
   if (findings.length === 0 && dropped > 0) return null;
 
   const result: ProviderResult = {
