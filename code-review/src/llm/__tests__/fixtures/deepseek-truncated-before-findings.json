@@ -1,0 +1,28 @@
+{
+  "id": "29801248-b4b3-4b69-b86d-d5a8ef9248bc",
+  "object": "chat.completion",
+  "created": 1785623536,
+  "model": "deepseek-v4-flash",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "{\"review_plan\":\"Reviewed authentication and database modules in detail, focusing on security, data integrity, and error handling.\",\"verdict\":\"changes\",\"findings\":["
+      },
+      "logprobs": null,
+      "finish_reason": "length"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 96,
+    "completion_tokens": 33,
+    "total_tokens": 129,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "prompt_cache_hit_tokens": 0,
+    "prompt_cache_miss_tokens": 96
+  },
+  "system_fingerprint": "fp_a18b46594c_prod0820_fp8_kvcache_20260402"
+}
