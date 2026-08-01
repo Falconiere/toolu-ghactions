@@ -141,6 +141,10 @@ describe("Verdict schema", () => {
 describe("normalizeVerdict", () => {
   it("maps the aliases models reach for onto the two enum values", () => {
     expect(normalizeVerdict("approved")).toBe("approved");
+    // Case is normalized away, so an all-caps enum value still maps — worth pinning
+    // explicitly, since "APPROVED" is a valid verdict the strict schema would reject.
+    expect(normalizeVerdict("APPROVED")).toBe("approved");
+    expect(normalizeVerdict("Changes")).toBe("changes");
     expect(normalizeVerdict("LGTM")).toBe("approved");
     expect(normalizeVerdict("Approve")).toBe("approved");
     expect(normalizeVerdict("request_changes")).toBe("changes");

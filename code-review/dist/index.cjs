@@ -38594,6 +38594,11 @@ var PartialVerdict = external_exports.object({
   // Decorative fields: `.catch` drops a wrong-typed value (models routinely emit null
   // here) instead of failing the parse, which would sink a recovery over prose.
   review_plan: external_exports.string().optional().catch(void 0),
+  // `unknown` with NO `.catch`, deliberately — do not "fix" this to match its neighbours.
+  // The whole point of recovery is to rescue an off-enum verdict ("request_changes"),
+  // so the value must reach {@link normalizeVerdict} intact; it accepts any type and
+  // returns null when unmappable. A `.catch` here would silently discard exactly the
+  // strings recovery exists to map.
   verdict: external_exports.unknown().optional(),
   // NOT caught, deliberately: findings is load-bearing. A `findings` that is not an
   // array must fail the whole recovery, because silently reading it as "no findings"
@@ -39370,7 +39375,8 @@ function recover(err) {
   const dropped = raw.length - findings.length;
   const truncated = isLengthTruncation(err);
   if (truncated && findings.length === 0) return null;
-  const verdict = findings.length > 0 ? "changes" : normalizeVerdict(loose.data.verdict);
+  const stated = normalizeVerdict(loose.data.verdict);
+  const verdict = truncated ? "changes" : stated ?? (findings.length > 0 ? "changes" : null);
   if (verdict === null) return null;
   if (findings.length === 0 && dropped > 0) return null;
   const result = {
