@@ -117,7 +117,7 @@ model id (no vendor prefix):
 
 `PROVIDER: deepseek` hits `api.deepseek.com` directly (lower cost, direct billing).
 `MODEL_ID` takes a **native** DeepSeek model id (no vendor prefix) and defaults to
-`deepseek-v4-flash` (non-thinking, fast, 1M context) when omitted. `API_KEY` is your
+`deepseek-v4-flash` (fast, 1M context) when omitted. `API_KEY` is your
 DeepSeek key — here `${{ secrets.DEEPSEEK_API_KEY }}` is just the name of *your*
 GitHub repo secret, passed into the single `API_KEY` input.
 
@@ -198,9 +198,19 @@ folds them into the prompt (see [Project conventions](#project-conventions)).
 `PROVIDER` backend — OpenRouter or native DeepSeek) via
 the Vercel AI SDK (`generateObject` + a Zod verdict schema) against the full
 8-dimension checklist (the 8th, convention adherence, applies only when project
-rules were found). Output is structured with automatic retries; reasoning is off.
-An empty or unparseable response after retries surfaces an `error` verdict
-carrying the finish reason — never a silent null.
+rules were found). Output is structured with automatic retries; reasoning is off on
+both backends (`reasoning: {effort: "none"}` on OpenRouter, `thinking: {type:
+"disabled"}` on native DeepSeek) — it is billed against `MAX_TOKENS`, so a thinking
+model spends the budget before emitting any JSON.
+
+A response the schema rejects is not thrown away on sight: the findings completed
+before a truncation cut are salvaged, and a complete response that merely deviates
+(`"request_changes"` for the verdict, a quoted line number, `"CRITICAL"` for a
+severity) is normalized back onto the schema. Normalization never invents a value —
+whatever is still invalid is dropped per-finding and the review is marked partial.
+When nothing trustworthy survives, an empty or unparseable response surfaces an
+`error` verdict carrying the finish reason — never a silent null, and never a clean
+review over findings that had to be dropped.
 
 **4 — Validate & anchor.** Findings are checked against the diff — hallucinated
 line numbers and low-confidence findings are dropped, findings are deduplicated by
