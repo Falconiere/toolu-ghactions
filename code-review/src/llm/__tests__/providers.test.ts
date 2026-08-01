@@ -7,6 +7,7 @@ import {
   SUPPORTED_PROVIDERS,
   defaultModelFor,
   isSupportedProvider,
+  providerOptionsFor,
   resolveModel,
 } from "@/llm/providers.js";
 
@@ -30,5 +31,16 @@ describe("provider factory", () => {
       const model = resolveModel({ provider, model: id, apiKey: "sk-test" });
       expect(model.modelId).toBe(id);
     }
+  });
+
+  // Native DeepSeek turns thinking off through per-CALL providerOptions rather than the
+  // client-level extraBody OpenRouter uses, so this is the only provider knowledge that
+  // does NOT travel inside the model object. deepseek.test.ts proves it reaches the wire;
+  // this pins the mapping itself, including the openrouter branch returning nothing.
+  it("returns the thinking-off options for native DeepSeek and none for OpenRouter", () => {
+    expect(providerOptionsFor("deepseek")).toEqual({
+      deepseek: { thinking: { type: "disabled" } },
+    });
+    expect(providerOptionsFor("openrouter")).toBeUndefined();
   });
 });
