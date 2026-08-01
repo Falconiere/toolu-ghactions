@@ -9,7 +9,7 @@
 // (the prior bug — every provider hit OpenRouter regardless of the `provider` field).
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { createDeepSeek } from "@ai-sdk/deepseek";
-import type { LanguageModel } from "ai";
+import type { LanguageModel, ProviderMetadata } from "ai";
 
 /** Providers with a real native backend wired in this action. */
 export type ProviderId = "openrouter" | "deepseek";
@@ -29,8 +29,9 @@ export function isSupportedProvider(s: string): s is ProviderId {
 const DEFAULT_MODEL: Record<ProviderId, string> = {
   // OpenRouter id (slash namespace): 1M context, 384k output, structured-output capable.
   openrouter: "deepseek/deepseek-v4-pro",
-  // Native DeepSeek id (no namespace): deepseek-v4-flash is non-thinking, fast, cheap,
-  // 1M context. deepseek-chat/deepseek-reasoner are deprecated (2026-07-24) — don't use.
+  // Native DeepSeek id (no namespace): fast, cheap, 1M context. NOT non-thinking by
+  // default — see DEEPSEEK_PROVIDER_OPTIONS. deepseek-chat/deepseek-reasoner are
+  // deprecated (2026-07-24) — don't use.
   deepseek: "deepseek-v4-flash",
 };
 
@@ -51,6 +52,33 @@ const OPENROUTER_EXTRA_BODY = {
   // Require the upstream provider to honor the structured-output parameters.
   provider: { require_parameters: true },
 } as const;
+
+/**
+ * Native-DeepSeek request-body extras, forwarded through the AI SDK's `providerOptions`
+ * (the openai-compatible layer spreads `providerOptions.deepseek` verbatim into the
+ * chat-completions body, so this arrives as a top-level `thinking` field).
+ *
+ * WHY: thinking is ENABLED BY DEFAULT on api.deepseek.com — for deepseek-v4-flash as
+ * well as -pro — and reasoning tokens are billed against `max_tokens`. A review that
+ * reasons past the budget therefore returns finish_reason "length" with EMPTY content
+ * and no JSON at all, which generateObject reports as "could not parse the response"
+ * and reviewWithModel can neither salvage nor escalate (a bigger budget just buys more
+ * hidden reasoning). Every chunk of every PR failed that way. Disabling thinking is the
+ * native equivalent of OpenRouter's `reasoning: { effort: "none" }` above.
+ */
+const DEEPSEEK_PROVIDER_OPTIONS: ProviderMetadata = {
+  deepseek: { thinking: { type: "disabled" } },
+};
+
+/**
+ * The `providerOptions` to pass to generateObject for a provider, or undefined when it
+ * needs none. Keeps provider-specific request knowledge in this module even though
+ * providerOptions is a per-CALL argument (unlike OpenRouter's extraBody, which the
+ * factory can bake into the client).
+ */
+export function providerOptionsFor(provider: ProviderId): ProviderMetadata | undefined {
+  return provider === "deepseek" ? DEEPSEEK_PROVIDER_OPTIONS : undefined;
+}
 
 /** Options for {@link resolveModel}: resolved provider, model id, key, and a test fetch. */
 export interface ResolveModelOptions {
@@ -77,9 +105,10 @@ export function resolveModel(opts: ResolveModelOptions): LanguageModel {
     case "openrouter":
       return createOpenRouter({ apiKey, ...fetchOpt, extraBody: OPENROUTER_EXTRA_BODY })(model);
     case "deepseek":
-      // No extraBody: the native API rejects OpenRouter's reasoning/provider fields, and
-      // deepseek-v4-flash is non-thinking by default (no reasoning to disable). The SDK
-      // sends response_format:{type:"json_object"} for mode:"json" — DeepSeek-compatible.
+      // No extraBody: the native API rejects OpenRouter's reasoning/provider fields. Its
+      // own reasoning switch rides on the CALL instead, via providerOptionsFor("deepseek")
+      // — createDeepSeek exposes no extraBody hook. The SDK sends
+      // response_format:{type:"json_object"} for mode:"json" — DeepSeek-compatible.
       return createDeepSeek({ apiKey, ...fetchOpt })(model);
     default:
       // Exhaustiveness backstop: a new ProviderId without a branch is a compile error.
