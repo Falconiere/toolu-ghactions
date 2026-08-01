@@ -145,6 +145,34 @@ describe("reviewWithModel", () => {
     expect(result.finishReason).toBeUndefined();
   });
 
+  it("recovers when the decorative fields come back null, not just the verdict", async () => {
+    // deepseek-null-fields.json is a REAL recorded completion that pairs an off-enum
+    // verdict with `null` for review_plan/other_checks/top_must_fix — a routine model
+    // output. Those three are prose and a hint list; a wrong type in any of them must
+    // not sink the recovery of a perfectly good finding.
+    const result = await reviewWithModel(ENVELOPE, {
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      apiKey: "sk-test",
+      fetch: replayFetch(fixture("deepseek-null-fields")),
+      maxRetries: 0,
+      maxAttempts: 1,
+    });
+
+    expect(result.verdict).toBe("changes");
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]?.path).toBe("src/auth.ts");
+    expect(result.findings[0]?.line).toBe(88);
+    expect(result.findings[0]?.severity).toBe("high");
+    expect(result.findings[0]?.text).toBe("Session token logged in plaintext.");
+    // Nulls become the empty defaults, and nothing was lost — so NOT a partial review.
+    expect(result.review_plan).toBe("");
+    expect(result.other_checks).toBe("");
+    expect(result.top_must_fix).toEqual([]);
+    expect(result.partial).toBeUndefined();
+    expect(result.error).toBeUndefined();
+  });
+
   it("abstains rather than reporting a clean review when every finding is dropped", async () => {
     // The honesty guard on recovery. deepseek-unusable-findings.json is a REAL recorded
     // completion that says verdict "approved" while carrying a finding with no path, no

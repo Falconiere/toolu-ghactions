@@ -1,0 +1,28 @@
+{
+  "id": "17154cc3-8ae0-4599-9322-5a887f59c0e0",
+  "object": "chat.completion",
+  "created": 1785622859,
+  "model": "deepseek-v4-flash",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "{\"review_plan\":null,\"verdict\":\"request_changes\",\"findings\":[{\"path\":\"src/auth.ts\",\"line\":88,\"severity\":\"high\",\"text\":\"Session token logged in plaintext.\"}],\"other_checks\":null,\"top_must_fix\":null}"
+      },
+      "logprobs": null,
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 108,
+    "completion_tokens": 58,
+    "total_tokens": 166,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "prompt_cache_hit_tokens": 0,
+    "prompt_cache_miss_tokens": 108
+  },
+  "system_fingerprint": "fp_a18b46594c_prod0820_fp8_kvcache_20260402"
+}

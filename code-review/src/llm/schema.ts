@@ -85,11 +85,16 @@ export const Verdict = z.object({
  * `verdict` through {@link normalizeVerdict}.
  */
 export const PartialVerdict = z.object({
-  review_plan: z.string().optional(),
+  // Decorative fields: `.catch` drops a wrong-typed value (models routinely emit null
+  // here) instead of failing the parse, which would sink a recovery over prose.
+  review_plan: z.string().optional().catch(undefined),
   verdict: z.unknown().optional(),
+  // NOT caught, deliberately: findings is load-bearing. A `findings` that is not an
+  // array must fail the whole recovery, because silently reading it as "no findings"
+  // would turn defects the model DID raise into a clean review.
   findings: z.array(z.unknown()).optional(),
-  other_checks: z.string().optional(),
-  top_must_fix: z.array(z.unknown()).optional(),
+  other_checks: z.string().optional().catch(undefined),
+  top_must_fix: z.array(z.unknown()).optional().catch(undefined),
 });
 
 /**
