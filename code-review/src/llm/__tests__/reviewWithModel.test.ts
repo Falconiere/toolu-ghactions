@@ -196,6 +196,26 @@ describe("reviewWithModel", () => {
     expect(result.error).toBeUndefined();
   });
 
+  it("abstains on a complete response whose verdict is unrecognizable and findings empty", async () => {
+    // deepseek-unrecognizable-verdict.json is a REAL recorded completion that answers
+    // verdict "unsure" with no findings. Nothing was dropped, so the all-dropped guard
+    // does not apply, and it is not truncated — the ONLY thing standing between this and
+    // a fabricated verdict is normalizeVerdict returning null. Recovery must not guess:
+    // neither "approved" (a clean review the model never gave) nor "changes".
+    const result = await reviewWithModel(ENVELOPE, {
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      apiKey: "sk-test",
+      fetch: replayFetch(fixture("deepseek-unrecognizable-verdict")),
+      maxRetries: 0,
+      maxAttempts: 1,
+    });
+
+    expect(result.verdict).toBe("error");
+    expect(result.findings).toEqual([]);
+    expect(result.partial).toBeUndefined();
+  });
+
   it("abstains rather than reporting a clean review when every finding is dropped", async () => {
     // The honesty guard on recovery. deepseek-unusable-findings.json is a REAL recorded
     // completion that says verdict "approved" while carrying a finding with no path, no

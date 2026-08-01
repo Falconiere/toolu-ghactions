@@ -16,9 +16,13 @@ import { Finding, PartialVerdict, normalizeFinding, normalizeVerdict } from "./s
 import type { ProviderResult } from "./reviewWithModel.js";
 
 /**
- * True when generateObject failed because the model hit the output-token limit
- * mid-JSON (finish_reason "length"): the truncated response cannot be parsed.
- * Distinct from empty content / schema mismatch — those keep finishReason "stop".
+ * True when the model stopped because it hit the output-token limit (finish_reason
+ * "length"). That covers TWO different failures, so this predicate alone never
+ * decides anything: a real mid-JSON truncation (partial text present) and the
+ * hidden-reasoning bug (no text at all — the budget went to thinking). Pair it with
+ * {@link hasPartialOutput}, which is the actual discriminator: presence of text, not
+ * the finish reason. A schema mismatch is the separable case — that one does keep
+ * finishReason "stop".
  */
 export function isLengthTruncation(err: unknown): boolean {
   return NoObjectGeneratedError.isInstance(err) && err.finishReason === "length";
@@ -50,9 +54,10 @@ export function hasPartialOutput(err: unknown): boolean {
  *   those back onto the enums WITHOUT inventing data; whatever is still invalid is
  *   dropped per-finding.
  *
- * Returns null when nothing trustworthy survives — no finding AND no recognizable
- * verdict, or an "approved" that would paper over findings we had to drop. The caller
- * then abstains, which is the honest outcome.
+ * Returns null when nothing trustworthy survives, in any of three ways: a truncation
+ * that cut before the first finding closed (its `[]` means unknown, not clean), no
+ * finding AND no recognizable verdict, or an "approved" that would paper over findings
+ * we had to drop. The caller then abstains, which is the honest outcome.
  */
 export function recover(err: unknown): ProviderResult | null {
   if (!NoObjectGeneratedError.isInstance(err) || typeof err.text !== "string") return null;

@@ -1,0 +1,28 @@
+{
+  "id": "9f708979-5e51-44e1-8579-96dc59247a3f",
+  "object": "chat.completion",
+  "created": 1785624102,
+  "model": "deepseek-v4-flash",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "{\"review_plan\":\"Skimmed the diff but could not reach a conclusion.\",\"verdict\":\"unsure\",\"findings\":[],\"other_checks\":\"none\",\"top_must_fix\":[]}"
+      },
+      "logprobs": null,
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 93,
+    "completion_tokens": 43,
+    "total_tokens": 136,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "prompt_cache_hit_tokens": 0,
+    "prompt_cache_miss_tokens": 93
+  },
+  "system_fingerprint": "fp_a18b46594c_prod0820_fp8_kvcache_20260402"
+}
