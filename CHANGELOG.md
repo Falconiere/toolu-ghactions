@@ -1,5 +1,17 @@
 # Changelog
 
+## [6.5.3](https://github.com/Falconiere/toolu-ghactions/compare/v6.5.2...v6.5.3) (2026-08-01)
+
+
+### Bug Fixes
+
+* **code-review:** address PR review feedback ([fdf69a8](https://github.com/Falconiere/toolu-ghactions/commit/fdf69a8d511d8619bf2d03275bed66cbddd8a14d))
+* **code-review:** disable DeepSeek thinking so reviews aren't empty ([3f152bc](https://github.com/Falconiere/toolu-ghactions/commit/3f152bcca667d9cb49ebe105cf149918900a6639))
+* **code-review:** don't recover a truncated pass with zero findings ([4a2c83a](https://github.com/Falconiere/toolu-ghactions/commit/4a2c83a02752f9ab668f897b14b2da85b3c47b4a))
+* **code-review:** keep a complete response's approved verdict through recovery ([0061fcc](https://github.com/Falconiere/toolu-ghactions/commit/0061fcc7b427ea5f5cae5bde240be4388042256f))
+* **code-review:** recover a review whose decorative fields came back null ([e53853d](https://github.com/Falconiere/toolu-ghactions/commit/e53853d6aaaf4433c579310690bb04098a20bafa))
+* **code-review:** recover an off-schema review instead of discarding it ([204b997](https://github.com/Falconiere/toolu-ghactions/commit/204b997826d3ba2e0ecb6dfb60aaa80228eb59cc))
+
 ## [6.5.2](https://github.com/Falconiere/toolu-ghactions/compare/v6.5.1...v6.5.2) (2026-07-30)
 
 
