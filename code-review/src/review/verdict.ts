@@ -98,6 +98,9 @@ export function formatVerdict(
       result.error !== undefined && result.error !== ""
         ? result.error + (result.finishReason ? ` [finish_reason: ${result.finishReason}]` : "")
         : "",
+    // "LLM judgment unavailable" keys off the RESOLVED verdict, not errorDetail: a
+    // recovered truncation sets `error` while still delivering findings + a verdict.
+    llmErrored: verdict === "error",
     header,
     branch: opts.branch ?? "unknown",
     jobUrl: opts.jobUrl ?? "https://github.com",
