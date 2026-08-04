@@ -25,6 +25,13 @@ export interface ReviewBody {
   verdictBadge: string;
   /** Provider error detail shown under the verdict when the review errored ("" → omit). */
   errorDetail: string;
+  /**
+   * True ONLY when the resolved verdict is "error" (the LLM abstained — no judgment).
+   * NOT derivable from errorDetail: a recovered truncation / partly-failed chunked
+   * review sets errorDetail while still delivering findings and a real verdict, and
+   * rendering "LLM judgment unavailable" over a findings list is a lie.
+   */
+  llmErrored: boolean;
   /** The header line ("**AI Code Review finished …** —— [View job](url)"). */
   header: string;
   /** Branch name shown in the Code Review heading. */
@@ -79,8 +86,13 @@ export function renderBody(body: ReviewBody, findingsSection: string): string {
   main += buildChecklist(body);
   main += `**Verdict:** ${body.verdictBadge}   ${buildSeveritySummary(body.findings)}`;
   // Surface the real provider-error message (not just the generic badge) so a failed
-  // review is diagnosable from the comment alone.
-  if (body.errorDetail !== "") main += `\n\n> ⚠️ **Provider error:** ${body.errorDetail}`;
+  // review is diagnosable from the comment alone. Label honestly: "Provider error"
+  // only when the LLM actually abstained; a recovered/partly-failed review that still
+  // produced a verdict is a "Partial review", not an error.
+  if (body.errorDetail !== "") {
+    const label = body.llmErrored ? "Provider error" : "Partial review";
+    main += `\n\n> ⚠️ **${label}:** ${body.errorDetail}`;
+  }
   // The MAX_ROUNDS surrender is a verdict override — say so right under the verdict
   // so an auto-approved round is never mistaken for a clean review.
   if (body.capNote !== "") main += `\n\n> 🔁 **Round cap:** ${body.capNote}`;
@@ -95,7 +107,7 @@ export function renderBody(body: ReviewBody, findingsSection: string): string {
   // Findings is unconditional: parse-verdict.sh extracts findings from this exact block.
   section += `### Findings (${body.findings.length})\n\n`;
   section += `${findingsSection}\n\n`;
-  section += buildMechanicalSection(body.mechanical, body.errorDetail !== "");
+  section += buildMechanicalSection(body.mechanical, body.llmErrored);
   if (body.otherChecks !== "") section += `### Other checks\n${body.otherChecks}\n\n`;
   // Top-N renders ONLY from the model's explicit list — it is no longer auto-generated
   // from findings (that was a verbatim duplicate of the severity-sorted Findings list).

@@ -270,7 +270,41 @@ describe("formatVerdict — mechanical findings + graceful degradation", () => {
     const { body, label } = formatVerdict(result, { mechanical: [secret] });
     expect(body).toContain("### Mechanical checks");
     expect(body).toContain("LLM judgment unavailable");
+    expect(body).toContain("**Provider error:**"); // a real abstain keeps the error label
     expect(label).toBe("request-changes"); // error still fails-safe to do-not-merge
+  });
+
+  it("on LLM error with NO mechanical findings, says judgment is unavailable", () => {
+    const result: ProviderResult = { verdict: "error", findings: [], error: "boom" };
+    const { body } = formatVerdict(result, {});
+    expect(body).toContain("LLM judgment unavailable");
+  });
+
+  it("a recovered partial review is NOT 'LLM judgment unavailable' (toolu-conventions#3 regression)", () => {
+    // Replays the real failure: a chunked review where 1/3 chunks truncated — merge.ts
+    // sets `error` + `partial` but the verdict is "changes" WITH findings. The comment
+    // rendered "LLM judgment unavailable — no deterministic findings either." directly
+    // under 6 LLM findings, because llmErrored was derived from errorDetail != "".
+    const result: ProviderResult = {
+      verdict: "changes",
+      findings: [
+        { path: "docs/conventions.html", line: 1124, severity: "high", text: "broken link" },
+      ],
+      review_plan: "",
+      other_checks: "",
+      top_must_fix: [],
+      partial: true,
+      error:
+        "1/3 chunks truncated at the output-token limit — recovered the findings " +
+        "completed before the cut; later findings may be missing. Raise MAX_TOKENS to avoid.",
+      finishReason: "length",
+    };
+    const { body, label } = formatVerdict(result, {});
+    expect(body).not.toContain("LLM judgment unavailable");
+    // The truncation is still surfaced — as a partial-review note, not a provider error.
+    expect(body).toContain("**Partial review:**");
+    expect(body).toContain("1/3 chunks truncated");
+    expect(label).toBe("request-changes");
   });
 });
 

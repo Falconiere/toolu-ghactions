@@ -39849,9 +39849,12 @@ function renderBody(body, findingsSection) {
 `;
   main2 += buildChecklist(body);
   main2 += `**Verdict:** ${body.verdictBadge}   ${buildSeveritySummary(body.findings)}`;
-  if (body.errorDetail !== "") main2 += `
+  if (body.errorDetail !== "") {
+    const label = body.llmErrored ? "Provider error" : "Partial review";
+    main2 += `
 
-> \u26A0\uFE0F **Provider error:** ${body.errorDetail}`;
+> \u26A0\uFE0F **${label}:** ${body.errorDetail}`;
+  }
   if (body.capNote !== "") main2 += `
 
 > \u{1F501} **Round cap:** ${body.capNote}`;
@@ -39870,7 +39873,7 @@ ${body.reviewPlan}
   section += `${findingsSection}
 
 `;
-  section += buildMechanicalSection(body.mechanical, body.errorDetail !== "");
+  section += buildMechanicalSection(body.mechanical, body.llmErrored);
   if (body.otherChecks !== "") section += `### Other checks
 ${body.otherChecks}
 
@@ -40187,6 +40190,9 @@ function formatVerdict(result, opts) {
     // Surface the real error + the model's finish_reason when present, so a parse
     // failure ("could not parse") is distinguishable from output truncation ("length").
     errorDetail: result.error !== void 0 && result.error !== "" ? result.error + (result.finishReason ? ` [finish_reason: ${result.finishReason}]` : "") : "",
+    // "LLM judgment unavailable" keys off the RESOLVED verdict, not errorDetail: a
+    // recovered truncation sets `error` while still delivering findings + a verdict.
+    llmErrored: verdict === "error",
     header,
     branch: opts.branch ?? "unknown",
     jobUrl: opts.jobUrl ?? "https://github.com",
