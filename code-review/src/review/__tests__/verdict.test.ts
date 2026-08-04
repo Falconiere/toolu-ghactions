@@ -280,6 +280,28 @@ describe("formatVerdict — mechanical findings + graceful degradation", () => {
     expect(body).toContain("LLM judgment unavailable");
   });
 
+  it("a recovered partial review WITH mechanical findings keeps the tool counts, no 'unavailable' note", () => {
+    // The fourth cell of the llmErrored × mechanical matrix: LLM partially succeeded
+    // AND deterministic findings exist. The Mechanical-checks section must render its
+    // per-tool count line WITHOUT the "LLM judgment unavailable" suffix — judgment was
+    // delivered — while the truncation still surfaces as the Partial-review callout.
+    const result: ProviderResult = {
+      verdict: "changes",
+      findings: [{ path: "src/a.ts", line: 5, severity: "high", text: "bug" }],
+      review_plan: "",
+      other_checks: "",
+      top_must_fix: [],
+      partial: true,
+      error: "output truncated at the token limit — recovered 1 finding(s).",
+      finishReason: "length",
+    };
+    const { body } = formatVerdict(result, { mechanical: [secret] });
+    expect(body).toContain("### Mechanical checks");
+    expect(body).toContain("1 gitleaks");
+    expect(body).not.toContain("LLM judgment unavailable");
+    expect(body).toContain("**Partial review:**");
+  });
+
   it("a recovered partial review is NOT 'LLM judgment unavailable' (toolu-conventions#3 regression)", () => {
     // Replays the real failure: a chunked review where 1/3 chunks truncated — merge.ts
     // sets `error` + `partial` but the verdict is "changes" WITH findings. The comment
