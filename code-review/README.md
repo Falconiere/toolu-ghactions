@@ -208,6 +208,10 @@ before a truncation cut are salvaged, and a complete response that merely deviat
 (`"request_changes"` for the verdict, a quoted line number, `"CRITICAL"` for a
 severity) is normalized back onto the schema. Normalization never invents a value —
 whatever is still invalid is dropped per-finding and the review is marked partial.
+A partial review surfaces in the verdict comment as a "⚠️ **Partial review**" note
+under the verdict saying what was lost — the "Provider error" wording (and the
+"LLM judgment unavailable" note) is reserved for a review where the LLM delivered
+no judgment at all.
 When nothing trustworthy survives, an empty or unparseable response surfaces an
 `error` verdict carrying the finish reason — never a silent null, and never a clean
 review over findings that had to be dropped.
