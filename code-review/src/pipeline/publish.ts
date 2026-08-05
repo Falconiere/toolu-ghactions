@@ -29,6 +29,7 @@ import { jobUrl, formatDuration } from "./bodies.js";
 import type { StampedFinding } from "./reviewCall.js";
 import type { GithubContext, PipelineOctokit, ReviewResult } from "./types.js";
 import { reportRun } from "@/report/report-run.js";
+import * as core from "@actions/core";
 
 /** Repo + PR + head coordinates for every publish operation. */
 export interface PublishTarget {
@@ -216,7 +217,18 @@ export async function publish(input: PublishInput): Promise<ReviewResult> {
     ? await postInline(input, findings)
     : { toCreate: [], toReply: [], toResolve: [] };
   // AFTER postInline — ordering is load-bearing, see report/report-run.ts's doc.
-  await reportRun({ input, applied, findings, suppressed, verdict, capped });
+  // reportRun() wraps its whole body in try/catch and is documented to never
+  // reject; this .catch is a last-resort guard against a future refactor of
+  // reportRun reintroducing a throw and silently turning a metrics hiccup into
+  // a red CI run. Matches reportRun's own failure format — exactly one
+  // core.warning, never core.setFailed.
+  await reportRun({ input, applied, findings, suppressed, verdict, capped }).catch(
+    (err: unknown) => {
+      core.warning(
+        `Review-run reporting failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    },
+  );
   return { verdict, findingsCount: findings.length, commentUrl };
 }
 
