@@ -61,9 +61,9 @@ export function enrichFromPrior(thread: PriorThread, prior: ReviewState | null):
     fp: thread.fp,
     path: thread.path,
     line: thread.line,
-    severity: isSeverity(match?.["severity"]) ? match["severity"] : undefined,
-    category: typeof match?.["category"] === "string" ? match["category"] : undefined,
-    source: isSource(match?.["source"]) ? match["source"] : undefined,
+    severity: isSeverity(match?.severity) ? match.severity : undefined,
+    category: typeof match?.category === "string" ? match.category : undefined,
+    source: isSource(match?.source) ? match.source : undefined,
   };
 }
 

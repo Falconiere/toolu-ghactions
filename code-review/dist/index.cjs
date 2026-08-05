@@ -19739,10 +19739,10 @@ Support boolean input list: \`true | True | TRUE | false | False | FALSE\``);
       (0, command_1.issueCommand)("error", (0, utils_1.toCommandProperties)(properties), message instanceof Error ? message.toString() : message);
     }
     exports2.error = error;
-    function warning4(message, properties = {}) {
+    function warning5(message, properties = {}) {
       (0, command_1.issueCommand)("warning", (0, utils_1.toCommandProperties)(properties), message instanceof Error ? message.toString() : message);
     }
-    exports2.warning = warning4;
+    exports2.warning = warning5;
     function notice(message, properties = {}) {
       (0, command_1.issueCommand)("notice", (0, utils_1.toCommandProperties)(properties), message instanceof Error ? message.toString() : message);
     }
@@ -24136,7 +24136,7 @@ var require_fast_content_type_parse = __commonJS({
 });
 
 // src/main.ts
-var core4 = __toESM(require_core(), 1);
+var core5 = __toESM(require_core(), 1);
 var github = __toESM(require_github(), 1);
 
 // src/inputs.ts
@@ -40536,9 +40536,9 @@ function enrichFromPrior(thread, prior) {
     fp: thread.fp,
     path: thread.path,
     line: thread.line,
-    severity: isSeverity(match?.["severity"]) ? match["severity"] : void 0,
-    category: typeof match?.["category"] === "string" ? match["category"] : void 0,
-    source: isSource(match?.["source"]) ? match["source"] : void 0
+    severity: isSeverity(match?.severity) ? match.severity : void 0,
+    category: typeof match?.category === "string" ? match.category : void 0,
+    source: isSource(match?.source) ? match.source : void 0
   };
 }
 function resolveSuppressed(suppressed, priorThreads, resolvedThreadIds) {
@@ -40848,6 +40848,7 @@ async function reportRun(params) {
 }
 
 // src/pipeline/publish.ts
+var core4 = __toESM(require_core(), 1);
 function settleVerdict(input) {
   const scoped = dropOutOfScope(
     input.stamped,
@@ -40943,7 +40944,13 @@ async function publish(input) {
   const commentUrl = await upsertComment(octokit, target, body, input.stickyId);
   await setVerdictLabel(octokit, verdict, target, { manageLabels: inputs.manageLabels });
   const applied = inputs.inlineComments ? await postInline(input, findings) : { toCreate: [], toReply: [], toResolve: [] };
-  await reportRun({ input, applied, findings, suppressed, verdict, capped });
+  await reportRun({ input, applied, findings, suppressed, verdict, capped }).catch(
+    (err) => {
+      core4.warning(
+        `Review-run reporting failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  );
   return { verdict, findingsCount: findings.length, commentUrl };
 }
 async function postInline(input, findings) {
@@ -45151,7 +45158,7 @@ async function resolveToken(inputs) {
     })
   }).catch(() => null);
   if (minted) {
-    core4.info("Using GitHub App identity for PR comments");
+    core5.info("Using GitHub App identity for PR comments");
     return minted;
   }
   return inputs.token;
@@ -45212,27 +45219,27 @@ async function main() {
       // The composite SAST steps write gitleaks/opengrep SARIF here; the pipeline reads it.
       ...process.env["TOOLU_SARIF_DIR"] ? { sarifDir: process.env["TOOLU_SARIF_DIR"] } : {}
     });
-    core4.setOutput("verdict", result.verdict);
-    core4.setOutput("findings-count", result.findingsCount);
-    core4.setOutput("comment-url", result.commentUrl);
-    core4.info(
+    core5.setOutput("verdict", result.verdict);
+    core5.setOutput("findings-count", result.findingsCount);
+    core5.setOutput("comment-url", result.commentUrl);
+    core5.info(
       `Review complete: ${result.verdict} (${result.findingsCount} findings) \u2014 ${result.commentUrl}`
     );
     if (shouldBlock(result.verdict, inputs.failOn)) {
-      core4.setFailed(
+      core5.setFailed(
         `Code review verdict '${result.verdict}' is in FAIL_ON \u2014 failing the job (the review was still posted). Set FAIL_ON: none to keep the review advisory.`
       );
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    core4.setOutput("verdict", "error");
-    core4.setOutput("findings-count", 0);
+    core5.setOutput("verdict", "error");
+    core5.setOutput("findings-count", 0);
     const url = await postErrorComment(octokit, message).catch(() => "");
-    if (url !== "") core4.setOutput("comment-url", url);
-    core4.setFailed(`AI Code Review failed: ${message}`);
+    if (url !== "") core5.setOutput("comment-url", url);
+    core5.setFailed(`AI Code Review failed: ${message}`);
   }
 }
 main().catch((err) => {
-  core4.setOutput("verdict", "error");
-  core4.setFailed(err instanceof Error ? err.stack ?? err.message : String(err));
+  core5.setOutput("verdict", "error");
+  core5.setFailed(err instanceof Error ? err.stack ?? err.message : String(err));
 });
