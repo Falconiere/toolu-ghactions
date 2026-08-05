@@ -57,13 +57,21 @@ export function pickMetadata(f: StampedFinding): ReportedFinding {
  */
 export function enrichFromPrior(thread: PriorThread, prior: ReviewState | null): ReportedFinding {
   const match = prior?.findings.find((f) => f.fp === thread.fp);
+  // Bind each field to a local before guarding it. `Finding` reaches these
+  // through an index signature, so they arrive as `unknown`; narrowing a local
+  // is what carries the guard's result into the returned value, instead of
+  // re-reading the property in the true branch and trusting that the narrowing
+  // followed the second access.
+  const severity = match?.severity;
+  const category = match?.category;
+  const source = match?.source;
   return {
     fp: thread.fp,
     path: thread.path,
     line: thread.line,
-    severity: isSeverity(match?.severity) ? match.severity : undefined,
-    category: typeof match?.category === "string" ? match.category : undefined,
-    source: isSource(match?.source) ? match.source : undefined,
+    severity: isSeverity(severity) ? severity : undefined,
+    category: typeof category === "string" ? category : undefined,
+    source: isSource(source) ? source : undefined,
   };
 }
 

@@ -40532,13 +40532,16 @@ function pickMetadata(f) {
 }
 function enrichFromPrior(thread, prior) {
   const match = prior?.findings.find((f) => f.fp === thread.fp);
+  const severity = match?.severity;
+  const category = match?.category;
+  const source = match?.source;
   return {
     fp: thread.fp,
     path: thread.path,
     line: thread.line,
-    severity: isSeverity(match?.severity) ? match.severity : void 0,
-    category: typeof match?.category === "string" ? match.category : void 0,
-    source: isSource(match?.source) ? match.source : void 0
+    severity: isSeverity(severity) ? severity : void 0,
+    category: typeof category === "string" ? category : void 0,
+    source: isSource(source) ? source : void 0
   };
 }
 function resolveSuppressed(suppressed, priorThreads, resolvedThreadIds) {
