@@ -1,5 +1,18 @@
 # Changelog
 
+## [6.6.0](https://github.com/Falconiere/toolu-ghactions/compare/v6.5.4...v6.6.0) (2026-08-05)
+
+
+### Features
+
+* **code-review:** report review runs to the toolu.sh platform ([1d522e8](https://github.com/Falconiere/toolu-ghactions/commit/1d522e859f2b097ddccc7a3fadfe4b446465f9a7))
+
+
+### Bug Fixes
+
+* **code-review:** address PR review feedback ([9ac59f2](https://github.com/Falconiere/toolu-ghactions/commit/9ac59f20cbfc6fa4303b7f607531bdae15b58bf0))
+* **code-review:** bind enrichFromPrior's fields before guarding them ([466321b](https://github.com/Falconiere/toolu-ghactions/commit/466321b1af4938239673897e0ad7ad65267df976))
+
 ## [6.5.4](https://github.com/Falconiere/toolu-ghactions/compare/v6.5.3...v6.5.4) (2026-08-05)
 
 
