@@ -90,6 +90,10 @@ export interface ActionInputs {
   /** Comment verbosity: "compact" (default) collapses the checklist and renders recap
    *  buckets as refs; "full" restores the multi-line checklist and recap text. */
   verbosity: "compact" | "full";
+  /** toolu.sh org API token (`toolu_…`) for review-run reporting; empty disables reporting. */
+  touluApiKey: string;
+  /** Base URL of the toolu.sh API. */
+  touluApiUrl: string;
 }
 
 /**
@@ -279,6 +283,8 @@ export function readInputs(): ActionInputs {
     reviewMemory: readBool("REVIEW_MEMORY", true),
     failOn: parseFailOn(core.getInput("FAIL_ON") || "changes"),
     verbosity: readVerbosity(),
+    touluApiKey: core.getInput("TOOLU_API_KEY").trim(),
+    touluApiUrl: core.getInput("TOOLU_API_URL").trim() || "https://api.toolu.sh",
   };
 }
 

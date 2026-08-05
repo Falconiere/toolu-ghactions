@@ -19739,10 +19739,10 @@ Support boolean input list: \`true | True | TRUE | false | False | FALSE\``);
       (0, command_1.issueCommand)("error", (0, utils_1.toCommandProperties)(properties), message instanceof Error ? message.toString() : message);
     }
     exports2.error = error;
-    function warning3(message, properties = {}) {
+    function warning4(message, properties = {}) {
       (0, command_1.issueCommand)("warning", (0, utils_1.toCommandProperties)(properties), message instanceof Error ? message.toString() : message);
     }
-    exports2.warning = warning3;
+    exports2.warning = warning4;
     function notice(message, properties = {}) {
       (0, command_1.issueCommand)("notice", (0, utils_1.toCommandProperties)(properties), message instanceof Error ? message.toString() : message);
     }
@@ -24136,7 +24136,7 @@ var require_fast_content_type_parse = __commonJS({
 });
 
 // src/main.ts
-var core3 = __toESM(require_core(), 1);
+var core4 = __toESM(require_core(), 1);
 var github = __toESM(require_github(), 1);
 
 // src/inputs.ts
@@ -31401,7 +31401,9 @@ function readInputs() {
     botLogoUrl: core2.getInput("BOT_LOGO_URL") || "https://raw.githubusercontent.com/falconiere/toolu-ghactions/main/code-review/assets/logo.png",
     reviewMemory: readBool("REVIEW_MEMORY", true),
     failOn: parseFailOn(core2.getInput("FAIL_ON") || "changes"),
-    verbosity: readVerbosity()
+    verbosity: readVerbosity(),
+    touluApiKey: core2.getInput("TOOLU_API_KEY").trim(),
+    touluApiUrl: core2.getInput("TOOLU_API_URL").trim() || "https://api.toolu.sh"
   };
 }
 function readBool(name17, fallback) {
@@ -40373,7 +40375,7 @@ async function postInlineReview(octokit, findings, target) {
       return { posted: false, count: 0, reason: "no anchored findings" };
     }
   }
-  const post = async (batch) => {
+  const post2 = async (batch) => {
     const summary = `\u{1F916} AI Code Review \u2014 ${batch.length} inline comment(s). See the summary comment for the full verdict.`;
     const { data } = await octokit.rest.pulls.createReview({
       owner: target.owner,
@@ -40387,14 +40389,14 @@ async function postInlineReview(octokit, findings, target) {
     return { posted: true, count: batch.length, degraded, url: data.html_url };
   };
   try {
-    return await post(comments);
+    return await post2(comments);
   } catch (err) {
     const anyAnchored = comments.some((c) => c.line !== void 0);
     if (anyAnchored) {
       const fileLevel = comments.map(toFileLevel);
       degraded = fileLevel.length;
       try {
-        return await post(fileLevel);
+        return await post2(fileLevel);
       } catch (retryErr) {
         return {
           posted: false,
@@ -40502,6 +40504,349 @@ function dropOutOfScope(findings, scope, priorThreads, priorFindings) {
   return { kept, dropped };
 }
 
+// src/report/report-run.ts
+var core3 = __toESM(require_core(), 1);
+
+// src/report/settlement.ts
+function matchingSettledThreads(f, priorThreads) {
+  return priorThreads.filter(isSettled).filter((t) => matchesSettled(f, t));
+}
+function settlementOf(t) {
+  return t.dismissal ?? "resolved";
+}
+function isSeverity(v) {
+  return v === "blocker" || v === "high" || v === "medium" || v === "low" || v === "nit";
+}
+function isSource(v) {
+  return v === "llm" || v === "gitleaks" || v === "opengrep" || v === "eslint";
+}
+function pickMetadata(f) {
+  return {
+    fp: f.fp,
+    path: f.path,
+    line: f.line,
+    severity: f.severity,
+    category: f.category,
+    source: f.source
+  };
+}
+function enrichFromPrior(thread, prior) {
+  const match = prior?.findings.find((f) => f.fp === thread.fp);
+  return {
+    fp: thread.fp,
+    path: thread.path,
+    line: thread.line,
+    severity: isSeverity(match?.["severity"]) ? match["severity"] : void 0,
+    category: typeof match?.["category"] === "string" ? match["category"] : void 0,
+    source: isSource(match?.["source"]) ? match["source"] : void 0
+  };
+}
+function resolveSuppressed(suppressed, priorThreads, resolvedThreadIds) {
+  const attributions = [];
+  for (const finding of suppressed) {
+    const [thread, second] = matchingSettledThreads(finding, priorThreads);
+    if (!thread) {
+      return {
+        violation: `partitionFindings: no settled prior thread accounts for suppressed finding ${finding.fp}`
+      };
+    }
+    if (second) {
+      return {
+        violation: `partitionFindings: ambiguous settlement for suppressed finding ${finding.fp} \u2014 more than one settled prior thread matches it`
+      };
+    }
+    if (!resolvedThreadIds.has(thread.threadId)) attributions.push({ finding, thread });
+  }
+  return { attributions };
+}
+
+// src/report/partition.ts
+function claim(claimed, fp) {
+  if (claimed.has(fp)) return false;
+  claimed.add(fp);
+  return true;
+}
+function classifySuppressed(attributions, claimed) {
+  const dismissed = [];
+  for (const { finding, thread } of attributions) {
+    if (claim(claimed, finding.fp)) {
+      dismissed.push({ ...pickMetadata(finding), settlement: settlementOf(thread) });
+    }
+  }
+  return dismissed;
+}
+function classifyToResolve(toResolve, prior, claimed) {
+  const dismissed = [];
+  const fixed = [];
+  for (const t of toResolve) {
+    if (t.dismissal !== void 0) {
+      if (claim(claimed, t.fp))
+        dismissed.push({ ...enrichFromPrior(t, prior), settlement: t.dismissal });
+    } else if (claim(claimed, t.fp)) {
+      fixed.push(enrichFromPrior(t, prior));
+    }
+  }
+  return { dismissed, fixed };
+}
+function classifyOpenAndNew(applied, findings, claimed) {
+  const open = [];
+  for (const action of applied.toReply) {
+    if (claim(claimed, action.finding.fp)) open.push(pickMetadata(action.finding));
+  }
+  const created = [];
+  for (const f of applied.toCreate) {
+    if (claim(claimed, f.fp)) created.push(pickMetadata(f));
+  }
+  for (const f of findings) {
+    if (claim(claimed, f.fp)) open.push(pickMetadata(f));
+  }
+  return { open, created };
+}
+function ambiguouslySettledFp(suppressed, priorThreads) {
+  for (const finding of suppressed) {
+    if (matchingSettledThreads(finding, priorThreads).length !== 1) return finding.fp;
+  }
+  return null;
+}
+function isExhaustive(claimed, findings, attributions, toResolve) {
+  const expected = /* @__PURE__ */ new Set([
+    ...findings.map((f) => f.fp),
+    ...attributions.map((a) => a.finding.fp),
+    ...toResolve.map((t) => t.fp)
+  ]);
+  return claimed.size === expected.size && [...expected].every((fp) => claimed.has(fp));
+}
+function reusedThreadId(attributions, applied) {
+  const used = [
+    ...attributions.map((a) => a.thread.threadId),
+    ...applied.toResolve.map((t) => t.threadId),
+    ...applied.toReply.map((r) => r.thread.threadId)
+  ];
+  const seen = /* @__PURE__ */ new Set();
+  for (const id of used) {
+    if (seen.has(id)) return id;
+    seen.add(id);
+  }
+  return null;
+}
+function partitionFindings(input) {
+  const { applied, findings, suppressed, priorThreads, prior } = input;
+  const claimed = /* @__PURE__ */ new Set();
+  const resolvedThreadIds = new Set(applied.toResolve.map((t) => t.threadId));
+  const resolved = resolveSuppressed(suppressed, priorThreads, resolvedThreadIds);
+  if ("violation" in resolved) return { ok: false, reason: resolved.violation };
+  const dismissedFromSuppressed = classifySuppressed(resolved.attributions, claimed);
+  const fromResolve = classifyToResolve(applied.toResolve, prior, claimed);
+  const { open, created } = classifyOpenAndNew(applied, findings, claimed);
+  const ambiguousFp = ambiguouslySettledFp(suppressed, priorThreads);
+  if (ambiguousFp) {
+    return {
+      ok: false,
+      reason: `partitionFindings: ambiguous settlement for suppressed finding ${ambiguousFp} \u2014 more than one settled prior thread matches it`
+    };
+  }
+  if (!isExhaustive(claimed, findings, resolved.attributions, applied.toResolve)) {
+    return {
+      ok: false,
+      reason: "partitionFindings: classified set does not match the expected finding set (exhaustiveness check failed)"
+    };
+  }
+  const reused = reusedThreadId(resolved.attributions, applied);
+  if (reused) {
+    return {
+      ok: false,
+      reason: `partitionFindings: thread ${reused} would be reported in more than one bucket`
+    };
+  }
+  return {
+    ok: true,
+    partitions: {
+      new: created,
+      open,
+      fixed: fromResolve.fixed,
+      dismissed: [...dismissedFromSuppressed, ...fromResolve.dismissed]
+    }
+  };
+}
+
+// src/report/categories.ts
+function canonicalKey(value) {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+var CATEGORY_ALIASES = {
+  // CORRECTNESS
+  correctness: "correctness",
+  bug: "correctness",
+  correctnessbug: "correctness",
+  // SECURITY
+  security: "security",
+  sec: "security",
+  privacy: "security",
+  // PERFORMANCE
+  performance: "performance",
+  perf: "performance",
+  scalability: "performance",
+  // TEST COVERAGE
+  testcoverage: "test-coverage",
+  tests: "test-coverage",
+  test: "test-coverage",
+  coverage: "test-coverage",
+  // DOC/COMMENT ACCURACY
+  doccommentaccuracy: "doc-accuracy",
+  docs: "doc-accuracy",
+  documentation: "doc-accuracy",
+  comment: "doc-accuracy",
+  // TIGHT ASSERTIONS
+  tightassertions: "assertions",
+  assertion: "assertions",
+  assertions: "assertions",
+  // MIGRATION WARNINGS
+  migrationwarnings: "migration",
+  migration: "migration",
+  dbmigration: "migration",
+  // CONVENTION ADHERENCE
+  conventionadherence: "conventions",
+  convention: "conventions",
+  conventions: "conventions",
+  styleguide: "conventions",
+  maintainability: "conventions"
+};
+function normalizeCategory(raw) {
+  if (raw === void 0) return "other";
+  const key = canonicalKey(raw);
+  if (key === "") return "other";
+  return CATEGORY_ALIASES[key] ?? "other";
+}
+
+// src/report/payload.ts
+function buildFinding(f) {
+  const out = { fp: f.fp, path: f.path, line: f.line };
+  if (f.severity !== void 0) {
+    out.severity = f.severity;
+    out.category = normalizeCategory(f.category);
+    out.source = f.source ?? "llm";
+  }
+  return out;
+}
+function buildDismissedFinding(f) {
+  return { ...buildFinding(f), settlement: f.settlement };
+}
+function buildPayload(input) {
+  const { target, partitions } = input;
+  return {
+    schemaVersion: 1,
+    repo: { id: input.repoId, fullName: `${target.owner}/${target.repo}` },
+    pull: {
+      number: target.prNumber,
+      headSha: input.reviewedSha,
+      baseBranch: input.baseBranch,
+      authorLogin: input.authorLogin
+    },
+    run: {
+      githubRunId: String(input.context.runId),
+      githubRunAttempt: input.context.runAttempt ?? 1,
+      reportedRound: (input.prior?.history?.length ?? 0) + 1,
+      verdict: input.verdict,
+      capped: input.capped,
+      fullReview: input.fullReview,
+      provider: input.inputs.provider,
+      modelId: input.inputs.model,
+      durationMs: input.now() - input.startMs,
+      startedAt: input.startMs
+    },
+    findings: {
+      new: partitions.new.map(buildFinding),
+      open: partitions.open.map(buildFinding),
+      fixed: partitions.fixed.map(buildFinding),
+      dismissed: partitions.dismissed.map(buildDismissedFinding)
+    }
+  };
+}
+
+// src/report/post.ts
+var POST_TIMEOUT_MS = 5e3;
+async function post(input) {
+  const doFetch = input.fetch ?? fetch;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), input.timeoutMs ?? POST_TIMEOUT_MS);
+  timeout.unref?.();
+  try {
+    const res = await doFetch(`${input.touluApiUrl}/machine/review-runs`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${input.touluApiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(input.payload),
+      signal: controller.signal
+    });
+    if (!res.ok) return { ok: false, reason: `toolu.sh responded ${res.status}` };
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// src/report/report-run.ts
+var INLINE_COMMENTS_REQUIRED = "TOOLU_API_KEY is set but INLINE_COMMENTS is false \u2014 review-run reporting needs inline comments to reconcile fixed/dismissed findings against, so this run was not reported. Set INLINE_COMMENTS: true to enable reporting.";
+async function reportRun(params) {
+  try {
+    const { input, applied, findings, suppressed, verdict, capped } = params;
+    const { inputs, context: context2 } = input;
+    if (inputs.touluApiKey === "") return;
+    if (!inputs.inlineComments) {
+      core3.warning(INLINE_COMMENTS_REQUIRED);
+      return;
+    }
+    const partitioned = partitionFindings({
+      applied,
+      findings,
+      suppressed,
+      priorThreads: input.priorThreads,
+      prior: input.prior
+    });
+    if (!partitioned.ok) {
+      core3.warning(`Skipped review-run reporting: ${partitioned.reason}`);
+      return;
+    }
+    if (context2.repoId === void 0) {
+      core3.warning(
+        "Skipped review-run reporting: no numeric repository id on the triggering event payload"
+      );
+      return;
+    }
+    const payload = buildPayload({
+      repoId: String(context2.repoId),
+      target: input.target,
+      reviewedSha: input.reviewedSha,
+      baseBranch: input.baseBranch,
+      authorLogin: context2.authorLogin ?? null,
+      context: { runId: context2.runId, runAttempt: context2.runAttempt },
+      inputs: { provider: inputs.provider, model: inputs.model },
+      verdict,
+      capped,
+      fullReview: input.fullReview,
+      startMs: input.startMs,
+      now: input.now,
+      prior: input.prior,
+      partitions: partitioned.partitions
+    });
+    const result = await post({
+      touluApiUrl: inputs.touluApiUrl,
+      touluApiKey: inputs.touluApiKey,
+      payload,
+      fetch: input.fetch
+    });
+    if (!result.ok) core3.warning(`Review-run reporting failed: ${result.reason}`);
+  } catch (err) {
+    core3.warning(
+      `Review-run reporting failed: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
 // src/pipeline/publish.ts
 function settleVerdict(input) {
   const scoped = dropOutOfScope(
@@ -40550,7 +40895,7 @@ function settleVerdict(input) {
 
 ${note}`;
   }
-  return { validated, findings, verdict, capNote };
+  return { validated, findings, suppressed, verdict, capNote, capped: cap.capped };
 }
 function renderMemory(input, findings, verdict) {
   if (!input.inputs.reviewMemory) return { recap: "", history: "", marker: "" };
@@ -40578,7 +40923,7 @@ function renderMemory(input, findings, verdict) {
 }
 async function publish(input) {
   const { octokit, context: context2, target, inputs } = input;
-  const { validated, findings, verdict, capNote } = settleVerdict(input);
+  const { validated, findings, suppressed, verdict, capNote, capped } = settleVerdict(input);
   const { recap, history, marker: marker17 } = renderMemory(input, findings, verdict);
   const { body } = formatVerdict(validated, {
     botName: inputs.botName,
@@ -40597,7 +40942,8 @@ async function publish(input) {
   });
   const commentUrl = await upsertComment(octokit, target, body, input.stickyId);
   await setVerdictLabel(octokit, verdict, target, { manageLabels: inputs.manageLabels });
-  if (inputs.inlineComments) await postInline(input, findings);
+  const applied = inputs.inlineComments ? await postInline(input, findings) : { toCreate: [], toReply: [], toResolve: [] };
+  await reportRun({ input, applied, findings, suppressed, verdict, capped });
   return { verdict, findingsCount: findings.length, commentUrl };
 }
 async function postInline(input, findings) {
@@ -40609,20 +40955,24 @@ async function postInline(input, findings) {
     process.stderr.write(`  Warning: inline review step failed: ${r.reason ?? "unknown"}
 `);
   }
-  for (const { thread, finding } of plan.toReply) {
-    await replyToThread(
+  const toReply = [];
+  for (const action of plan.toReply) {
+    const replied = await replyToThread(
       octokit,
       target,
-      thread.rootCommentId,
-      `**Still flagging after re-review.** ${finding.text}`
+      action.thread.rootCommentId,
+      `**Still flagging after re-review.** ${action.finding.text}`
     );
+    if (replied) toReply.push(action);
   }
+  const toResolve = [];
   for (const thread of plan.toResolve) {
     if (!thread.isOutdated && !hasAcceptedResolutionNote(thread)) {
       await replyToThread(octokit, target, thread.rootCommentId, resolveNote(thread));
     }
-    await resolveThread(octokit, thread.threadId);
+    if (await resolveThread(octokit, thread.threadId)) toResolve.push(thread);
   }
+  return { toCreate: r.posted ? plan.toCreate : [], toReply, toResolve };
 }
 function resolveNote(thread) {
   switch (thread.dismissal) {
@@ -40695,7 +41045,8 @@ async function runReview(deps) {
     stickyId,
     fullReview: event.full_review,
     startMs,
-    now
+    now,
+    fetch: deps.fetch
   });
 }
 function incrementalScope(deps, found, reviewHead, cwd) {
@@ -44762,11 +45113,16 @@ async function mintAppToken(appId, privateKey, repo, seams) {
 }
 
 // src/main.ts
+function resolveAuthorLogin(eventName, payload) {
+  return eventName === "issue_comment" ? payload?.issue?.user?.login : payload?.pull_request?.user?.login;
+}
 function buildContext() {
   const payload = github.context.payload ?? null;
   const head = payload?.pull_request?.head;
+  const eventName = github.context.eventName;
+  const authorLogin = resolveAuthorLogin(eventName, payload);
   return {
-    eventName: github.context.eventName,
+    eventName,
     payload,
     repo: github.context.repo,
     sha: github.context.sha,
@@ -44774,8 +45130,13 @@ function buildContext() {
     // commit_id must be a commit IN the PR, and the heading shows the source branch.
     ...head?.sha ? { headSha: head.sha } : {},
     ...head?.ref ? { headRef: head.ref } : {},
+    // GitHub's numeric repo id — every real webhook payload carries `repository`,
+    // used only for review-run reporting (report/payload.ts's "IDENTITY GAP").
+    ...payload?.repository?.id !== void 0 ? { repoId: payload.repository.id } : {},
+    ...authorLogin !== void 0 ? { authorLogin } : {},
     serverUrl: github.context.serverUrl,
-    runId: github.context.runId
+    runId: github.context.runId,
+    runAttempt: github.context.runAttempt
   };
 }
 async function resolveToken(inputs) {
@@ -44790,7 +45151,7 @@ async function resolveToken(inputs) {
     })
   }).catch(() => null);
   if (minted) {
-    core3.info("Using GitHub App identity for PR comments");
+    core4.info("Using GitHub App identity for PR comments");
     return minted;
   }
   return inputs.token;
@@ -44851,27 +45212,27 @@ async function main() {
       // The composite SAST steps write gitleaks/opengrep SARIF here; the pipeline reads it.
       ...process.env["TOOLU_SARIF_DIR"] ? { sarifDir: process.env["TOOLU_SARIF_DIR"] } : {}
     });
-    core3.setOutput("verdict", result.verdict);
-    core3.setOutput("findings-count", result.findingsCount);
-    core3.setOutput("comment-url", result.commentUrl);
-    core3.info(
+    core4.setOutput("verdict", result.verdict);
+    core4.setOutput("findings-count", result.findingsCount);
+    core4.setOutput("comment-url", result.commentUrl);
+    core4.info(
       `Review complete: ${result.verdict} (${result.findingsCount} findings) \u2014 ${result.commentUrl}`
     );
     if (shouldBlock(result.verdict, inputs.failOn)) {
-      core3.setFailed(
+      core4.setFailed(
         `Code review verdict '${result.verdict}' is in FAIL_ON \u2014 failing the job (the review was still posted). Set FAIL_ON: none to keep the review advisory.`
       );
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    core3.setOutput("verdict", "error");
-    core3.setOutput("findings-count", 0);
+    core4.setOutput("verdict", "error");
+    core4.setOutput("findings-count", 0);
     const url = await postErrorComment(octokit, message).catch(() => "");
-    if (url !== "") core3.setOutput("comment-url", url);
-    core3.setFailed(`AI Code Review failed: ${message}`);
+    if (url !== "") core4.setOutput("comment-url", url);
+    core4.setFailed(`AI Code Review failed: ${message}`);
   }
 }
 main().catch((err) => {
-  core3.setOutput("verdict", "error");
-  core3.setFailed(err instanceof Error ? err.stack ?? err.message : String(err));
+  core4.setOutput("verdict", "error");
+  core4.setFailed(err instanceof Error ? err.stack ?? err.message : String(err));
 });

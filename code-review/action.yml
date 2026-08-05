@@ -143,6 +143,14 @@ inputs:
     description: 'Opengrep rule config(s) for the SAST pass (comma-separated). Default: p/typescript.'
     required: false
     default: 'p/typescript'
+  TOOLU_API_KEY:
+    description: 'toolu.sh org API token (`toolu_…`) enabling review-run reporting. Empty (the default) disables reporting. Only finding metadata is sent — never code, finding text, or suggestions. Requires INLINE_COMMENTS to be true; with inline comments off there are no review threads to reconcile against and reporting is skipped.'
+    required: false
+    default: ''
+  TOOLU_API_URL:
+    description: 'Base URL of the toolu.sh API. Override only for a self-hosted platform.'
+    required: false
+    default: 'https://api.toolu.sh'
 
 outputs:
   verdict:
@@ -247,6 +255,8 @@ runs:
         INPUT_MAX_ROUNDS: ${{ inputs.MAX_ROUNDS }}
         INPUT_FAIL_ON: ${{ inputs.FAIL_ON }}
         INPUT_VERBOSITY: ${{ inputs.VERBOSITY }}
+        INPUT_TOOLU_API_KEY: ${{ inputs.TOOLU_API_KEY }}
+        INPUT_TOOLU_API_URL: ${{ inputs.TOOLU_API_URL }}
         # Where the scanner steps wrote their SARIF — the node action reads + triages it.
         TOOLU_SARIF_DIR: ${{ runner.temp }}
         # The default GITHUB_TOKEN for the @actions/github client (TOKEN input overrides downstream).

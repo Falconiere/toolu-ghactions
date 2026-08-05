@@ -60,18 +60,12 @@ function threadCategory(rootBody: string): string | null {
 }
 
 /**
- * The LOOSE prongs shared by resolved- and open-thread coverage: a model
- * re-raising a finding almost never reproduces it verbatim — it rewords the
- * text (new fingerprint) and drifts the anchor line, and after the next push
- * the thread itself often goes outdated (line null), so both strict prongs
- * miss. A thread therefore also covers a same-path finding within
- * {@link NEARBY_LINE_RADIUS} lines, or — when the thread is detached (line
- * null) — a same-path finding with the same rendered category.
- *
- * Deliberately severity-blind (and module-private to keep it so): the blocker
- * exemption lives in {@link matchesResolved}, the only SUPPRESSION path —
- * reconcile()'s use of the loose prongs merely relocates where a finding is
- * posted, so blockers may match here without ever being hidden.
+ * The LOOSE prongs shared by resolved- and open-thread coverage: a reworded,
+ * line-drifted finding still covers within {@link NEARBY_LINE_RADIUS} lines,
+ * or — when the thread has gone detached (line null) — by matching rendered
+ * category. Deliberately severity-blind: the blocker exemption lives in
+ * {@link matchesSettled}, the only SUPPRESSION path — here the loose prongs
+ * only relocate where a finding is posted, never hide it.
  */
 function matchesNearby(f: ReconcileFinding, t: PriorThread): boolean {
   if (f.path !== t.path) return false;
@@ -82,24 +76,22 @@ function matchesNearby(f: ReconcileFinding, t: PriorThread): boolean {
 
 /** A settled thread: resolved on GitHub, dismissed by the author, or carrying
  *  the bot's accepted-resolution note after an earlier resolve mutation failed.
- *  In every case the finding is not the bot's to re-raise. */
-function isSettled(t: PriorThread): boolean {
+ *  In every case the finding is not the bot's to re-raise. Exported so a
+ *  reporting consumer (report/partition.ts) can attribute WHICH thread settled
+ *  a suppressed finding without re-deriving this logic. */
+export function isSettled(t: PriorThread): boolean {
   return t.isResolved || t.dismissal !== undefined || hasAcceptedResolutionNote(t);
 }
 
 /**
  * Does a SETTLED thread cover this finding? Strict {@link matches} widened by
- * {@link matchesNearby}. Blockers are exempt from the loose prongs: suppression
- * HIDES the finding (verdict, comment, inline), so only an exact match may
- * suppress a blocker — loosening can never hide a real showstopper.
- *
- * An `"exhausted"` thread is stricter still: it is the BOT surrendering an
- * argument, not a human ruling on the finding, so it never silences a blocker at
- * ANY match strength — the same rule {@link import("./gate.js").applyRoundCap}
- * applies to the MAX_ROUNDS cap. A human decision (a GitHub resolution or an
- * authorized `dismiss`) does silence one, on an exact match.
+ * {@link matchesNearby}, except a blocker never settles on the loose prongs
+ * (suppression HIDES the finding, so only an exact match may) and an
+ * `"exhausted"` thread — the bot conceding, not a human ruling — never
+ * silences a blocker at any strength. Exported for report/partition.ts, which
+ * attributes a `suppressed` finding's settlement to the thread that matched it.
  */
-function matchesSettled(f: ReconcileFinding, t: PriorThread): boolean {
+export function matchesSettled(f: ReconcileFinding, t: PriorThread): boolean {
   const blocker = f.severity === "blocker";
   if (blocker && t.dismissal === "exhausted") return false;
   if (matches(f, t)) return true;

@@ -581,6 +581,21 @@ resolution without posting the note again.
 | `RUN_SECRET_SCAN` | no | `true` | Run the deterministic secret scan (gitleaks) before the LLM review; its findings feed the LLM as triage context and upload to Code Scanning. See [Deterministic checks](#deterministic-checks). |
 | `RUN_SAST` | no | `true` | Run the deterministic SAST pass (Opengrep) before the LLM review; same flow as above. |
 | `SAST_RULES` | no | `p/typescript` | Opengrep rule config(s) for the SAST pass (comma-separated). |
+| `TOOLU_API_KEY` | no | `` | toolu.sh org API token (`toolu_…`) enabling review-run reporting to the platform. Empty (default) disables reporting. Only finding metadata is sent — never code, text, suggestions, or quoted lines. Requires `INLINE_COMMENTS: true`. See [Platform reporting](#platform-reporting). |
+| `TOOLU_API_URL` | no | `https://api.toolu.sh` | Base URL of the toolu.sh API. Override only for a self-hosted platform. |
+
+
+### Platform reporting (optional)
+
+When `TOOLU_API_KEY` is set, the action reports each review run to the toolu.sh platform so findings and verdicts are aggregated for metrics and history — metrics that would otherwise be lost when the PR closes. Reporting is opt-in (empty by default).
+
+**Metadata only.** Only finding metadata is sent: fingerprint, file path, line, severity, category, and provenance (the source tool: `llm`, `gitleaks`, `opengrep`, or `eslint`). The verdict and run timing are included. **Never** sent: the finding text, the quoted source line, code suggestions, or any code of any kind. The console links back to the GitHub comment for the full finding prose.
+
+**Requires inline comments.** Reporting is skipped when `INLINE_COMMENTS` is false — the action only reports findings that appear in inline threads, and without inline comments, no threads are posted. In that case, every persisting finding would look new on every push, making reconciliation impossible. A warning is logged when reporting is skipped.
+
+**Best-effort.** Reporting never fails the job. A non-2xx response, timeout, or network error produces a warning and nothing else. One attempt, no retry.
+
+**Fork PRs.** Runs from fork PRs are never reported — GitHub withholds secrets from fork runs, so `TOOLU_API_KEY` is empty there.
 
 ### Removed in v4
 

@@ -17,12 +17,28 @@ import { mintAppToken } from "./github/appToken.js";
 import { createAppAuth } from "@octokit/auth-app";
 import type { EventPayload } from "./github/event.js";
 
+/**
+ * The PR author's login, resolved from whichever payload path the triggering
+ * event actually carries it on. A `pull_request` event carries the PR object
+ * itself, so `pull_request.user.login` is the opener. An `issue_comment`
+ * re-trigger carries no `pull_request` object at all — GitHub represents a PR's
+ * comment thread as its "issue" twin instead, whose `user` is the account that
+ * opened the PR (never the commenter, which is `comment.user`).
+ */
+function resolveAuthorLogin(eventName: string, payload: EventPayload | null): string | undefined {
+  return eventName === "issue_comment"
+    ? payload?.issue?.user?.login
+    : payload?.pull_request?.user?.login;
+}
+
 /** Build the GithubContext slice the pipeline reads from the @actions/github context. */
 function buildContext(): GithubContext {
   const payload: EventPayload | null = github.context.payload ?? null;
   const head = payload?.pull_request?.head;
+  const eventName = github.context.eventName;
+  const authorLogin = resolveAuthorLogin(eventName, payload);
   return {
-    eventName: github.context.eventName,
+    eventName,
     payload,
     repo: github.context.repo,
     sha: github.context.sha,
@@ -30,8 +46,13 @@ function buildContext(): GithubContext {
     // commit_id must be a commit IN the PR, and the heading shows the source branch.
     ...(head?.sha ? { headSha: head.sha } : {}),
     ...(head?.ref ? { headRef: head.ref } : {}),
+    // GitHub's numeric repo id — every real webhook payload carries `repository`,
+    // used only for review-run reporting (report/payload.ts's "IDENTITY GAP").
+    ...(payload?.repository?.id !== undefined ? { repoId: payload.repository.id } : {}),
+    ...(authorLogin !== undefined ? { authorLogin } : {}),
     serverUrl: github.context.serverUrl,
     runId: github.context.runId,
+    runAttempt: github.context.runAttempt,
   };
 }
 
