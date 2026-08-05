@@ -1,5 +1,12 @@
 # Changelog
 
+## [6.5.4](https://github.com/Falconiere/toolu-ghactions/compare/v6.5.3...v6.5.4) (2026-08-05)
+
+
+### Bug Fixes
+
+* **code-review:** don't claim 'LLM judgment unavailable' on a recovered review ([53299d1](https://github.com/Falconiere/toolu-ghactions/commit/53299d10dc791d830fbd5568662c408c293b2d84))
+
 ## [6.5.3](https://github.com/Falconiere/toolu-ghactions/compare/v6.5.2...v6.5.3) (2026-08-01)
 
 
