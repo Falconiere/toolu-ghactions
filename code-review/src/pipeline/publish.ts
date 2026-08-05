@@ -18,6 +18,7 @@ import {
 } from "@/github/threads.js";
 import type { PriorThread } from "@/github/threads.js";
 import { dropSettled, reconcile } from "@/review/reconcile.js";
+import type { Reconciliation, ReplyAction } from "@/review/reconcile.js";
 import { dropOutOfScope } from "@/review/incremental.js";
 import type { IncrementalScope } from "@/review/incremental.js";
 import { applyRoundCap } from "@/review/gate.js";
@@ -27,6 +28,7 @@ import type { ActionInputs } from "@/inputs.js";
 import { jobUrl, formatDuration } from "./bodies.js";
 import type { StampedFinding } from "./reviewCall.js";
 import type { GithubContext, PipelineOctokit, ReviewResult } from "./types.js";
+import { reportRun } from "@/report/report-run.js";
 
 /** Repo + PR + head coordinates for every publish operation. */
 export interface PublishTarget {
@@ -64,14 +66,20 @@ export interface PublishInput {
   baseBranch: string;
   startMs: number;
   now: () => number;
+  /** Custom fetch for the report/post.ts best-effort POST (tests replay/inject). */
+  fetch?: typeof fetch;
 }
 
 /** The settled verdict: out-of-scope + suppressed findings removed, flips and caps applied. */
 interface SettledVerdict {
   validated: ProviderResult;
   findings: StampedFinding[];
+  /** Findings dropped because their thread was already settled (resolved/dismissed). */
+  suppressed: StampedFinding[];
   verdict: "approved" | "changes" | "skip" | "error";
   capNote: string;
+  /** Whether MAX_ROUNDS surrendered this run — reported as `run.capped` (report/report-run.ts). */
+  capped: boolean;
 }
 
 /**
@@ -137,7 +145,7 @@ function settleVerdict(input: PublishInput): SettledVerdict {
       `last review were not re-raised — comment \`@toolu review\` for a full re-review.`;
     capNote = capNote === "" ? note : `${capNote}\n\n${note}`;
   }
-  return { validated, findings, verdict, capNote };
+  return { validated, findings, suppressed, verdict, capNote, capped: cap.capped };
 }
 
 /** Review memory: diff current findings vs prior, render recap + history + marker. */
@@ -181,7 +189,7 @@ function renderMemory(
  */
 export async function publish(input: PublishInput): Promise<ReviewResult> {
   const { octokit, context, target, inputs } = input;
-  const { validated, findings, verdict, capNote } = settleVerdict(input);
+  const { validated, findings, suppressed, verdict, capNote, capped } = settleVerdict(input);
   const { recap, history, marker } = renderMemory(input, findings, verdict);
 
   const { body } = formatVerdict(validated, {
@@ -204,7 +212,11 @@ export async function publish(input: PublishInput): Promise<ReviewResult> {
   // setVerdictLabel never throws — every labels-API call is caught inside
   // github/label.ts and reported via its LabelResult, so no try/catch here.
   await setVerdictLabel(octokit, verdict, target, { manageLabels: inputs.manageLabels });
-  if (inputs.inlineComments) await postInline(input, findings);
+  const applied = inputs.inlineComments
+    ? await postInline(input, findings)
+    : { toCreate: [], toReply: [], toResolve: [] };
+  // AFTER postInline — ordering is load-bearing, see report/report-run.ts's doc.
+  await reportRun({ input, applied, findings, suppressed, verdict, capped });
   return { verdict, findingsCount: findings.length, commentUrl };
 }
 
@@ -213,8 +225,22 @@ export async function publish(input: PublishInput): Promise<ReviewResult> {
  * NEW findings, answer IN PLACE on threads where the author had the last word, and
  * RESOLVE threads whose finding the model dropped. This is what stops the
  * "re-raise the same finding forever" loop. All best-effort (non-fatal).
+ *
+ * Returns the reconcile plan NARROWED to what GitHub actually accepted:
+ * `resolveThread`/`replyToThread` report a boolean success flag per call, and a
+ * failed mutation drops that thread from the returned `toResolve`/`toReply` — so a
+ * `fixed` finding derived from this later means "the bot resolved this thread on
+ * GitHub and GitHub accepted it", never a plan that was merely attempted.
+ * `toCreate` has no per-finding signal to narrow by: `postInlineReview` posts the
+ * whole batch in one Reviews-API call and reports only a batch-level `posted` flag
+ * (a count can be lower than `plan.toCreate.length` when an anchor is unresolvable
+ * against GitHub's own diff, with no indication of which findings survived), so a
+ * failed post empties `toCreate` and a successful one reports it as planned.
  */
-async function postInline(input: PublishInput, findings: StampedFinding[]): Promise<void> {
+async function postInline(
+  input: PublishInput,
+  findings: StampedFinding[],
+): Promise<Reconciliation<StampedFinding>> {
   const { octokit, context, target } = input;
   // The Reviews API needs a commit_id that is IN the PR; the merge sha is not (it
   // 422s and the comments vanish), so anchor to the PR head sha when present.
@@ -228,24 +254,29 @@ async function postInline(input: PublishInput, findings: StampedFinding[]): Prom
   }
 
   // 2. Findings that persist where the author had the last word → answer in that thread.
-  for (const { thread, finding } of plan.toReply) {
-    await replyToThread(
+  const toReply: ReplyAction<StampedFinding>[] = [];
+  for (const action of plan.toReply) {
+    const replied = await replyToThread(
       octokit,
       target,
-      thread.rootCommentId,
-      `**Still flagging after re-review.** ${finding.text}`,
+      action.thread.rootCommentId,
+      `**Still flagging after re-review.** ${action.finding.text}`,
     );
+    if (replied) toReply.push(action);
   }
 
   // 3. Findings the bot dropped this run → resolve the thread (accepted / no longer
   // applies / settled by the author). Leave a one-line note saying WHICH, unless the
   // hunk is already outdated.
+  const toResolve: PriorThread[] = [];
   for (const thread of plan.toResolve) {
     if (!thread.isOutdated && !hasAcceptedResolutionNote(thread)) {
       await replyToThread(octokit, target, thread.rootCommentId, resolveNote(thread));
     }
-    await resolveThread(octokit, thread.threadId);
+    if (await resolveThread(octokit, thread.threadId)) toResolve.push(thread);
   }
+
+  return { toCreate: r.posted ? plan.toCreate : [], toReply, toResolve };
 }
 
 /**

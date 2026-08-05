@@ -37,6 +37,32 @@ export interface GithubContext {
   serverUrl: string;
   /** Numeric run id for the "View job" link. */
   runId: number;
+  /**
+   * The run's attempt number (GITHUB_RUN_ATTEMPT) — increments on a manual re-run.
+   * Optional like {@link headSha}/{@link headRef}: always populated by
+   * {@link import("../main.js").buildContext} in production, but not every
+   * hand-built test context carries one.
+   */
+  runAttempt?: number;
+  /**
+   * GitHub's numeric repository id (`payload.repository.id`), reported to
+   * toolu.sh as `report/payload.ts`'s `repo.id` — the durable-across-renames
+   * identity the platform's `review_pulls` table keys on. Optional like
+   * {@link headSha}/{@link headRef}: every real webhook payload carries a
+   * `repository` object (populated by {@link import("../main.js").buildContext}),
+   * but a hand-built test context need not.
+   */
+  repoId?: number;
+  /**
+   * The PR author's login, reported to toolu.sh as `report/payload.ts`'s
+   * `pull.authorLogin`. Resolved by {@link import("../main.js").buildContext}
+   * from whichever payload path the triggering event actually carries it on —
+   * `payload.pull_request.user.login` for a `pull_request` event,
+   * `payload.issue.user.login` for an `issue_comment` re-trigger (GitHub
+   * represents a PR's comment thread as its "issue" twin, whose `user` is the
+   * PR's opener). Optional for the same reason as {@link repoId}.
+   */
+  authorLogin?: string;
 }
 
 /** The injectable dependency bundle for `runReview`. */

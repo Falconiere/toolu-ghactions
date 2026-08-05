@@ -246,6 +246,8 @@ function baseInputs(overrides: Partial<ActionInputs> = {}): ActionInputs {
     reviewMemory: true,
     failOn: new Set<BlockableVerdict>(),
     verbosity: "compact",
+    touluApiKey: "",
+    touluApiUrl: "https://api.toolu.sh",
     ...overrides,
   };
 }

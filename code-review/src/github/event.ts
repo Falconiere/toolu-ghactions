@@ -18,12 +18,33 @@ export interface EventContext {
 
 /** Loose payload shape — only the fields the resolver touches are typed. */
 export interface EventPayload {
+  /**
+   * The webhook's repository object. Present on every real repo-scoped delivery
+   * (`pull_request` and `issue_comment` alike) — `id` is GitHub's numeric,
+   * globally-sequential repo id, read by `main.ts`'s `buildContext()` for
+   * review-run reporting (see `report/payload.ts`'s "IDENTITY GAP").
+   */
+  repository?: { id?: number; full_name?: string };
   pull_request?: {
     number?: number;
     base?: { ref?: string };
     head?: { sha?: string; ref?: string };
+    /** The PR's opener. Read by `buildContext()` on a `pull_request` event —
+     *  on an `issue_comment` re-trigger the author lives on `issue.user` instead
+     *  (see that field's own doc). */
+    user?: { login?: string };
   };
-  issue?: { number?: number; pull_request?: unknown };
+  issue?: {
+    number?: number;
+    pull_request?: unknown;
+    /**
+     * The PR's opener, on an `issue_comment` event. GitHub represents a pull
+     * request's comment thread as its "issue" twin, whose `user` is the account
+     * that opened the PR — NOT the commenter (`comment.user`, below). Real
+     * `issue_comment` deliveries always carry this on an issue/PR that exists.
+     */
+    user?: { login?: string };
+  };
   comment?: { id?: number; body?: string; user?: { login?: string; type?: string } };
 }
 

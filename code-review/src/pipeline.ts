@@ -127,6 +127,7 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     fullReview: event.full_review,
     startMs,
     now,
+    fetch: deps.fetch,
   });
 }
 
