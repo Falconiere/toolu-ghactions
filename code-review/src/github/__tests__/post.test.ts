@@ -30,14 +30,20 @@ const LABEL_TARGET: LabelTarget = { owner: "test-org", repo: "test-repo", prNumb
 /** A recording Reviews client capturing the createReview payload. */
 function fakeReviewClient(): {
   client: ReviewClient;
-  calls: { comments: ReviewComment[]; body: string; commit_id: string }[];
+  calls: { comments: ReviewComment[]; body: string; commit_id: string; event: "COMMENT" }[];
 } {
-  const calls: { comments: ReviewComment[]; body: string; commit_id: string }[] = [];
+  const calls: { comments: ReviewComment[]; body: string; commit_id: string; event: "COMMENT" }[] =
+    [];
   const client: ReviewClient = {
     rest: {
       pulls: {
         createReview: async (p) => {
-          calls.push({ comments: p.comments, body: p.body, commit_id: p.commit_id });
+          calls.push({
+            comments: p.comments,
+            body: p.body,
+            commit_id: p.commit_id,
+            event: p.event,
+          });
           return {
             data: { html_url: "https://github.com/test-org/test-repo/pull/42#pullrequestreview-1" },
           };
@@ -264,6 +270,41 @@ describe("postInlineReview — anchor validation against GitHub's diff", () => {
     expect(only?.start_line).toBeUndefined();
   });
 
+  // MEDIUM coverage gap: the two collapse tests above only check `line` — this
+  // pins the FULL posted shape for a collapsed span, proving `start_line` AND
+  // `start_side` are BOTH stripped (validateAnchor's destructure drops both;
+  // a payload carrying `start_side` with no `start_line` would be exactly the
+  // kind of half-valid span shape the Reviews API's 422 (pr72 fixture) rejects).
+  it("collapsing a span drops BOTH start_line and start_side — no half-valid span field reaches the payload", async () => {
+    const { client, calls } = fakeValidatingClient([
+      // Only lines 13..14 exist on GitHub's side; the finding spans 11..14 — the
+      // START is off the diff, only the END anchors, so validateAnchor collapses.
+      { filename: "src/a.ts", patch: "@@ -12,1 +13,2 @@\n line-x\n+line-y" },
+    ]);
+    const findings: Finding[] = [
+      { path: "src/a.ts", line: 11, end_line: 14, severity: "high", text: "collapsed span" },
+    ];
+
+    const r = await postInlineReview(client, findings, REVIEW_TARGET);
+
+    expect(r.posted).toBe(true);
+    expect(r.count).toBe(1);
+    const only = calls[0]?.comments[0];
+    expect(only).toBeDefined();
+    // The collapsed comment posts on its anchored END line, RIGHT side...
+    expect(only?.path).toBe("src/a.ts");
+    expect(only?.line).toBe(14);
+    expect(only?.side).toBe("RIGHT");
+    // ...with NEITHER start field left dangling from the rejected span half.
+    expect(only).not.toHaveProperty("start_line");
+    expect(only).not.toHaveProperty("start_side");
+    // Scan the literal payload GitHub would receive — same rigor as the
+    // subject_type/position scan below — proving no invalid span half survives.
+    const serialized = JSON.stringify(calls[0]?.comments ?? []);
+    expect(serialized).not.toContain("start_line");
+    expect(serialized).not.toContain("start_side");
+  });
+
   it("bisects the batch when the whole thing 422s once, posting both halves individually", async () => {
     const { client, calls } = fakeValidatingClient(
       [{ filename: "src/a.ts", patch: PATCH_10_TO_14 }],
@@ -376,6 +417,120 @@ describe("postInlineReview — batching + 422 bisection (AC-5)", () => {
     expect(r.dropped[0]?.path).toBe(poisonPath);
     const postedPaths = calls.flatMap((c) => c.comments.map((cm) => cm.path)).sort();
     expect(postedPaths).toEqual(["a.ts", "b.ts"]);
+  });
+
+  // BLOCKER regression: a bisected batch's `left` half posts for real (a live
+  // GitHub comment now exists) and its `right` half then hits a NON-422 error.
+  // Before the fix, that non-422 was rethrown out of the recursive `postBatch`
+  // call uncaught, unwinding straight past `left`'s already-resolved success —
+  // `postComments` folded the whole batch into `posted:false`, so the caller
+  // (and the next round) would believe NOTHING posted and repost `left`'s
+  // findings as duplicates of the comments already sitting on GitHub.
+  it("preserves a bisected LEFT half's real posted comments when the RIGHT half then throws a non-422", async () => {
+    const okPath = "ok.ts";
+    const failPath = "fail.ts";
+    const calls: { comments: ReviewComment[] }[] = [];
+    const client: ReviewClient = {
+      rest: {
+        pulls: {
+          createReview: async (p) => {
+            // The combined 2-comment batch 422s first, forcing bisection...
+            if (p.comments.length > 1) {
+              throw new Error("422 Unprocessable Entity: could not resolve one comment");
+            }
+            // ...then, isolated alone, the ok comment posts for real...
+            if (p.comments.some((c) => c.path === okPath)) {
+              calls.push({ comments: p.comments });
+              return {
+                data: {
+                  html_url: "https://github.com/test-org/test-repo/pull/42#pullrequestreview-left",
+                },
+              };
+            }
+            // ...but the failing one hits a genuine, non-bisectable error (NOT a
+            // 422 — permissions/network class), which must not erase the above.
+            throw new Error("500 Internal Server Error");
+          },
+        },
+      },
+    };
+    const findings: Finding[] = [
+      { path: okPath, line: 1, severity: "low", text: "posts fine" },
+      { path: failPath, line: 1, severity: "low", text: "hits a real error" },
+    ];
+
+    const r = await postInlineReview(client, findings, REVIEW_TARGET);
+
+    // The left half's real, already-posted comment is NOT lost...
+    expect(r.posted).toBe(true);
+    expect(r.count).toBe(1);
+    expect(r.url).toBe("https://github.com/test-org/test-repo/pull/42#pullrequestreview-left");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.comments.map((c) => c.path)).toEqual([okPath]);
+    // ...and a failure/reason marker still surfaces the non-422 (it's neither
+    // "posted" nor "dropped" — dropped means GitHub itself rejected it (422)).
+    expect(r.reason).toContain("500");
+    expect(r.dropped).toEqual([]);
+  });
+
+  // MEDIUM coverage gap this regression closes: a WHOLESALE non-422 on the very
+  // FIRST `createReview` call (nothing has bisected, nothing has posted at all)
+  // must keep the pre-existing posted:false/reason outcome, with an empty
+  // `dropped` (this finding was never isolated as poison — the whole call just
+  // failed for a reason unrelated to any one comment).
+  it("wholesale non-422 on the very first createReview call: posted:false + reason, dropped stays empty", async () => {
+    const client: ReviewClient = {
+      rest: {
+        pulls: {
+          createReview: async () => {
+            throw new Error("403 Forbidden: token lacks pull-requests:write");
+          },
+        },
+      },
+    };
+    const findings: Finding[] = [
+      { path: "a.ts", line: 1, severity: "low", text: "a" },
+      { path: "b.ts", line: 1, severity: "low", text: "b" },
+    ];
+
+    const r = await postInlineReview(client, findings, REVIEW_TARGET);
+
+    expect(r.posted).toBe(false);
+    expect(r.count).toBe(0);
+    expect(r.reason).toContain("403");
+    expect(r.dropped).toEqual([]);
+    expect(r.url).toBeUndefined();
+  });
+
+  it("batch 2+ posts a COMMENT-event review with the 'continued' body, never repeating the verdict pointer", async () => {
+    const { client, calls } = fakeReviewClient();
+    // 31 anchored findings on distinct paths → 30 in batch 1, 1 in batch 2.
+    const findings: Finding[] = Array.from(
+      { length: 31 },
+      (_, i): Finding => ({ path: `f${i}.ts`, line: 1, severity: "low", text: `finding ${i}` }),
+    );
+
+    const r = await postInlineReview(client, findings, REVIEW_TARGET);
+
+    expect(r.posted).toBe(true);
+    expect(r.batches).toBe(2);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.comments).toHaveLength(MAX_COMMENTS_PER_REVIEW);
+    expect(calls[1]?.comments).toHaveLength(1);
+
+    // Every batch — including 2+ — is a COMMENT event (advisory, never blocking).
+    expect(calls[0]?.event).toBe("COMMENT");
+    expect(calls[1]?.event).toBe("COMMENT");
+
+    // Batch 1 alone points at the summary comment for the verdict...
+    expect(calls[0]?.body).toBe(
+      "🤖 AI Code Review — 31 inline comment(s) across 2 reviews. See the summary comment for " +
+        "the full verdict.",
+    );
+    // ...batch 2 is exactly the "continued" pointer, with no repeated verdict text.
+    expect(calls[1]?.body).toBe("🤖 AI Code Review — continued (review 2/2, 1 more comment(s)).");
+    expect(calls[1]?.body).not.toContain("summary comment for the full verdict");
+    expect(calls[1]?.body).not.toContain("See the summary comment");
   });
 
   it("the builder emits line/side, never the fixture's rejected subjectType/position fields", async () => {

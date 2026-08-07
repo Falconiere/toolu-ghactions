@@ -18,7 +18,9 @@
 //                 every -M-detected rename likewise carries no content of its own.
 //                 A NEAR-rename's new side stays substantive: under -M its segment
 //                 already contains only the real edits, which is what gets reviewed;
-//   formatting  → dropped (whitespace-only change);
+//   formatting  → dropped (indentation / trailing-whitespace reflow ONLY: every
+//                 changed line's TRIMMED text is byte-identical to its pair's.
+//                 An interior whitespace edit is substantive — see isWhitespaceOnly);
 //   vendored /
 //   generated   → dropped (linguist attributes).
 //
@@ -37,6 +39,7 @@ import { execFileSync } from "node:child_process";
 import { countLines, type DiffData } from "./diff.js";
 import { splitDiffByFile, type FileSegment } from "./chunk.js";
 import { anyGlobMatches } from "./globs.js";
+import { unquoteGitPath } from "./path.js";
 import {
   detectPatternGroups,
   parseHunkBody,
@@ -131,14 +134,14 @@ export function distill(diff: DiffData, opts: { rulesPaths: string[]; cwd: strin
 /**
  * An EXACT rename's segment carries no `---`/`+++` headers at all, so
  * splitDiffByFile leaves its path empty; recover it from the `rename to` header
- * so the segment is keyed by a real path like every other. A C-quoted (non-ASCII)
- * rename path is left empty and simply stays in the review diff — the safe
- * direction. Segments that already have a path are returned untouched.
+ * so the segment is keyed by a real path like every other. The header is
+ * C-unquoted (git/path.ts), so a path git had to quote keys the same way it does
+ * in `changed_files`. Segments that already have a path are returned untouched.
  */
 function withRenameTarget(segment: FileSegment): FileSegment {
   if (segment.path !== "") return segment;
-  const to = segment.diff.match(/^rename to ([^"].*)$/m)?.[1];
-  return to === undefined ? segment : { ...segment, path: to };
+  const to = segment.diff.match(/^rename to (.+)$/m)?.[1];
+  return to === undefined ? segment : { ...segment, path: unquoteGitPath(to) };
 }
 
 /**
@@ -159,16 +162,23 @@ function classifyRenames(
     const from = segment.diff.match(/^rename from (.+)$/m)?.[1];
     if (from === undefined || segment.path === "") continue;
     strata.set(segment.path, "rename");
-    strata.set(from, "rename");
+    strata.set(unquoteGitPath(from), "rename");
   }
 }
 
 /**
- * True when a file's hunks change nothing but whitespace — the same verdict
- * `git diff -w` reaches, computed from the diff we already hold. Every removed
- * line must pair, in order, with an added line carrying identical non-whitespace
- * content. A `\ No newline at end of file` marker forces `false`: an end-of-file
- * newline change is a real content change, and the fail-safe direction is review.
+ * True when a file's hunks change nothing but LEADING/TRAILING whitespace —
+ * indentation and trailing-space reflows — computed from the diff we already hold.
+ * Every removed line must pair, in order, with an added line whose TRIMMED text is
+ * byte-identical (git/patterns.ts's `trimEnds`).
+ *
+ * Deliberately STRICTER than `git diff -w`, which ignores interior whitespace too:
+ * under that comparison an edit inside a string literal (`"select * from  t"` →
+ * `"select *from t"`) reads as whitespace-only and the file is dropped from review
+ * unseen. Anything but a pure end-trim change therefore falls through to
+ * `substantive` — the fail-safe direction, spending tokens rather than coverage.
+ * A `\ No newline at end of file` marker forces `false` for the same reason: an
+ * end-of-file newline change is a real content change.
  */
 function isWhitespaceOnly(body: HunkBody): boolean {
   if (body.noNewlineMarker) return false;

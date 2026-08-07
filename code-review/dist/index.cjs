@@ -31415,6 +31415,51 @@ function readBool(name17, fallback) {
 // src/git/diff.ts
 var import_node_child_process2 = require("node:child_process");
 
+// src/git/path.ts
+var NAMED_ESCAPE = {
+  '"': 34,
+  "\\": 92,
+  t: 9,
+  n: 10,
+  r: 13,
+  b: 8,
+  f: 12,
+  a: 7,
+  v: 11
+};
+var ESCAPE = /\\(?:([0-7]{3})|([\s\S]))/g;
+function unquoteGitPath(raw) {
+  if (raw.length < 2 || !raw.startsWith('"') || !raw.endsWith('"')) return raw;
+  const inner = raw.slice(1, -1);
+  const bytes = [];
+  let last = 0;
+  ESCAPE.lastIndex = 0;
+  for (let m = ESCAPE.exec(inner); m !== null; m = ESCAPE.exec(inner)) {
+    pushUtf8(bytes, inner.slice(last, m.index));
+    const octal = m[1];
+    const named = m[2];
+    if (octal !== void 0) {
+      bytes.push(Number.parseInt(octal, 8));
+    } else if (named !== void 0) {
+      const code = NAMED_ESCAPE[named];
+      if (code === void 0) pushUtf8(bytes, named);
+      else bytes.push(code);
+    }
+    last = m.index + m[0].length;
+  }
+  pushUtf8(bytes, inner.slice(last));
+  return Buffer.from(bytes).toString("utf8");
+}
+function pushUtf8(bytes, text2) {
+  if (text2 === "") return;
+  for (const byte of Buffer.from(text2, "utf8")) bytes.push(byte);
+}
+function headerOperandPath(operand) {
+  const untabbed = operand.split("	")[0] ?? operand;
+  const decoded = unquoteGitPath(untabbed);
+  return decoded.startsWith("a/") || decoded.startsWith("b/") ? decoded.slice(2) : decoded;
+}
+
 // src/git/shape.ts
 var DIFF_GIT_PREFIX = "diff --git ";
 var ADD_HEADER_PREFIX = "+++ ";
@@ -31436,7 +31481,7 @@ function shapeDiff(rawDiff) {
     if (line.startsWith(DIFF_GIT_PREFIX)) {
       out.push(line);
     } else if (line.startsWith(ADD_HEADER_PREFIX)) {
-      path = line.replace(/^\+\+\+ b\//, "").replace(/^\+\+\+ /, "");
+      path = headerOperandPath(line.slice(ADD_HEADER_PREFIX.length));
       out.push(line);
     } else if (line.startsWith(DEL_HEADER_PREFIX)) {
       out.push(line);
@@ -31647,9 +31692,14 @@ var DiffResolutionError = class extends Error {
     this.baseBranch = baseBranch;
   }
 };
+var QUOTEPATH_OFF = ["-c", "core.quotepath=false"];
 function gitOrNull(args, cwd) {
   try {
-    return (0, import_node_child_process2.execFileSync)("git", args, { cwd, encoding: "utf8", maxBuffer: 1024 * 1024 * 1024 });
+    return (0, import_node_child_process2.execFileSync)("git", [...QUOTEPATH_OFF, ...args], {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024 * 1024
+    });
   } catch {
     return null;
   }
@@ -31719,7 +31769,7 @@ function parseNumstat(numstat) {
     if (secondTab === -1) continue;
     const added = row.slice(0, firstTab);
     const removed = rest.slice(0, secondTab);
-    const path = rest.slice(secondTab + 1);
+    const path = unquoteGitPath(rest.slice(secondTab + 1));
     if (path === "") continue;
     rows.push({ added, removed, path });
   }
@@ -31795,7 +31845,7 @@ function fetchDiff(opts) {
   const mergeBase = resolveMergeBase(reviewHead, remoteBase, baseBranch, cwd);
   const baseSha = gitOrNull(["rev-parse", remoteBase], cwd)?.trim() ?? "";
   const changedFiles = gitOrNull(["diff", "--no-renames", "--name-only", mergeBase, reviewHead], cwd) ?? "";
-  const changedPaths = changedFiles.split("\n").filter((l) => l.trim() !== "");
+  const changedPaths = changedFiles.split("\n").filter((l) => l.trim() !== "").map(unquoteGitPath);
   const totalFiles = changedPaths.length;
   if (totalFiles === 0) {
     return emptyResult(baseSha);
@@ -31876,7 +31926,7 @@ function deletedInRange(mergeBase, reviewHead, cwd) {
     if (!line.startsWith("D")) continue;
     const tab = line.indexOf("	");
     if (tab === -1) continue;
-    const path = line.slice(tab + 1);
+    const path = unquoteGitPath(line.slice(tab + 1));
     if (path !== "") out.add(path);
   }
   return out;
@@ -31890,7 +31940,9 @@ function detectRenames(mergeBase, reviewHead, cwd, kept) {
     if (parts.length < 3) continue;
     const from = parts[1];
     const to = parts[2];
-    if (from !== void 0 && to !== void 0 && kept.has(to)) out.push({ from, to });
+    if (from === void 0 || to === void 0) continue;
+    const rename = { from: unquoteGitPath(from), to: unquoteGitPath(to) };
+    if (kept.has(rename.to)) out.push(rename);
   }
   return out;
 }
@@ -31970,11 +32022,16 @@ async function resolveIssueComment(payload, opts) {
     ...commentId !== void 0 ? { comment_id: commentId } : {}
   };
 }
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 function findTrigger(body, phrase) {
   const lower = body.toLowerCase();
+  const reviewAt = lower.indexOf(`${phrase} review`);
+  const resumeMatch = new RegExp(`${escapeRegExp(phrase)}\\s+resume(?!\\w)`, "i").exec(body);
   const candidates = [
-    { resume: false, at: lower.indexOf(`${phrase} review`), length: phrase.length + 7 },
-    { resume: true, at: lower.indexOf(`${phrase} resume`), length: phrase.length + 7 }
+    { resume: false, at: reviewAt, length: phrase.length + 7 },
+    ...resumeMatch ? [{ resume: true, at: resumeMatch.index, length: resumeMatch[0].length }] : []
   ].filter((c) => c.at >= 0);
   if (candidates.length === 0) return null;
   const first = candidates.reduce((a, b) => a.at <= b.at ? a : b);
@@ -32137,7 +32194,7 @@ async function replyToThread(client, target, rootCommentId, body) {
 }
 
 // src/review/dismissal.ts
-function escapeRegExp(s) {
+function escapeRegExp2(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 var FENCE = /^[ \t]*(`{3,}|~{3,})/;
@@ -32164,7 +32221,7 @@ function stripQuoted(body) {
 function explicitDismissReply(thread, triggerPhrase) {
   const phrase = triggerPhrase.trim();
   if (phrase === "") return null;
-  const command = new RegExp(`${escapeRegExp(phrase)}\\s+dismiss(?!\\w)`, "i");
+  const command = new RegExp(`${escapeRegExp2(phrase)}\\s+dismiss(?!\\w)`, "i");
   for (let i = thread.replies.length - 1; i >= 0; i--) {
     const reply = thread.replies[i];
     if (!reply || reply.author === "" || reply.author === thread.botLogin) continue;
@@ -32337,16 +32394,20 @@ async function upsertComment(octokit, target, body, stickyId) {
 
 // src/pipeline/git.ts
 var import_node_child_process3 = require("node:child_process");
-function gitOrNull2(args, cwd) {
+var QUOTEPATH_OFF2 = ["-c", "core.quotepath=false"];
+function gitRawOrNull(args, cwd) {
   try {
-    return (0, import_node_child_process3.execFileSync)("git", args, {
+    return (0, import_node_child_process3.execFileSync)("git", [...QUOTEPATH_OFF2, ...args], {
       cwd,
       encoding: "utf8",
       maxBuffer: 1024 * 1024 * 1024
-    }).trim();
+    });
   } catch {
     return null;
   }
+}
+function gitOrNull2(args, cwd) {
+  return gitRawOrNull(args, cwd)?.trim() ?? null;
 }
 function resolveTreeSha(ref, cwd) {
   return gitOrNull2(["rev-parse", `${ref}^{tree}`], cwd);
@@ -32355,9 +32416,9 @@ function objectExists(object2, cwd) {
   return gitOrNull2(["cat-file", "-e", `${object2}^{tree}`], cwd) !== null;
 }
 function treeDiffPaths(fromTree, toTree, cwd) {
-  const out = gitOrNull2(["diff-tree", "-r", "--name-only", "-z", fromTree, toTree], cwd);
+  const out = gitRawOrNull(["diff-tree", "-r", "--name-only", fromTree, toTree], cwd);
   if (out === null) return null;
-  return out.split("\0").filter((p) => p !== "");
+  return out.split("\n").filter((p) => p !== "").map(unquoteGitPath);
 }
 function resolveHeadSha(reviewHead, contextSha, cwd) {
   if (reviewHead === "HEAD") return contextSha;
@@ -32440,52 +32501,17 @@ function packGroups(groups, maxLines, maxChunks) {
   return { chunks, dropped: [] };
 }
 function parsePath(segment) {
-  const plus = headerPath(segment, /^\+\+\+ (.+)$/m);
-  if (plus !== void 0 && plus !== "/dev/null") return stripSide(plus);
-  const minus = headerPath(segment, /^--- (.+)$/m);
-  if (minus !== void 0 && minus !== "/dev/null") return stripSide(minus);
-  return "";
-}
-function headerPath(segment, re2) {
-  const raw = segment.match(re2)?.[1];
-  return raw === void 0 ? void 0 : raw.split("	")[0] ?? raw;
-}
-function stripSide(raw) {
-  const v = unquoteCPath(raw);
-  return v.startsWith("a/") || v.startsWith("b/") ? v.slice(2) : v;
-}
-var NAMED_ESCAPE = {
-  '"': 34,
-  "\\": 92,
-  t: 9,
-  n: 10,
-  r: 13,
-  b: 8,
-  f: 12,
-  a: 7,
-  v: 11
-};
-function unquoteCPath(path) {
-  if (!(path.length >= 2 && path.startsWith('"') && path.endsWith('"'))) return path;
-  const inner = path.slice(1, -1);
-  const bytes = [];
-  for (let i = 0; i < inner.length; i++) {
-    const code = inner.charCodeAt(i);
-    if (code !== 92) {
-      bytes.push(code);
-      continue;
-    }
-    const next = inner[i + 1];
-    if (next === void 0) break;
-    if (next >= "0" && next <= "7") {
-      bytes.push(parseInt(inner.slice(i + 1, i + 4), 8));
-      i += 3;
-      continue;
-    }
-    bytes.push(NAMED_ESCAPE[next] ?? next.charCodeAt(0));
-    i += 1;
+  const plus = segment.match(/^\+\+\+ (.+)$/m)?.[1];
+  if (plus !== void 0) {
+    const path = headerOperandPath(plus);
+    if (path !== "/dev/null") return path;
   }
-  return Buffer.from(bytes).toString("utf8");
+  const minus = segment.match(/^--- (.+)$/m)?.[1];
+  if (minus !== void 0) {
+    const path = headerOperandPath(minus);
+    if (path !== "/dev/null") return path;
+  }
+  return "";
 }
 
 // src/pipeline/scope.ts
@@ -32598,7 +32624,7 @@ function encodeMarker(state) {
 }
 function decodeMarker(body) {
   const re2 = new RegExp(
-    `${escapeRegExp2(MARKER_PREFIX2)}([A-Za-z0-9+/=]*)${escapeRegExp2(MARKER_SUFFIX)}`
+    `${escapeRegExp3(MARKER_PREFIX2)}([A-Za-z0-9+/=]*)${escapeRegExp3(MARKER_SUFFIX)}`
   );
   const m = body.match(re2);
   const payload = m?.[1];
@@ -32624,12 +32650,12 @@ function decodeMarker(body) {
     return {};
   }
 }
-function escapeRegExp2(s) {
+function escapeRegExp3(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function extractMarker(body) {
   const re2 = new RegExp(
-    `${escapeRegExp2(MARKER_PREFIX2)}[A-Za-z0-9+/=]*${escapeRegExp2(MARKER_SUFFIX)}`
+    `${escapeRegExp3(MARKER_PREFIX2)}[A-Za-z0-9+/=]*${escapeRegExp3(MARKER_SUFFIX)}`
   );
   return body.match(re2)?.[0] ?? null;
 }
@@ -32671,7 +32697,12 @@ function diffState(input) {
       // run preserves the prior values, so the next round's incremental scope keys
       // off the last head that was FULLY reviewed, not a half-finished one.
       reviewed_sha: input.complete ? input.head_sha : input.prior?.reviewed_sha,
-      reviewed_tree: input.complete ? input.reviewed_tree : input.prior?.reviewed_tree,
+      // A complete round with NO tree supplied keeps the prior tree rather than
+      // erasing it: settle.ts omits `reviewed_tree` when head-tree resolution
+      // fails, and writing `undefined` there would kill tree-based incremental
+      // scoping for every later round. `reviewed_sha` cannot hit this case —
+      // `head_sha` is always supplied — so falling back mirrors it by construction.
+      reviewed_tree: input.complete ? input.reviewed_tree ?? input.prior?.reviewed_tree : input.prior?.reviewed_tree,
       // Exception lists and cluster identity are threaded straight from the caller
       // on every run, complete or not: diffState is the only carrier into next_state,
       // so whatever the caller computed this round is what survives to the next.
@@ -39979,7 +40010,8 @@ async function reviewPackage(ctx, segments, mechanical, depth) {
   if (result.failure === "schema" && depth < BISECT_MAX_DEPTH && segments.length > 1) {
     return bisect(ctx, segments, mechanical, depth);
   }
-  const final = depth === 0 ? await ctx.review(ctx.buildEnvelope(segments, mechanical)) : result;
+  const retryable = depth === 0 && !deadlinePassed(ctx.wallDeadline);
+  const final = retryable ? await ctx.review(ctx.buildEnvelope(segments, mechanical)) : result;
   const status = final.verdict === "error" ? "unreviewed" : "reviewed";
   reportCoverage(ctx.onCoverage, segments, { status });
   return [final];
@@ -40448,10 +40480,10 @@ function parseHunkBody(segmentDiff) {
       noNewlineMarker = true;
     } else if (line.startsWith("+")) {
       additions++;
-      added.push(despace(line.slice(1)));
+      added.push(trimEnds(line.slice(1)));
     } else if (line.startsWith("-")) {
       deletions++;
-      removed.push(despace(line.slice(1)));
+      removed.push(trimEnds(line.slice(1)));
     }
     normalized.push(line);
   }
@@ -40496,8 +40528,8 @@ function summarize(body, memberCount) {
   const kind = body.deletions === 0 ? "insertion" : body.additions === 0 ? "deletion" : "change";
   return `identical ${changed}-line ${kind} in ${memberCount} files`;
 }
-function despace(content) {
-  return content.replace(/\s+/g, "");
+function trimEnds(content) {
+  return content.replace(/^\s+/, "").replace(/\s+$/, "");
 }
 
 // src/git/distill.ts
@@ -40542,8 +40574,8 @@ function distill(diff, opts) {
 }
 function withRenameTarget(segment) {
   if (segment.path !== "") return segment;
-  const to = segment.diff.match(/^rename to ([^"].*)$/m)?.[1];
-  return to === void 0 ? segment : { ...segment, path: to };
+  const to = segment.diff.match(/^rename to (.+)$/m)?.[1];
+  return to === void 0 ? segment : { ...segment, path: unquoteGitPath(to) };
 }
 function classifyRenames(diff, segments, bodies, strata) {
   for (const rename of diff.renames) strata.set(rename.from, "rename");
@@ -40553,7 +40585,7 @@ function classifyRenames(diff, segments, bodies, strata) {
     const from = segment.diff.match(/^rename from (.+)$/m)?.[1];
     if (from === void 0 || segment.path === "") continue;
     strata.set(segment.path, "rename");
-    strata.set(from, "rename");
+    strata.set(unquoteGitPath(from), "rename");
   }
 }
 function isWhitespaceOnly(body) {
@@ -40818,12 +40850,13 @@ function buildLedger(entries) {
 }
 function buildRoundLedger(input) {
   const carried = /* @__PURE__ */ new Set([...input.carried, ...input.carriedWithoutFinding ?? []]);
+  const changed = new Set(input.changedFiles);
   const entries = [];
   for (const path of input.changedFiles) {
     entries.push([path, changedFileEntry(path, carried, input)]);
   }
   for (const path of carried) {
-    if (!input.changedFiles.includes(path)) entries.push([path, { status: "carried" }]);
+    if (!changed.has(path)) entries.push([path, { status: "carried" }]);
   }
   for (const path of input.binaryFiles) entries.push([path, binaryFileEntry()]);
   for (const dropped of input.droppedFiles) entries.push([dropped.path, droppedFileEntry(dropped)]);
@@ -41139,7 +41172,7 @@ function formatVerdict(result, opts) {
 }
 function fitToSizeLimit(body, marker17, ledgerSummary) {
   let current = body;
-  let rendered = renderBody(body, buildFindingsSection(body.findings));
+  let rendered = "";
   for (const rung of ledgerRungs(body, ledgerSummary)) {
     current = rung;
     rendered = renderBody(rung, buildFindingsSection(rung.findings));
@@ -41234,8 +41267,10 @@ async function postBatch(octokit, batch, target, body) {
     });
     return { posted: batch, dropped: [], url: data.html_url };
   } catch (err) {
-    if (!isUnprocessable(err)) throw err;
     const lastError = errorMessage(err, "reviews API request failed");
+    if (!isUnprocessable(err)) {
+      return { posted: [], dropped: [], lastError, failed: lastError };
+    }
     if (batch.length <= 1) {
       return { posted: [], dropped: batch.map((b) => b.finding), lastError };
     }
@@ -41246,7 +41281,8 @@ async function postBatch(octokit, batch, target, body) {
       posted: [...left.posted, ...right.posted],
       dropped: [...left.dropped, ...right.dropped],
       url: left.url ?? right.url,
-      lastError: right.lastError ?? left.lastError
+      lastError: right.lastError ?? left.lastError,
+      failed: right.failed ?? left.failed
     };
   }
 }
@@ -41256,19 +41292,17 @@ async function postComments(octokit, postable, target, unanchored) {
   let posted = 0;
   let url;
   let lastError;
+  let failed;
   for (let i = 0; i < batches.length; i++) {
     const batch = batches[i];
     if (batch === void 0) continue;
     const body = batchBody(i, batches.length, batch.length, postable.length);
-    try {
-      const outcome = await postBatch(octokit, batch, target, body);
-      posted += outcome.posted.length;
-      dropped.push(...outcome.dropped);
-      url ??= outcome.url;
-      lastError = outcome.lastError ?? lastError;
-    } catch (err) {
-      lastError = errorMessage(err, "reviews API request failed");
-    }
+    const outcome = await postBatch(octokit, batch, target, body);
+    posted += outcome.posted.length;
+    dropped.push(...outcome.dropped);
+    url ??= outcome.url;
+    lastError = outcome.lastError ?? lastError;
+    failed = outcome.failed ?? failed;
   }
   if (posted === 0) {
     return {
@@ -41280,7 +41314,21 @@ async function postComments(octokit, postable, target, unanchored) {
       reason: lastError ?? "reviews API request failed"
     };
   }
-  return { posted: true, count: posted, batches: batches.length, unanchored, dropped, url };
+  return {
+    posted: true,
+    count: posted,
+    batches: batches.length,
+    unanchored,
+    dropped,
+    url,
+    // Some comments posted for real, but a non-bisectable (non-422) failure
+    // ALSO hit another batch/half — `reason` doubles as that partial-failure
+    // marker here (see InlineReviewResult's doc). A pure 422 that bisection
+    // isolated down to a `dropped` entry deliberately does NOT set this: that
+    // finding is already fully accounted for, so re-surfacing its error as
+    // `reason` would read as "something is unaccounted for" when nothing is.
+    ...failed !== void 0 ? { reason: failed } : {}
+  };
 }
 
 // src/github/review.ts
@@ -41469,9 +41517,9 @@ function clusterFor(groups, thread, priorClusters) {
   return idx;
 }
 function clusterSettled(group, t, priorClusters) {
+  if (t.dismissal === "exhausted" && group.some((m) => m.severity === "blocker")) return false;
   if (group.some((m) => matchesSettled(m, t))) return true;
   if (group.length === 1) return false;
-  if (t.dismissal === "exhausted" && group.some((m) => m.severity === "blocker")) return false;
   return linkedByPriorCluster(group, t, priorClusters);
 }
 function dropSettled(findings, priorThreads, clusters) {
@@ -41509,7 +41557,11 @@ function reconcile(findings, priorThreads, clusters) {
       continue;
     }
     if (open.has(idx)) {
-      if (group.length === 1) toResolve.push(thread);
+      if (group.length === 1) {
+        toResolve.push(thread);
+        continue;
+      }
+      if (authorHasLastWord(thread)) toReply.push({ thread, finding: matched });
       continue;
     }
     open.add(idx);

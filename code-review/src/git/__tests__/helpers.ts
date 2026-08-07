@@ -42,3 +42,23 @@ export function writeFile(dir: string, relPath: string, content: string): void {
   mkdirSync(dirname(full), { recursive: true });
   writeFileSync(full, content);
 }
+
+/**
+ * Whether this runner's filesystem accepts `name` as a filename — probed by
+ * actually creating it in a throwaway temp dir. Used to skip (never silently
+ * pass) the special-character path tests on a filesystem that refuses names
+ * containing `"` or a tab, such as an exFAT/NTFS mount or macOS SMB.
+ */
+export function canCreateFile(name: string): boolean {
+  const dir = makeTmpDir();
+  try {
+    writeFileSync(join(dir, name), "probe\n");
+    return true;
+  } catch {
+    // The probe's ONLY question is "does this fs accept the name"; any failure
+    // to create it is a no, and the caller skips the case with that reason.
+    return false;
+  } finally {
+    removeRepo(dir);
+  }
+}

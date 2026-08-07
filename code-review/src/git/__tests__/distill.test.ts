@@ -246,6 +246,43 @@ describe("distill — edges", () => {
     expect(d.review_diff.total_lines).toBe(0);
   });
 
+  // Regression: despacing the compared lines made an edit INSIDE a string literal
+  // compare equal to its own original, classifying the file `formatting` and
+  // dropping it from the review diff entirely. Trim-only comparison sends every
+  // interior whitespace change to `substantive` instead.
+  it("classifies an in-literal whitespace edit substantive, not formatting", () => {
+    const dir = baseRepo({ "src/db.ts": 'const sql = "select * from  t";\n' });
+    commitChange(dir, { "src/db.ts": 'const sql = "select *from t";\n' });
+
+    const diff = fetchDiff({ ...BASE, cwd: dir });
+    const d = distill(diff, { rulesPaths: [], cwd: dir });
+    expect(d.strata).toEqual({ "src/db.ts": "substantive" });
+    expect(splitDiffByFile(d.review_diff.diff).map((s) => s.path)).toEqual(["src/db.ts"]);
+    expect(d.review_diff.diff).toContain('L1: +const sql = "select *from t";');
+  });
+
+  it("still classifies a pure indentation reflow formatting, and drops it", () => {
+    const dir = baseRepo({ "src/fmt.ts": "function f() {\n  return 1;\n}\n" });
+    // Leading whitespace only: every changed line is byte-identical once trimmed.
+    commitChange(dir, { "src/fmt.ts": "function f() {\n\t\treturn 1;\n}\n" });
+
+    const diff = fetchDiff({ ...BASE, cwd: dir });
+    const d = distill(diff, { rulesPaths: [], cwd: dir });
+    expect(d.strata).toEqual({ "src/fmt.ts": "formatting" });
+    expect(d.review_diff.diff).toBe("");
+    expect(d.review_diff.total_files).toBe(0);
+  });
+
+  it("classifies a trailing-whitespace-only change formatting", () => {
+    const dir = baseRepo({ "src/tail.ts": "const x = 1;\nconst y = 2;\n" });
+    commitChange(dir, { "src/tail.ts": "const x = 1;   \nconst y = 2;\t\n" });
+
+    const diff = fetchDiff({ ...BASE, cwd: dir });
+    const d = distill(diff, { rulesPaths: [], cwd: dir });
+    expect(d.strata).toEqual({ "src/tail.ts": "formatting" });
+    expect(d.review_diff.diff).toBe("");
+  });
+
   it("returns an empty distillation for an empty diff", () => {
     const dir = baseRepo({ "only.ts": "const x = 1;\n" });
     const diff = fetchDiff({ ...BASE, cwd: dir });

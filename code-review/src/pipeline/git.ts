@@ -3,15 +3,27 @@
 // content at a ref. Split out of pipeline.ts so the orchestrator stays lean.
 import { execFileSync } from "node:child_process";
 import { fetchDiff } from "@/git/diff.js";
+import { unquoteGitPath } from "@/git/path.js";
 
-/** Run `git` and return trimmed stdout, or null on non-zero exit (the `|| true` idiom). */
-export function gitOrNull(args: string[], cwd: string): string | null {
+/**
+ * Force RAW (unescaped) non-ASCII bytes in every path git prints, exactly as
+ * git/diff.ts does. The two modules' outputs are COMPARED (scope.ts matches
+ * `treeDiffPaths` against `diff.changed_files`), so they must agree on how a
+ * path is spelled or a non-ASCII file reads as unchanged and is dropped from
+ * the incremental review.
+ */
+const QUOTEPATH_OFF = ["-c", "core.quotepath=false"];
+
+/** Run `git` and return stdout VERBATIM, or null on non-zero exit. Path output must
+ *  not be trimmed: a path may legally begin or end with a space, and git does not
+ *  quote one — trimming would silently rename it. */
+function gitRawOrNull(args: string[], cwd: string): string | null {
   try {
-    return execFileSync("git", args, {
+    return execFileSync("git", [...QUOTEPATH_OFF, ...args], {
       cwd,
       encoding: "utf8",
       maxBuffer: 1024 * 1024 * 1024,
-    }).trim();
+    });
   } catch {
     // Silent by contract: non-zero exit is an ANSWER here, not an error —
     // `merge-base --is-ancestor` says "no" via exit code, `rev-parse --verify`
@@ -19,6 +31,11 @@ export function gitOrNull(args: string[], cwd: string): string | null {
     // decision points when the outcome is worth surfacing.
     return null;
   }
+}
+
+/** Run `git` and return trimmed stdout, or null on non-zero exit (the `|| true` idiom). */
+export function gitOrNull(args: string[], cwd: string): string | null {
+  return gitRawOrNull(args, cwd)?.trim() ?? null;
 }
 
 /**
@@ -39,15 +56,22 @@ export function objectExists(object: string, cwd: string): boolean {
 }
 
 /**
- * The paths differing between two TREE objects (`git diff-tree -r --name-only -z`),
+ * The paths differing between two TREE objects (`git diff-tree -r --name-only`),
  * or null when the command fails (the caller then fails open to a full review).
- * NUL-delimited because a git path may contain a newline but never a NUL — the same
- * idiom as git/diff.ts's batched check-attr.
+ *
+ * NEWLINE-delimited, deliberately NOT `-z`, then C-unquoted (git/path.ts): the
+ * result is compared for equality against `DiffData.changed_files`, which
+ * git/diff.ts reads off a non-`-z` `git diff --name-only` and decodes the same
+ * way. Both sides therefore hold the REAL path. Line splitting is safe because a
+ * path containing a newline is always quoted, so it can never span two lines.
  */
 export function treeDiffPaths(fromTree: string, toTree: string, cwd: string): string[] | null {
-  const out = gitOrNull(["diff-tree", "-r", "--name-only", "-z", fromTree, toTree], cwd);
+  const out = gitRawOrNull(["diff-tree", "-r", "--name-only", fromTree, toTree], cwd);
   if (out === null) return null;
-  return out.split("\0").filter((p) => p !== "");
+  return out
+    .split("\n")
+    .filter((p) => p !== "")
+    .map(unquoteGitPath);
 }
 
 /** Resolve the head sha for state/anchoring: GITHUB_SHA for HEAD, else `git rev-parse`. */

@@ -126,6 +126,89 @@ describe("resolveEvent — issue_comment security gate", () => {
   });
 });
 
+describe("resolveEvent — issue_comment `<phrase> resume` trigger", () => {
+  /** `issue-comment-pr` with the comment body swapped for one exercising the
+   *  resume trigger's word-boundary matching. */
+  function withBody(body: string): EventPayload {
+    return {
+      ...payload("issue-comment-pr"),
+      comment: { id: 42, body, user: { login: "alice", type: "User" } },
+    };
+  }
+
+  it("fires on a bare `@toolu resume`", async () => {
+    const r = await resolveEvent(
+      { eventName: "issue_comment", payload: withBody("@toolu resume") },
+      { lookupPermission: perm("write") },
+    );
+    expect(r.run).toBe(true);
+    expect(r.reason).toBe("mention-resume");
+    expect(r.resume).toBe(true);
+    expect(r.full_review).toBe(false);
+    expect(r.instruction).toBe("");
+  });
+
+  it("fires on `@toolu resume` followed by trailing text, trimming the instruction", async () => {
+    const r = await resolveEvent(
+      { eventName: "issue_comment", payload: withBody("@toolu resume  please continue") },
+      { lookupPermission: perm("write") },
+    );
+    expect(r.run).toBe(true);
+    expect(r.resume).toBe(true);
+    // The instruction is trimmed from the ORIGINAL (not lower-cased) body.
+    expect(r.instruction).toBe("please continue");
+  });
+
+  // The BLOCKER this regression pins: an unanchored `indexOf("@toolu resume")`
+  // fires on the "resume" PREFIX of "resumed"/"resumes"/"resuming", handing the
+  // model whatever text follows the prefix as its "instruction". None of these
+  // is the resume command — each must fall through to "no-trigger".
+  it.each(["resumed", "resumes", "resuming"])(
+    "does NOT fire on '%s' (word-boundary — no bare resume command)",
+    async (word) => {
+      const r = await resolveEvent(
+        { eventName: "issue_comment", payload: withBody(`@toolu ${word} the discussion`) },
+        { lookupPermission: perm("write") },
+      );
+      expect(r.run).toBe(false);
+      expect(r.reason).toBe("no-trigger");
+    },
+  );
+
+  it("a body with BOTH '@toolu review' and '@toolu resume' resolves to whichever comes FIRST", async () => {
+    // Deliberately pinning current "first trigger in the body wins" precedence
+    // (findTrigger's doc): "review" appears before "resume" here, so review wins
+    // and the review candidate's own (pre-existing, unfixed) indexOf match is
+    // what fires — not the word-boundary-safe resume match.
+    const r = await resolveEvent(
+      {
+        eventName: "issue_comment",
+        payload: withBody("@toolu review this, and also @toolu resume afterward"),
+      },
+      { lookupPermission: perm("write") },
+    );
+    expect(r.run).toBe(true);
+    expect(r.reason).toBe("mention");
+    expect(r.resume).toBeUndefined();
+    expect(r.full_review).toBe(false);
+    expect(r.instruction).toBe("this, and also @toolu resume afterward");
+  });
+
+  it("when 'resume' comes first in the body, the resume trigger wins", async () => {
+    const r = await resolveEvent(
+      {
+        eventName: "issue_comment",
+        payload: withBody("@toolu resume, then @toolu review everything again"),
+      },
+      { lookupPermission: perm("write") },
+    );
+    expect(r.run).toBe(true);
+    expect(r.reason).toBe("mention-resume");
+    expect(r.resume).toBe(true);
+    expect(r.instruction).toBe(", then @toolu review everything again");
+  });
+});
+
 describe("resolveEvent — issue_comment cheap guards (no API call)", () => {
   it("ignores a bot-authored comment", async () => {
     let looked = false;

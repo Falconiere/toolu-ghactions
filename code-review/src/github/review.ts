@@ -109,7 +109,16 @@ export interface InlineReviewResult {
   dropped: Finding[];
   /** The first created review's html_url when at least one batch posted. */
   url?: string;
-  /** Why nothing was posted at all (skip reason or a wholesale caught error). */
+  /**
+   * Why nothing was posted at all (skip reason or a wholesale caught error) —
+   * or, when `posted` is true, a PARTIAL-failure marker: some comments posted
+   * for real (see `count`/`url`) but a non-bisectable error (permissions,
+   * network, ...) also hit another batch or bisected half, whose findings are
+   * in neither `dropped` nor counted as posted (github/reviewBatch.ts never
+   * discards an already-posted sibling to report that failure). Never set
+   * merely because a poison comment landed in `dropped` — that is already
+   * fully accounted for there.
+   */
   reason?: string;
 }
 

@@ -8,6 +8,7 @@
 // so joining the segments reproduces the input EXACTLY — the single-chunk path is
 // byte-identical to the un-chunked prompt, keeping existing fixtures stable.
 import { countLines } from "./diff.js";
+import { headerOperandPath } from "./path.js";
 
 /** One file's slice of the shaped diff. */
 export interface FileSegment {
@@ -113,64 +114,15 @@ export function packGroups(
  * still rides in a chunk, it just carries no mechanical-finding key.
  */
 function parsePath(segment: string): string {
-  const plus = headerPath(segment, /^\+\+\+ (.+)$/m);
-  if (plus !== undefined && plus !== "/dev/null") return stripSide(plus);
-  const minus = headerPath(segment, /^--- (.+)$/m);
-  if (minus !== undefined && minus !== "/dev/null") return stripSide(minus);
-  return "";
-}
-
-/** A `---`/`+++` header path, with git's trailing tab (added for spaced names) removed. */
-function headerPath(segment: string, re: RegExp): string | undefined {
-  const raw = segment.match(re)?.[1];
-  return raw === undefined ? undefined : (raw.split("\t")[0] ?? raw);
-}
-
-/**
- * Normalize one side's path so it KEY-MATCHES a SARIF finding's path: decode git's
- * C-quoting (a `"…"` wrapper with octal `\nnn` / `\t` / `\"` / `\\` escapes, emitted
- * for non-ASCII bytes), then drop the `a/` or `b/` side prefix. So `"b/caf\303\251.ts"`
- * → `café.ts` — without this the mechanical findings on such a file would orphan onto
- * chunk[0] and be triaged against the wrong code.
- */
-function stripSide(raw: string): string {
-  const v = unquoteCPath(raw);
-  return v.startsWith("a/") || v.startsWith("b/") ? v.slice(2) : v;
-}
-
-/** git's C-quote named escapes → byte value. */
-const NAMED_ESCAPE: Record<string, number> = {
-  '"': 0x22,
-  "\\": 0x5c,
-  t: 0x09,
-  n: 0x0a,
-  r: 0x0d,
-  b: 0x08,
-  f: 0x0c,
-  a: 0x07,
-  v: 0x0b,
-};
-
-/** Decode a git C-quoted path (`"…"` with octal/named escapes) to its UTF-8 form. */
-function unquoteCPath(path: string): string {
-  if (!(path.length >= 2 && path.startsWith('"') && path.endsWith('"'))) return path;
-  const inner = path.slice(1, -1);
-  const bytes: number[] = [];
-  for (let i = 0; i < inner.length; i++) {
-    const code = inner.charCodeAt(i);
-    if (code !== 0x5c) {
-      bytes.push(code);
-      continue;
-    }
-    const next = inner[i + 1];
-    if (next === undefined) break;
-    if (next >= "0" && next <= "7") {
-      bytes.push(parseInt(inner.slice(i + 1, i + 4), 8));
-      i += 3;
-      continue;
-    }
-    bytes.push(NAMED_ESCAPE[next] ?? next.charCodeAt(0));
-    i += 1;
+  const plus = segment.match(/^\+\+\+ (.+)$/m)?.[1];
+  if (plus !== undefined) {
+    const path = headerOperandPath(plus);
+    if (path !== "/dev/null") return path;
   }
-  return Buffer.from(bytes).toString("utf8");
+  const minus = segment.match(/^--- (.+)$/m)?.[1];
+  if (minus !== undefined) {
+    const path = headerOperandPath(minus);
+    if (path !== "/dev/null") return path;
+  }
+  return "";
 }

@@ -115,6 +115,41 @@ describe("carryForward", () => {
     ]);
   });
 
+  it("drops a prior finding with no USABLE path outright, in every shape", () => {
+    // `pathOf` is the first gate, ahead of the schema check, and its failure is the
+    // one drop that reports NOTHING: `carriedWithoutFinding` is a list of PATHS, so
+    // a finding without one has nothing to be ledgered against and cannot be
+    // re-injected either. All three shapes the untrusted marker can produce —
+    // missing key, empty string, wrong type — must take that branch, and a good
+    // finding alongside them must still come through.
+    const prior: StoredFinding[] = JSON.parse(
+      `[{"line":1,"severity":"low","text":"no path key","fp":"fp-missing"},
+        {"path":"","line":2,"severity":"low","text":"empty path","fp":"fp-empty"},
+        {"path":null,"line":3,"severity":"low","text":"null path","fp":"fp-null"},
+        {"path":42,"line":4,"severity":"low","text":"numeric path","fp":"fp-number"},
+        {"path":["src/a.ts"],"line":5,"severity":"low","text":"array path","fp":"fp-array"},
+        {"path":"src/good.ts","line":6,"severity":"low","text":"keeps its path","fp":"fp-good"}]`,
+    );
+    const r = carryForward({ modelFindings: [], priorFindings: prior, ledger: ledger([]) });
+
+    // Only the one with a real path survives…
+    expect(r.findings.map((f) => f.fp)).toEqual(["fp-good"]);
+    // …and the five path-less entries leave no trace at all: they are NOT reported
+    // as carried-without-finding, because there is no path to report.
+    expect(r.carriedWithoutFinding).toEqual([]);
+  });
+
+  it("a path-less finding is dropped even when it would otherwise pass the schema", () => {
+    // Isolates the gate from the schema check: this entry is well-formed in every
+    // other respect, so only the empty `path` can be what drops it.
+    const prior: StoredFinding[] = JSON.parse(
+      '[{"path":"","line":9,"severity":"blocker","category":"correctness","text":"well formed but anchorless","fp":"fp-shapely"}]',
+    );
+    const r = carryForward({ modelFindings: [], priorFindings: prior, ledger: ledger([]) });
+    expect(r.findings).toEqual([]);
+    expect(r.carriedWithoutFinding).toEqual([]);
+  });
+
   it("dedupes by fp with the MODEL finding winning, and reports a path once", () => {
     const model = stamped({ path: "src/dup.ts", line: 20, text: "this round's wording" });
     const prior: StoredFinding[] = JSON.parse(

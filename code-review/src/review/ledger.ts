@@ -110,13 +110,17 @@ export interface RoundLedgerInput {
  */
 export function buildRoundLedger(input: RoundLedgerInput): CoverageLedger {
   const carried = new Set([...input.carried, ...(input.carriedWithoutFinding ?? [])]);
+  // Set, not `changedFiles.includes` — the membership test below runs once per
+  // carried path, and a linear scan per probe is O(carried × changedFiles) on the
+  // very PRs (thousands of paths) this ledger exists to account for.
+  const changed = new Set(input.changedFiles);
   const entries: Array<readonly [string, CoverageEntry]> = [];
 
   for (const path of input.changedFiles) {
     entries.push([path, changedFileEntry(path, carried, input)]);
   }
   for (const path of carried) {
-    if (!input.changedFiles.includes(path)) entries.push([path, { status: "carried" }]);
+    if (!changed.has(path)) entries.push([path, { status: "carried" }]);
   }
   for (const path of input.binaryFiles) entries.push([path, binaryFileEntry()]);
   for (const dropped of input.droppedFiles) entries.push([dropped.path, droppedFileEntry(dropped)]);

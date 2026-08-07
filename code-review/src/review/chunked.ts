@@ -44,7 +44,11 @@ export interface ChunkedReviewOptions {
   diff: DiffData;
   /** Per-chunk diff-line budget; ≤ 0 disables chunking (always one call). */
   maxChunkLines: number;
-  /** Max chunks (= model calls); files beyond spill out and are noted. 0 = unlimited. */
+  /** Max chunks (packages); files beyond spill out and are noted. 0 = unlimited.
+   *  NOT a model-call count: a package costs 1 call when it succeeds or fails
+   *  unbisectably-without-retry, 2 with its one retry, and up to 7 when a schema
+   *  failure bisects (1 + 2 halves + 4 quarters, review/bisect.ts) — so the call
+   *  ceiling is `maxChunks × 7`, not `maxChunks`. */
   maxChunks: number;
   /** Deterministic SAST findings, partitioned per chunk by file path. */
   mechanical: MechanicalFinding[];

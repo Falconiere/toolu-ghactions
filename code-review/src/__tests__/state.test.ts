@@ -289,6 +289,62 @@ describe("diffState", () => {
     expect(r.next_state.unreviewed_paths).toEqual(["src/failed.ts"]);
     expect(r.next_state.pending_paths).toEqual(["src/pending.ts"]);
   });
+
+  // Regression: a complete round with no reviewed_tree used to write `undefined`
+  // over the prior tree, permanently disabling tree-based incremental scoping.
+  // settle.ts OMITS reviewed_tree whenever head-tree resolution fails, so this is
+  // the real, reachable path — not a hypothetical one.
+  it("complete:true WITHOUT a reviewed_tree preserves the prior tree instead of erasing it", () => {
+    const priorWithTree: ReviewState = {
+      ...prior,
+      reviewed_sha: "prior-sha",
+      reviewed_tree: "prior-tree",
+    };
+    const r = diffState({
+      prior: priorWithTree,
+      current_findings: [{ path: "src/a.ts", text: "finding A", category: "c" }],
+      scope: { in_scope_paths: ["src/a.ts"], full_review: true },
+      head_sha: "new-head-sha",
+      verdict: "changes",
+      complete: true,
+      // no reviewed_tree: settle.ts could not resolve the head tree this round.
+    });
+    // reviewed_sha advances (head_sha is always supplied); the tree holds its
+    // last known-good value rather than becoming undefined.
+    expect(r.next_state.reviewed_sha).toBe("new-head-sha");
+    expect(r.next_state.reviewed_tree).toBe("prior-tree");
+  });
+
+  it("complete:true WITH a reviewed_tree advances it past the prior tree", () => {
+    const priorWithTree: ReviewState = {
+      ...prior,
+      reviewed_sha: "prior-sha",
+      reviewed_tree: "prior-tree",
+    };
+    const r = diffState({
+      prior: priorWithTree,
+      current_findings: [{ path: "src/a.ts", text: "finding A", category: "c" }],
+      scope: { in_scope_paths: ["src/a.ts"], full_review: true },
+      head_sha: "new-head-sha",
+      verdict: "changes",
+      complete: true,
+      reviewed_tree: "new-tree",
+    });
+    expect(r.next_state.reviewed_tree).toBe("new-tree");
+  });
+
+  it("complete:true with no prior and no reviewed_tree leaves the tree unset", () => {
+    const r = diffState({
+      prior: null,
+      current_findings: [{ path: "src/a.ts", text: "finding A", category: "c" }],
+      scope: { in_scope_paths: ["src/a.ts"], full_review: true },
+      head_sha: "new-head-sha",
+      verdict: "changes",
+      complete: true,
+    });
+    expect(r.next_state.reviewed_tree).toBeUndefined();
+    expect(r.next_state.reviewed_sha).toBe("new-head-sha");
+  });
 });
 
 describe("extractMarker", () => {

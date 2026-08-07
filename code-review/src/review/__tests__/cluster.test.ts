@@ -152,6 +152,54 @@ describe("clusterFindings — mixed batch partitions correctly", () => {
   });
 });
 
+// The grouping key is `${category ?? ""}\0${normText(text)}`. Both halves matter:
+// the `?? ""` decides whether an absent category is its own bucket, and the NUL
+// separator is what keeps the two halves from running together. These pin the key
+// through the public API, so the separator can be re-spelled (a literal control
+// byte vs the `\0` escape — the escape is required, a raw NUL makes git treat the
+// whole source file as binary and hides it from diff review) without silent drift.
+describe("clusterFindings — the category/text dedup key", () => {
+  it('keys an absent category identically to an empty one (`category ?? ""`)', () => {
+    const text = "Prefer the shared logger over console.log here.";
+    const findings: StampedFinding[] = [
+      stamp({ path: "src/undef-1.ts", line: 1, text }), // category: undefined
+      stamp({ path: "src/undef-2.ts", line: 1, text }),
+      stamp({ path: "src/empty-1.ts", line: 1, category: "", text }),
+      stamp({ path: "src/empty-2.ts", line: 1, category: "", text }),
+    ];
+    const clusters = clusterFindings(findings);
+
+    // 4 distinct paths under ONE key → a single 4-member cluster. Had `undefined`
+    // and "" keyed apart, each pair would have stayed sub-threshold singletons.
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0]?.members.map((m) => m.path).sort()).toEqual([
+      "src/empty-1.ts",
+      "src/empty-2.ts",
+      "src/undef-1.ts",
+      "src/undef-2.ts",
+    ]);
+  });
+
+  it("separates a category/text boundary shift that a separator-less key would merge", () => {
+    // "sec" + "urity issue" and "" + "security issue" concatenate to the SAME string;
+    // only the separator between the two halves keeps them in different buckets.
+    const split: StampedFinding[] = Array.from({ length: 3 }, (_, i) =>
+      stamp({ path: `src/split-${i}.ts`, line: 1, category: "sec", text: "urity issue" }),
+    );
+    const whole: StampedFinding[] = Array.from({ length: 3 }, (_, i) =>
+      stamp({ path: `src/whole-${i}.ts`, line: 1, category: "", text: "security issue" }),
+    );
+
+    const clusters = clusterFindings([...split, ...whole]);
+    expect(clusters).toHaveLength(2);
+    expect(clusters.map((c) => c.members.length)).toEqual([3, 3]);
+    const categories = clusters
+      .map((c) => c.exemplar.category ?? "")
+      .sort((a, b) => a.localeCompare(b));
+    expect(categories).toEqual(["", "sec"]);
+  });
+});
+
 describe("clusterFindings — determinism", () => {
   it("same input (in different array order) produces the same partition", () => {
     const findings: StampedFinding[] = Array.from({ length: 6 }, (_, i) =>
