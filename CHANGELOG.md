@@ -1,5 +1,25 @@
 # Changelog
 
+## [7.0.0](https://github.com/Falconiere/toolu-ghactions/compare/v6.6.0...v7.0.0) (2026-08-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **code-review:** MAX_CHUNKS now defaults to 0 (unlimited) with capped files recorded per-file as unreviewed; file-level fallback comments are removed (unanchorable findings appear in the sticky comment); sticky-comment layout and prompt bytes changed. Ships as code-review v7.
+
+### Features
+
+* **code-review:** size-proof review pipeline with distillation, clustering, and coverage ledger ([f4123f0](https://github.com/Falconiere/toolu-ghactions/commit/f4123f054964e662cc9f31bae25ea58e9fa5e3c8))
+
+
+### Bug Fixes
+
+* **code-review:** close all pre-push review findings ([7c9d1b7](https://github.com/Falconiere/toolu-ghactions/commit/7c9d1b70960792aceacf61f89d28dc729732b4be))
+* **code-review:** document lastBody's create-vs-update precedence ([f3f19fc](https://github.com/Falconiere/toolu-ghactions/commit/f3f19fc9ed29ee200a0853c7a09ab73aef2135b0))
+* **code-review:** note the warm-up path also covers single-package runs ([a873283](https://github.com/Falconiere/toolu-ghactions/commit/a8732832e5bc6ba74946f002c81efed71a521285))
+* **code-review:** tighten isRecord, single-source the settled verdict, note the MAX_CHUNKS default change ([d2e377b](https://github.com/Falconiere/toolu-ghactions/commit/d2e377b052820b3d2af69693fcc6a1af928da479))
+* **code-review:** write FETCH_HEAD via a real fetch in resume tests ([1d6caf7](https://github.com/Falconiere/toolu-ghactions/commit/1d6caf7a76e7464267cbf00d00b7b82d9311d4bd))
+
 ## [Unreleased]
 
 ### ⚠ BREAKING CHANGES
