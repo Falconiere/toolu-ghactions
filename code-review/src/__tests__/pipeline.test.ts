@@ -1650,7 +1650,7 @@ describe("runReview — partial rounds, @toolu resume, ledger degrade (AC-10, AC
     });
 
     // The resume runs against FETCH_HEAD, as an issue_comment run does in prod.
-    git(dir, "update-ref", "FETCH_HEAD", "HEAD");
+    git(dir, "fetch", dir, "HEAD"); // real fetch writes FETCH_HEAD (update-ref refuses pseudorefs on newer git)
     const calls: { system: string; user: string }[] = [];
 
     const resumed = await runReview({
@@ -1686,7 +1686,7 @@ describe("runReview — partial rounds, @toolu resume, ledger degrade (AC-10, AC
   it("`@toolu resume` obeys the same permission floor as `@toolu review`", async () => {
     const { dir, headSha } = track(twoChunkSpillRepo());
     const { octokit, rec } = fakeOctokit();
-    git(dir, "update-ref", "FETCH_HEAD", "HEAD");
+    git(dir, "fetch", dir, "HEAD"); // real fetch writes FETCH_HEAD (update-ref refuses pseudorefs on newer git)
 
     const result = await runReview({
       inputs: baseInputs({ inlineComments: false, manageLabels: false }),
@@ -1706,7 +1706,7 @@ describe("runReview — partial rounds, @toolu resume, ledger degrade (AC-10, AC
   it("`@toolu resume` with nothing pending falls back to a full review", async () => {
     const { dir, headSha } = track(featureRepoWithChange());
     const { octokit, rec } = fakeOctokit();
-    git(dir, "update-ref", "FETCH_HEAD", "HEAD");
+    git(dir, "fetch", dir, "HEAD"); // real fetch writes FETCH_HEAD (update-ref refuses pseudorefs on newer git)
     const calls: { system: string; user: string }[] = [];
 
     const result = await runReview({

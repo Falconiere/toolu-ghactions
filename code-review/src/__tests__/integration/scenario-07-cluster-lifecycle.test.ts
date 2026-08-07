@@ -110,7 +110,7 @@ describe("scenario 7 — cluster lifecycle (AC-15.7)", () => {
 
     // A re-trigger comment re-reviews the whole PR (the tree is unchanged, so a
     // push event would review nothing — see scenario 5).
-    git(dir, "update-ref", "FETCH_HEAD", "HEAD");
+    git(dir, "fetch", dir, "HEAD"); // real fetch writes FETCH_HEAD (update-ref refuses pseudorefs on newer git)
     const reReview = commentContext(headSha, "@toolu review");
 
     // ── Round 2: the exemplar's own file is clean now; 66 members remain.
@@ -181,7 +181,7 @@ describe("scenario 7 — cluster lifecycle (AC-15.7)", () => {
     // whole pattern — and resolves it on GitHub.
     const seed = seedFromPosted(posted?.body ?? "", posted?.path ?? "", posted?.line);
     threads.push({ ...seed, isResolved: true });
-    git(dir, "update-ref", "FETCH_HEAD", "HEAD");
+    git(dir, "fetch", dir, "HEAD"); // real fetch writes FETCH_HEAD (update-ref refuses pseudorefs on newer git)
 
     const after = await runReview({
       inputs,

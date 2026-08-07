@@ -73,7 +73,7 @@ describe("scenario 6 — the wall clock, then @toolu resume (AC-15.6)", () => {
     // ── Meanwhile the author pushes another file, then comments `@toolu resume`.
     writeFile(dir, LATER, "export const later = 3;\n");
     commitAll(dir, "add later");
-    git(dir, "update-ref", "FETCH_HEAD", "HEAD"); // an issue_comment run reviews FETCH_HEAD
+    git(dir, "fetch", dir, "HEAD"); // real fetch writes FETCH_HEAD (update-ref refuses pseudorefs on newer git)
 
     const round2 = modelServer({
       reply: () =>
