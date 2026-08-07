@@ -32,6 +32,7 @@ describe("renderRecap", () => {
       scope: { in_scope_paths: ["src/a.ts", "src/b.ts", "src/c.ts"], full_review: true },
       head_sha: "deadbeefcafe",
       verdict: "changes",
+      complete: true,
     });
 
     const md = renderRecap(diff, { history: diff.next_state.history, fullReview: true });
@@ -63,6 +64,7 @@ describe("renderRecap", () => {
       scope: { in_scope_paths: ["src/a.ts"], full_review: false },
       head_sha: "0123456789",
       verdict: "changes",
+      complete: true,
     });
     const md = renderRecap(diff, { history: diff.next_state.history, fullReview: false });
     expect(md).toContain("_scoped review — resolutions not recomputed_");
@@ -80,6 +82,7 @@ describe("renderRecap", () => {
       scope: { in_scope_paths: ["src/a.ts", "src/b.ts", "src/c.ts"], full_review: true },
       head_sha: "deadbeefcafe",
       verdict: "changes",
+      complete: true,
     });
 
     const md = renderRecap(diff, {

@@ -66,6 +66,29 @@ describe("dropOutOfScope", () => {
     expect(r.dropped).toEqual([f]);
   });
 
+  it("keeps a finding on an EXCEPTION path the line scope would have dropped", () => {
+    // A resume run: src/pending.ts was never attempted last round, so its whole
+    // file is in scope regardless of what the tree-diff reports line by line.
+    const f = finding({ fp: "fp-resume", path: "src/pending.ts", line: 99 });
+    const r = dropOutOfScope([f], EMPTY, [], [], new Set(["src/pending.ts"]));
+    expect(r.kept).toEqual([f]);
+    expect(r.dropped).toEqual([]);
+  });
+
+  it("drops an out-of-scope finding on a path that is NOT an exception", () => {
+    const f = finding({ fp: "fp-invented", path: "src/other.ts", line: 99 });
+    const r = dropOutOfScope([f], EMPTY, [], [], new Set(["src/pending.ts"]));
+    expect(r.kept).toEqual([]);
+    expect(r.dropped).toEqual([f]);
+  });
+
+  it("an EMPTY exception set behaves exactly like no exception set at all", () => {
+    const f = finding({ fp: "fp-invented", path: "src/other.ts", line: 99 });
+    expect(dropOutOfScope([f], EMPTY, [], [], new Set())).toEqual(
+      dropOutOfScope([f], EMPTY, [], []),
+    );
+  });
+
   it("splits a mixed batch: in-scope kept, carried kept, invention dropped", () => {
     const inScope = finding({ fp: "fp-a", path: "src/new.ts", line: 5 });
     const carried = finding({ fp: "fp-b", path: "src/a.ts", line: 11 });

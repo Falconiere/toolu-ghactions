@@ -1,11 +1,18 @@
-// pipeline/publish.ts — the publishing phase of a review run: settle the verdict
-// (resolved-thread suppression, MAX_ROUNDS surrender), render review memory,
-// post the verdict comment + label, and execute the inline-thread reconcile
-// plan. Split out of pipeline.ts so the orchestrator stays lean.
+// pipeline/publish.ts — the publishing phase of a review run: reduce (carry
+// forward + cluster), settle the verdict, execute the inline-thread reconcile
+// plan, post the sticky verdict comment + label, and hand the run to the toolu.sh
+// reporter. Split out of pipeline.ts so the orchestrator stays lean; the two
+// deterministic decisions it makes (verdict, marker) live in pipeline/settle.ts
+// and the Layer 3 reduction in pipeline/reduce.ts, so this file stays orchestration.
+//
+// ORDER IS LOAD-BEARING, twice over:
+//  - the INLINE review runs BEFORE the sticky comment is built, because
+//    `postInlineReview` is what discovers which findings GitHub cannot anchor
+//    (spec §Publish hardening) and those are rendered into the sticky instead;
+//  - the toolu.sh report runs AFTER the inline mutations (report/report-run.ts's
+//    own doc): reporting earlier would claim fixes GitHub never accepted.
 import type { ProviderResult } from "@/llm/reviewWithModel.js";
-import { renderRecapSection, renderHistorySection } from "@/review/recap.js";
-import { formatVerdict, resolveVerdict } from "@/review/verdict.js";
-import { diffState, encodeMarker } from "@/state.js";
+import { formatVerdict } from "@/review/verdict.js";
 import type { ReviewState } from "@/state.js";
 import { upsertComment } from "@/github/comment.js";
 import { postInlineReview } from "@/github/review.js";
@@ -17,15 +24,26 @@ import {
   replyToThread,
 } from "@/github/threads.js";
 import type { PriorThread } from "@/github/threads.js";
-import { dropSettled, reconcile } from "@/review/reconcile.js";
+import { reconcile } from "@/review/reconcile.js";
 import type { Reconciliation, ReplyAction } from "@/review/reconcile.js";
-import { dropOutOfScope } from "@/review/incremental.js";
 import type { IncrementalScope } from "@/review/incremental.js";
-import { applyRoundCap } from "@/review/gate.js";
+import { renderLedger, renderLedgerSummary } from "@/review/ledger.js";
+import type { CoverageLedger } from "@/review/ledger.js";
 import type { MechanicalFinding } from "@/mechanical/sarif.js";
+import type { Finding } from "@/llm/schema.js";
 import type { DiffData } from "@/git/diff.js";
 import type { ActionInputs } from "@/inputs.js";
 import { jobUrl, formatDuration } from "./bodies.js";
+import {
+  decorateExemplars,
+  expandApplied,
+  expandRepresentatives,
+  reduceFindings,
+  undecorate,
+  withCarriedWithoutFinding,
+} from "./reduce.js";
+import type { Reduction } from "./reduce.js";
+import { ledgerExceptions, renderMemory, settleVerdict } from "./settle.js";
 import type { StampedFinding } from "./reviewCall.js";
 import type { GithubContext, PipelineOctokit, ReviewResult } from "./types.js";
 import { reportRun } from "@/report/report-run.js";
@@ -52,6 +70,14 @@ export interface PublishInput {
   prior: ReviewState | null;
   stickyId: number | undefined;
   mechanical: MechanicalFinding[];
+  /** This round's per-path coverage (pipeline/reviewCall.ts). Drives carry-forward,
+   *  the Coverage section, the verdict degrade, and the marker's completeness. */
+  ledger: CoverageLedger;
+  /** The PRIOR round's exception paths — always in scope for `dropOutOfScope`, so a
+   *  resume run's findings survive the line-level incremental filter. */
+  exceptionPaths: ReadonlySet<string>;
+  /** The review head's root tree sha, recorded as `reviewed_tree` on a COMPLETE run. */
+  headTree?: string;
   /** Incremental scope (lines changed since the last reviewed sha); null = full review. */
   scope: IncrementalScope | null;
   /**
@@ -71,128 +97,44 @@ export interface PublishInput {
   fetch?: typeof fetch;
 }
 
-/** The settled verdict: out-of-scope + suppressed findings removed, flips and caps applied. */
-interface SettledVerdict {
-  validated: ProviderResult;
-  findings: StampedFinding[];
-  /** Findings dropped because their thread was already settled (resolved/dismissed). */
-  suppressed: StampedFinding[];
-  verdict: "approved" | "changes" | "skip" | "error";
-  capNote: string;
-  /** Whether MAX_ROUNDS surrendered this run — reported as `run.capped` (report/report-run.ts). */
-  capped: boolean;
+/** What {@link postInline} did: the plan GitHub accepted, plus the two buckets of
+ *  findings that never made it onto a line — both rendered into the sticky comment
+ *  instead, because a finding the review produced may never just disappear. */
+interface InlineOutcome {
+  applied: Reconciliation<StampedFinding>;
+  /** No anchor could exist (GitHub's own diff does not show the file). */
+  unanchored: Finding[];
+  /** GitHub answered 422 even with the comment posted alone (reviewBatch.ts). */
+  dropped: Finding[];
 }
 
 /**
- * Settle the verdict deterministically: drop out-of-scope findings (incremental
- * review — new findings only from lines changed since the last reviewed sha),
- * respect settled threads — resolved on GitHub or dismissed in a reply (a
- * suppressed finding is dropped everywhere: count, comment, inline posting) —
- * flip a now-findingless "changes" to "approved", then apply the (optional)
- * MAX_ROUNDS surrender cap.
- */
-function settleVerdict(input: PublishInput): SettledVerdict {
-  const scoped = dropOutOfScope(
-    input.stamped,
-    input.scope,
-    input.priorThreads,
-    input.prior?.findings ?? [],
-  );
-  if (scoped.dropped.length > 0) {
-    process.stdout.write(
-      `  Dropped ${scoped.dropped.length} finding(s) about code unchanged since the last review\n`,
-    );
-  }
-  const { kept: findings, suppressed } = dropSettled(scoped.kept, input.priorThreads);
-  if (suppressed.length > 0) {
-    process.stdout.write(
-      `  Suppressed ${suppressed.length} finding(s) already settled on existing threads ` +
-        `(resolved, accepted, or dismissed by the author)\n`,
-    );
-  }
-  const validated: ProviderResult = { ...input.result, findings };
-  let verdict = resolveVerdict(validated.verdict, findings.length);
-  const removed = suppressed.length + scoped.dropped.length;
-  if (verdict === "changes" && findings.length === 0 && removed > 0) {
-    // Every concrete finding was either settled on its thread (resolved or
-    // dismissed by the author) or out of the incremental scope; keeping the
-    // model's request-changes would re-block on code that was already reviewed
-    // or decisions a human already made.
-    verdict = "approved";
-    validated.verdict = "approved";
-  }
-
-  // MAX_ROUNDS surrender: on round N with only sub-blocker findings left, a
-  // "changes" verdict downgrades to "approved" (findings stay listed as advisory)
-  // so a reviewer that generates fresh findings every push cannot block forever.
-  const cap = applyRoundCap({
-    verdict,
-    findings,
-    priorRounds: input.prior?.history?.length ?? 0,
-    maxRounds: input.inputs.reviewMemory ? input.inputs.maxRounds : 0,
-  });
-  let capNote = "";
-  if (cap.capped) {
-    verdict = "approved";
-    validated.verdict = "approved";
-    capNote =
-      `Round cap reached (MAX_ROUNDS=${input.inputs.maxRounds}): no blocker findings after ` +
-      `${input.inputs.maxRounds} review rounds — verdict auto-approved; the findings below are advisory.`;
-    process.stdout.write(`  ${capNote}\n`);
-  }
-  if (scoped.dropped.length > 0) {
-    const note =
-      `Incremental review: ${scoped.dropped.length} finding(s) about code unchanged since the ` +
-      `last review were not re-raised — comment \`@toolu review\` for a full re-review.`;
-    capNote = capNote === "" ? note : `${capNote}\n\n${note}`;
-  }
-  return { validated, findings, suppressed, verdict, capNote, capped: cap.capped };
-}
-
-/** Review memory: diff current findings vs prior, render recap + history + marker. */
-function renderMemory(
-  input: PublishInput,
-  findings: StampedFinding[],
-  verdict: string,
-): { recap: string; history: string; marker: string } {
-  if (!input.inputs.reviewMemory) return { recap: "", history: "", marker: "" };
-  const state = diffState({
-    prior: input.prior,
-    current_findings: findings,
-    scope: { in_scope_paths: input.diff.changed_files, full_review: input.fullReview },
-    head_sha: input.reviewedSha,
-    verdict,
-    now: input.now, // injected clock → deterministic marker history ts under a pinned clock.
-  });
-  // Optional-chain the arrays: a decoded marker missing findings/history must
-  // not throw (asReviewState only guarantees the "findings" key is present).
-  const hadPrior =
-    (input.prior?.findings?.length ?? 0) > 0 || (input.prior?.history?.length ?? 0) > 0;
-  const recap = hadPrior
-    ? renderRecapSection(state, {
-        history: [],
-        fullReview: input.fullReview,
-        hasPrior: true,
-        compact: input.inputs.verbosity === "compact",
-      })
-    : "";
-  return {
-    recap,
-    history: renderHistorySection(state.next_state.history),
-    marker: encodeMarker(state.next_state),
-  };
-}
-
-/**
- * Publish the settled verdict: sticky comment (a failure here IS an infra error →
- * propagate), label (non-fatal), and the inline-thread reconcile plan (non-fatal).
- * Returns the pipeline's result.
+ * Publish the settled verdict: inline threads (non-fatal), sticky comment (a
+ * failure here IS an infra error → propagate), label (non-fatal), then the
+ * best-effort run report. Returns the pipeline's result.
  */
 export async function publish(input: PublishInput): Promise<ReviewResult> {
   const { octokit, context, target, inputs } = input;
-  const { validated, findings, suppressed, verdict, capNote, capped } = settleVerdict(input);
-  const { recap, history, marker } = renderMemory(input, findings, verdict);
+  // Layer 3: re-inject the findings of every path this round did not review, then
+  // collapse repeats into exemplar-led clusters (pipeline/reduce.ts).
+  const reduction = reduceFindings({
+    modelFindings: input.stamped,
+    prior: input.prior,
+    ledger: input.ledger,
+  });
+  const ledger = withCarriedWithoutFinding(input.ledger, reduction.carriedWithoutFinding);
+  const exceptions = ledgerExceptions(ledger);
+  const settled = settleVerdict({ ...input, ledger }, reduction, exceptions);
+  const { validated, findings, suppressed, verdict, capNote, capped } = settled;
+  // Members back: the marker, the counts and the report speak in FULL member lists;
+  // only GitHub's threads and the comment's findings list speak in representatives.
+  const expanded = expandRepresentatives(findings, reduction);
 
+  const inline: InlineOutcome = inputs.inlineComments
+    ? await postInline(input, findings, reduction)
+    : { applied: { toCreate: [], toReply: [], toResolve: [] }, unanchored: [], dropped: [] };
+
+  const { recap, history, marker } = renderMemory(input, expanded, verdict, reduction, exceptions);
   const { body } = formatVerdict(validated, {
     botName: inputs.botName,
     botLogoUrl: inputs.botLogoUrl,
@@ -207,29 +149,39 @@ export async function publish(input: PublishInput): Promise<ReviewResult> {
     verbosity: inputs.verbosity,
     changedFiles: input.diff.total_files,
     capNote,
+    ledger: renderLedger(ledger, inputs.verbosity),
+    ledgerSummary: renderLedgerSummary(ledger),
+    unanchored: inline.unanchored,
+    dropped: inline.dropped,
+    clusters: reduction.clustered,
   });
 
   const commentUrl = await upsertComment(octokit, target, body, input.stickyId);
   // setVerdictLabel never throws — every labels-API call is caught inside
   // github/label.ts and reported via its LabelResult, so no try/catch here.
   await setVerdictLabel(octokit, verdict, target, { manageLabels: inputs.manageLabels });
-  const applied = inputs.inlineComments
-    ? await postInline(input, findings)
-    : { toCreate: [], toReply: [], toResolve: [] };
   // AFTER postInline — ordering is load-bearing, see report/report-run.ts's doc.
+  // Both sides of the partition carry expanded member lists (report/expand.ts).
   // reportRun() wraps its whole body in try/catch and is documented to never
   // reject; this .catch is a last-resort guard against a future refactor of
   // reportRun reintroducing a throw and silently turning a metrics hiccup into
   // a red CI run. Matches reportRun's own failure format — exactly one
   // core.warning, never core.setFailed.
-  await reportRun({ input, applied, findings, suppressed, verdict, capped }).catch(
-    (err: unknown) => {
-      core.warning(
-        `Review-run reporting failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    },
-  );
-  return { verdict, findingsCount: findings.length, commentUrl };
+  await reportRun({
+    input,
+    applied: expandApplied(inline.applied, reduction),
+    findings: expanded,
+    suppressed,
+    verdict,
+    capped,
+  }).catch((err: unknown) => {
+    core.warning(
+      `Review-run reporting failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  });
+  // The count is the EXPANDED one: it is what the marker stores and what the
+  // report carries, while the comment lists one line per cluster.
+  return { verdict, findingsCount: expanded.length, commentUrl };
 }
 
 /**
@@ -237,6 +189,10 @@ export async function publish(input: PublishInput): Promise<ReviewResult> {
  * NEW findings, answer IN PLACE on threads where the author had the last word, and
  * RESOLVE threads whose finding the model dropped. This is what stops the
  * "re-raise the same finding forever" loop. All best-effort (non-fatal).
+ *
+ * `findings` are cluster REPRESENTATIVES and the plan is built with the round's
+ * {@link Reduction.ctx}, so one thread covers every member of its cluster and a
+ * cluster whose exemplar was fixed is REPLIED to (promoted), never resolved.
  *
  * Returns the reconcile plan NARROWED to what GitHub actually accepted:
  * `resolveThread`/`replyToThread` report a boolean success flag per call, and a
@@ -252,27 +208,35 @@ export async function publish(input: PublishInput): Promise<ReviewResult> {
 async function postInline(
   input: PublishInput,
   findings: StampedFinding[],
-): Promise<Reconciliation<StampedFinding>> {
+  reduction: Reduction,
+): Promise<InlineOutcome> {
   const { octokit, context, target } = input;
   // The Reviews API needs a commit_id that is IN the PR; the merge sha is not (it
   // 422s and the comments vanish), so anchor to the PR head sha when present.
   const reviewTarget: PublishTarget = { ...target, headSha: context.headSha ?? target.headSha };
-  const plan = reconcile(findings, input.priorThreads);
+  const plan = reconcile(findings, input.priorThreads, reduction.ctx);
 
-  // 1. Genuinely new findings → one fresh inline review.
-  const r = await postInlineReview(octokit, plan.toCreate, reviewTarget);
+  // 1. Genuinely new findings → one fresh inline review. A cluster exemplar's body
+  //    is DECORATED with the members it stands for first (pipeline/reduce.ts): the
+  //    fp rides along untouched, so the thread's identity is unchanged (AC-4).
+  const r = await postInlineReview(
+    octokit,
+    decorateExemplars(plan.toCreate, reduction),
+    reviewTarget,
+  );
   if (!r.posted && r.reason !== "no anchored findings") {
     process.stderr.write(`  Warning: inline review step failed: ${r.reason ?? "unknown"}\n`);
   }
 
-  // 2. Findings that persist where the author had the last word → answer in that thread.
+  // 2. Findings that persist where the author had the last word → answer in that
+  //    thread; a promoted cluster gets the promotion wording instead.
   const toReply: ReplyAction<StampedFinding>[] = [];
   for (const action of plan.toReply) {
     const replied = await replyToThread(
       octokit,
       target,
       action.thread.rootCommentId,
-      `**Still flagging after re-review.** ${action.finding.text}`,
+      replyBody(action, reduction),
     );
     if (replied) toReply.push(action);
   }
@@ -288,7 +252,30 @@ async function postInline(
     if (await resolveThread(octokit, thread.threadId)) toResolve.push(thread);
   }
 
-  return { toCreate: r.posted ? plan.toCreate : [], toReply, toResolve };
+  // Both failure buckets come back UNDECORATED: the sticky comment enumerates a
+  // cluster's members in its own "Repeated findings" section, so repeating the
+  // enumeration inside each finding's row would be noise.
+  return {
+    applied: { toCreate: r.posted ? plan.toCreate : [], toReply, toResolve },
+    unanchored: undecorate(r.unanchored, reduction),
+    dropped: undecorate(r.dropped, reduction),
+  };
+}
+
+/**
+ * The reply owed on an existing thread. `promoted` marks the cluster case: the
+ * finding this thread was opened for is gone, but the PATTERN it stands for
+ * survives under a new representative (review/reconcile.ts) — say so plainly,
+ * because the thread's own code now reads as fixed.
+ */
+function replyBody(action: ReplyAction<StampedFinding>, reduction: Reduction): string {
+  if (action.promoted !== true) return `**Still flagging after re-review.** ${action.finding.text}`;
+  const remaining = reduction.ctx.members.get(action.finding.fp)?.length ?? 1;
+  return (
+    `**Exemplar fixed; ${remaining} member(s) remain.** This thread tracks a pattern, and the ` +
+    `file it was opened on is clean now — representative promoted to ` +
+    `\`${action.finding.path}:${action.finding.line}\`.\n\n${action.finding.text}`
+  );
 }
 
 /**

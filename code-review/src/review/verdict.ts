@@ -14,6 +14,7 @@
 import type { ProviderResult } from "@/llm/reviewWithModel.js";
 import type { Finding } from "@/llm/schema.js";
 import type { MechanicalFinding } from "@/mechanical/sarif.js";
+import type { FindingCluster } from "@/review/cluster.js";
 import {
   buildFindingsSection,
   buildTruncatedFindingsSection,
@@ -56,6 +57,19 @@ export interface VerdictOptions {
   changedFiles?: number;
   /** MAX_ROUNDS surrender note shown under the verdict ("" → omit). */
   capNote?: string;
+  /** Pre-rendered coverage-ledger section with its per-path exception rows
+   *  (review/ledger.ts `renderLedger`). Joins the shrink ladder AHEAD of findings. */
+  ledger?: string;
+  /** The same section reduced to its counts summary (`renderLedgerSummary`) — the
+   *  ladder's rung between the full ledger and dropping the section entirely. */
+  ledgerSummary?: string;
+  /** Findings GitHub could not anchor inline (`InlineReviewResult.unanchored`). */
+  unanchored?: Finding[];
+  /** Findings GitHub's Reviews API rejected with a 422 even when posted alone
+   *  (`InlineReviewResult.dropped`, isolated by github/reviewBatch.ts's bisection). */
+  dropped?: Finding[];
+  /** This round's clusters — multi-member ones render an enumerated block. */
+  clusters?: FindingCluster[];
 }
 
 /** Thrown when the body cannot fit under the size cap without dropping the marker. */
@@ -118,34 +132,53 @@ export function formatVerdict(
     marker,
     mechanical: opts.mechanical ?? [],
     capNote: opts.capNote ?? "",
+    ledger: opts.ledger ?? "",
+    unanchored: opts.unanchored ?? [],
+    dropped: opts.dropped ?? [],
+    clusters: opts.clusters ?? [],
   };
 
-  const rendered = fitToSizeLimit(body, marker);
+  const rendered = fitToSizeLimit(body, marker, opts.ledgerSummary ?? "");
   return { body: rendered, label };
 }
 
 /**
- * Render the body, then shrink findings lowest-severity-first until it fits under
- * BODY_SIZE_LIMIT. The bash halves `keep` each pass (FINDINGS_COUNT → … → 0); we
- * reproduce that, so the worst findings survive longest. The recap/history/marker
- * are always present (renderBody emits them unconditionally). If a findings-free
- * body still overflows, that is an integrity failure — throw, never drop.
+ * Fit the body under BODY_SIZE_LIMIT along a fixed ladder (spec §Coverage ledger:
+ * the ledger joins it AHEAD of findings):
+ *
+ *   1. everything;
+ *   2. the coverage ledger's per-path exception ROWS dropped (counts summary kept);
+ *   3. the coverage ledger SECTION dropped entirely;
+ *   4. only then findings shrink, lowest-severity-first — the bash halves `keep`
+ *      each pass (FINDINGS_COUNT → … → 0), so the worst findings survive longest.
+ *
+ * The recap, history and marker are never candidates (renderBody emits them
+ * unconditionally). If a findings-free body still overflows after all four rungs,
+ * that is an integrity failure — throw, never drop the marker.
  */
-function fitToSizeLimit(body: ReviewBody, marker: string): string {
+function fitToSizeLimit(body: ReviewBody, marker: string, ledgerSummary: string): string {
+  let current = body;
   let rendered = renderBody(body, buildFindingsSection(body.findings));
-  if (rendered.length <= BODY_SIZE_LIMIT || body.findings.length === 0) {
-    assertMarkerLast(rendered, marker);
-    return rendered;
+  for (const rung of ledgerRungs(body, ledgerSummary)) {
+    current = rung;
+    rendered = renderBody(rung, buildFindingsSection(rung.findings));
+    if (rendered.length <= BODY_SIZE_LIMIT) {
+      assertMarkerLast(rendered, marker);
+      return rendered;
+    }
   }
 
-  let keep = body.findings.length;
+  let keep = current.findings.length;
   while (keep > 0 && rendered.length > BODY_SIZE_LIMIT) {
     keep = Math.floor(keep / 2);
-    const section = buildTruncatedFindingsSection(body.findings, keep, body.jobUrl);
-    rendered = renderBody(body, section);
+    const section = buildTruncatedFindingsSection(current.findings, keep, current.jobUrl);
+    rendered = renderBody(current, section);
   }
 
-  if (rendered.length > BODY_SIZE_LIMIT) {
+  // A body with no findings to shrink cannot be made smaller here; it is returned
+  // as-is (the pre-ladder behavior) rather than failing the run. Only a body that
+  // WAS shrunk to zero findings and still overflows is an integrity failure.
+  if (rendered.length > BODY_SIZE_LIMIT && body.findings.length > 0) {
     throw new VerdictIntegrityError(
       `verdict body cannot fit under ${BODY_SIZE_LIMIT} chars even with no findings; ` +
         "refusing to drop the state marker",
@@ -153,6 +186,21 @@ function fitToSizeLimit(body: ReviewBody, marker: string): string {
   }
   assertMarkerLast(rendered, marker);
   return rendered;
+}
+
+/**
+ * The ladder's ledger rungs, largest first: the body as given, then with the
+ * ledger's per-path rows dropped, then with the section gone. A body carrying no
+ * ledger has exactly one rung — today's behavior, unchanged.
+ */
+function ledgerRungs(body: ReviewBody, ledgerSummary: string): ReviewBody[] {
+  const rungs: ReviewBody[] = [body];
+  if (body.ledger === "") return rungs;
+  if (ledgerSummary !== "" && ledgerSummary !== body.ledger) {
+    rungs.push({ ...body, ledger: ledgerSummary });
+  }
+  rungs.push({ ...body, ledger: "" });
+  return rungs;
 }
 
 /** The marker, when present, must be the last line of the body — fail loudly otherwise. */

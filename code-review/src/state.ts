@@ -66,6 +66,18 @@ const ReviewStateSchema = z.object({
   // round's incremental scope. Optional: markers written before this field
   // (or by the bash action) simply trigger a full review.
   reviewed_sha: z.string().optional().catch(undefined),
+  // Root TREE sha of the last head whose review reached COMPLETE coverage — the
+  // file-set base for the next round's incremental scope (constant-size regardless
+  // of PR size, unlike a per-path blob map). Optional/additive: still `version: 1`;
+  // a marker written before this field simply fails-open to a full review.
+  reviewed_tree: z.string().optional().catch(undefined),
+  // Exception lists: paths attempted-and-failed this round, and paths not yet
+  // attempted (wall-clock budget). Both stay in scope on the next (resume) run
+  // regardless of the incremental tree-diff.
+  unreviewed_paths: z.array(z.string()).optional().catch(undefined),
+  pending_paths: z.array(z.string()).optional().catch(undefined),
+  // Cluster identity, persisted across rounds: member finding fp -> exemplar fp.
+  clusters: z.record(z.string(), z.string()).optional().catch(undefined),
 });
 
 /** The persisted cross-push review memory carried in the sticky-comment marker. */
@@ -76,6 +88,30 @@ export interface ReviewState {
   history: HistoryEntry[];
   /** Full head sha of the last completed round (incremental-scope base). */
   reviewed_sha?: string | undefined;
+  /** Root tree sha of the last head whose review reached complete coverage. */
+  reviewed_tree?: string | undefined;
+  /** Exception list: paths attempted and failed this round. */
+  unreviewed_paths?: string[] | undefined;
+  /** Exception list: paths not yet attempted (wall-clock budget). */
+  pending_paths?: string[] | undefined;
+  /** Cluster identity: member finding fp -> exemplar fp. */
+  clusters?: Record<string, string> | undefined;
+}
+
+/**
+ * Normalize finding text the way the fingerprint does: lowercase, strip anything
+ * but `[a-z0-9 ]`, collapse whitespace, trim, cap at 200 chars. Pure extraction
+ * from {@link canonString} (no behavior change — AC-7's golden hexes pin that),
+ * exported so review/cluster.ts's near-identical-text check reuses this exact rule.
+ */
+export function normText(text: string | undefined): string {
+  return (text ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/^ +/, "")
+    .replace(/ +$/, "")
+    .slice(0, 200);
 }
 
 /**
@@ -86,14 +122,7 @@ export interface ReviewState {
 function canonString(f: Finding): string {
   const path = f.path ?? "";
   const category = f.category ?? "";
-  const normText = (f.text ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9 ]/g, "")
-    .replace(/\s+/g, " ")
-    .replace(/^ +/, "")
-    .replace(/ +$/, "")
-    .slice(0, 200);
-  return `${path}${FP_SEP}${category}${FP_SEP}${normText}`;
+  return `${path}${FP_SEP}${category}${FP_SEP}${normText(f.text)}`;
 }
 
 /** sha1 hex of the canonical string — identical to bash `sha1sum` of the same bytes. */
@@ -175,6 +204,22 @@ export interface DiffInput {
   verdict: string;
   /** Clock for the history-entry timestamp (epoch MILLISECONDS), default Date.now. */
   now?: () => number;
+  /**
+   * Whether this run reached COMPLETE coverage. Only a complete run advances
+   * `reviewed_sha`/`reviewed_tree` and appends a history entry — a partial run
+   * (wall-clock budget, resume in progress) preserves the prior `reviewed_sha`/
+   * `reviewed_tree` and does not burn a `MAX_ROUNDS` slot. `diffState` is the ONLY
+   * carrier into `next_state`: a field not threaded here is dropped next round.
+   */
+  complete: boolean;
+  /** Root tree sha to record when `complete` is true (ignored otherwise). */
+  reviewed_tree?: string;
+  /** This round's exception list: attempted-and-failed paths, threaded either way. */
+  unreviewed_paths?: string[];
+  /** This round's exception list: not-yet-attempted paths, threaded either way. */
+  pending_paths?: string[];
+  /** Cluster identity to persist, threaded either way: member fp -> exemplar fp. */
+  clusters?: Record<string, string>;
 }
 
 /** {@link diffState} output: partitioned findings, counts, and the next persisted state. */
@@ -220,7 +265,12 @@ export function diffState(input: DiffInput): DiffResult {
     verdict: input.verdict,
     counts,
   };
-  const history = [...(input.prior?.history ?? []), history_entry].slice(-10);
+  // A partial run (complete:false) must not append a history entry: the round
+  // counter is meant to count COMPLETE reviews only, so a resumed run never burns
+  // a MAX_ROUNDS slot. History stays exactly the prior round's, unchanged.
+  const history = input.complete
+    ? [...(input.prior?.history ?? []), history_entry].slice(-10)
+    : (input.prior?.history ?? []);
 
   return {
     new: fresh,
@@ -233,8 +283,17 @@ export function diffState(input: DiffInput): DiffResult {
       version: 1,
       findings: current,
       history,
-      // The FULL head sha this round reviewed — next round's incremental base.
-      reviewed_sha: input.head_sha,
+      // reviewed_sha/reviewed_tree ADVANCE only on a complete-coverage run; a partial
+      // run preserves the prior values, so the next round's incremental scope keys
+      // off the last head that was FULLY reviewed, not a half-finished one.
+      reviewed_sha: input.complete ? input.head_sha : input.prior?.reviewed_sha,
+      reviewed_tree: input.complete ? input.reviewed_tree : input.prior?.reviewed_tree,
+      // Exception lists and cluster identity are threaded straight from the caller
+      // on every run, complete or not: diffState is the only carrier into next_state,
+      // so whatever the caller computed this round is what survives to the next.
+      unreviewed_paths: input.unreviewed_paths,
+      pending_paths: input.pending_paths,
+      clusters: input.clusters,
     },
   };
 }

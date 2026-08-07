@@ -11,7 +11,10 @@ import type { Reconciliation } from "@/review/reconcile.js";
 import { thread, authorReply } from "@/review/__tests__/reconcile-helpers.js";
 import type { StampedFinding } from "@/pipeline/reviewCall.js";
 import type { ReviewState } from "@/state.js";
+import { fingerprint } from "@/state.js";
+import { clusterFindings } from "@/review/cluster.js";
 import { partitionFindings } from "@/report/partition.js";
+import { expandClusters } from "@/report/expand.js";
 import type { PartitionedFindings, PartitionResult } from "@/report/partition.js";
 
 // reconcile-helpers.ts's `finding()` returns the loosely-typed `ReconcileFinding`
@@ -213,6 +216,54 @@ describe("partitionFindings — exhaustiveness and disjointness", () => {
     ];
     for (const [fp] of threadBackedFps) expect(seen.has(fp)).toBe(true);
     expect(new Set(threadBackedFps.map(([, id]) => id)).size).toBe(threadBackedFps.length);
+  });
+});
+
+describe("expandClusters — members restored BEFORE the exhaustiveness check", () => {
+  /** A member of one repeated pattern, stamped with the real fingerprint so the
+   *  real clusterFindings() groups the three exactly as the pipeline would. */
+  function patternMember(i: number): StampedFinding {
+    const f = {
+      path: `src/m${i}.ts`,
+      line: i + 1,
+      severity: "high" as const,
+      category: "correctness",
+      text: "repeated defect",
+    };
+    return { ...f, fp: fingerprint(f) };
+  }
+
+  const members = [0, 1, 2].map(patternMember);
+  const cluster = clusterFindings(members)[0];
+  if (cluster === undefined) throw new Error("fixture: the three repeats did not cluster");
+  const clusters = Object.fromEntries(cluster.members.map((m) => [m.fp, cluster.exemplar.fp]));
+  const byFp = new Map(members.map((m) => [m.fp, m]));
+  const expand = (findings: StampedFinding[]): StampedFinding[] =>
+    expandClusters(findings, clusters, byFp);
+
+  it("expands the representative to every member exactly once", () => {
+    const expanded = expand([cluster.exemplar]);
+    expect(expanded[0]).toBe(cluster.exemplar);
+    expect(expanded.map((f) => f.fp).sort()).toEqual(members.map((m) => m.fp).sort());
+  });
+
+  it("skips a member fp the round produced no finding for", () => {
+    const partial = new Map([[cluster.exemplar.fp, cluster.exemplar]]);
+    expect(expandClusters([cluster.exemplar], clusters, partial)).toEqual([cluster.exemplar]);
+  });
+
+  it("fails exhaustiveness on a representative-only findings list, passes once expanded", () => {
+    const applied: Reconciliation<StampedFinding> = {
+      toCreate: expand([cluster.exemplar]),
+      toReply: [],
+      toResolve: [],
+    };
+    const base = { applied, suppressed: [], priorThreads: [], prior: null };
+    expect(partitionFindings({ ...base, findings: [cluster.exemplar] }).ok).toBe(false);
+
+    const p = expectOk(partitionFindings({ ...base, findings: expand([cluster.exemplar]) }));
+    expect(p.new.map((f) => f.fp).sort()).toEqual(members.map((m) => m.fp).sort());
+    expect(p.open).toEqual([]);
   });
 });
 

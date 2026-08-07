@@ -185,4 +185,33 @@ describe("noiseReason", () => {
     const { readBlob, blobSize } = fromMap({});
     expect(noiseReason("src/new.ts", readBlob, blobSize)).toBeNull();
   });
+
+  it("PINS THE INTENTIONAL PARITY BREAK: a long line past the 64 KiB batchRead bound is NOT flagged minified", () => {
+    // Production (src/git/batchRead.ts) only ever hands noiseReason the first
+    // MAX_BLOB_READ_BYTES=65536 bytes of a blob's content — readBlob here is
+    // built the same way a real caller would build it (bounded content, TRUE
+    // full-blob size from `cat-file --batch-check`, not the truncated length).
+    // A blob whose only long (>5000-byte) line sits past that offset therefore
+    // reads, from noiseReason's point of view, as an ordinary short-lines file
+    // and is NOT classified minified. Reviewable is the benign direction (see
+    // design doc §Layer 0, "Intentional parity break").
+    const MAX_BLOB_READ_BYTES = 65536;
+    const filler = Array.from({ length: 4000 }, (_, i) => `const x${i} = ${i};`).join("\n") + "\n";
+    const longLine = "z".repeat(6000);
+    const full = `${filler}${longLine}\n`;
+    const trueSize = Buffer.byteLength(full, "utf8");
+    expect(trueSize).toBeGreaterThan(MAX_BLOB_READ_BYTES); // long line sits past the bound
+    expect(trueSize).toBeLessThan(1_000_000); // stays under the (unrelated) large-file cutoff
+
+    const bounded = Buffer.from(full, "utf8").subarray(0, MAX_BLOB_READ_BYTES).toString("utf8");
+    const readBlob: ReadBlob = (p) => (p === "gen-Qcc39.js" ? bounded : null);
+    const blobSize: BlobSize = (p) => (p === "gen-Qcc39.js" ? trueSize : 0);
+    expect(noiseReason("gen-Qcc39.js", readBlob, blobSize)).toBeNull();
+
+    // Sanity: the SAME content read UNBOUNDED (today's whole-blob `git show`
+    // scan) does flag it — proving the bound, not some other rule, is why the
+    // bounded case above passes.
+    const fullReadBlob: ReadBlob = (p) => (p === "gen-Qcc39.js" ? full : null);
+    expect(noiseReason("gen-Qcc39.js", fullReadBlob, blobSize)).toBe("minified");
+  });
 });

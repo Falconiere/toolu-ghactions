@@ -21,6 +21,35 @@ export function gitOrNull(args: string[], cwd: string): string | null {
   }
 }
 
+/**
+ * The ROOT TREE sha of a ref (`git rev-parse <ref>^{tree}`), or null when the ref
+ * does not resolve. Content-addressed, so an identical-content rebase yields the
+ * same value — that is what makes the tree the incremental file-set base
+ * (spec §True incremental), unlike the commit sha it hangs off.
+ */
+export function resolveTreeSha(ref: string, cwd: string): string | null {
+  return gitOrNull(["rev-parse", `${ref}^{tree}`], cwd);
+}
+
+/** True when the object exists in the LOCAL object database (`git cat-file -e`).
+ *  A force-push that garbage-collected the last reviewed tree answers false here,
+ *  and the caller fails open to a full review. */
+export function objectExists(object: string, cwd: string): boolean {
+  return gitOrNull(["cat-file", "-e", `${object}^{tree}`], cwd) !== null;
+}
+
+/**
+ * The paths differing between two TREE objects (`git diff-tree -r --name-only -z`),
+ * or null when the command fails (the caller then fails open to a full review).
+ * NUL-delimited because a git path may contain a newline but never a NUL — the same
+ * idiom as git/diff.ts's batched check-attr.
+ */
+export function treeDiffPaths(fromTree: string, toTree: string, cwd: string): string[] | null {
+  const out = gitOrNull(["diff-tree", "-r", "--name-only", "-z", fromTree, toTree], cwd);
+  if (out === null) return null;
+  return out.split("\0").filter((p) => p !== "");
+}
+
 /** Resolve the head sha for state/anchoring: GITHUB_SHA for HEAD, else `git rev-parse`. */
 export function resolveHeadSha(reviewHead: string, contextSha: string, cwd: string): string {
   if (reviewHead === "HEAD") return contextSha;

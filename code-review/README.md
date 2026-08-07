@@ -10,7 +10,7 @@ Audits the diff against an 8-dimension checklist — correctness, security, perf
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](../LICENSE)
 [![Tests](https://img.shields.io/badge/tests-vitest-3fb950)](https://github.com/Falconiere/toolu-ghactions/actions/workflows/tests.yml)
 
-[Quick start](#quick-start) · [Choosing a model](#choosing-a-model) · [How it works](#how-it-works) · [Example verdict](#example-verdict) · [Custom identity](#custom-identity-github-app) · [@mention re-trigger](#mention-re-trigger) · [Review memory](#review-memory) · [Inputs](#inputs) · [Outputs](#outputs)
+[Quick start](#quick-start) · [Choosing a model](#choosing-a-model) · [How it works](#how-it-works) · [Example verdict](#example-verdict) · [Coverage ledger](#coverage-ledger) · [Finding clustering](#finding-clustering) · [Custom identity](#custom-identity-github-app) · [@mention re-trigger](#mention-re-trigger) · [Review memory](#review-memory) · [Inputs](#inputs) · [Outputs](#outputs) · [v7 migration](#v7-migration)
 
 </div>
 
@@ -277,7 +277,7 @@ A generative reviewer re-derives its findings from the diff on every push, so le
 
 ### Inline comments & suggestions
 
-With `INLINE_COMMENTS: true` (default), findings are posted as inline review comments anchored to the exact file and line. When the model has a concrete, high-confidence fix it attaches a ` ```suggestion ` block you can commit straight from the PR. Anchors are validated against GitHub's own view of the PR diff before posting: a finding GitHub cannot anchor degrades to a **file-level** comment instead of failing the whole batch (the summary comment always carries every finding regardless). Set `INLINE_COMMENTS: false` for a summary-comment-only review.
+With `INLINE_COMMENTS: true` (default), findings are posted as inline review comments anchored to the exact file and line, batched at up to 30 comments per `createReview` call. When the model has a concrete, high-confidence fix it attaches a ` ```suggestion ` block you can commit straight from the PR. Anchors are validated against GitHub's own view of the PR diff before posting: a finding on a file GitHub's own diff omits (or whose line can't be mapped onto it) is **never** posted inline — GitHub's Reviews API rejects the whole `createReview` call outright if it contains even one such comment, so there is no file-level fallback. It is instead rendered in the sticky comment's [`### Unanchored findings`](#coverage-ledger) section, so it is never silently lost. If a batch still fails after anchor validation (a comment GitHub's API rejects for a reason we couldn't predict up front), the batch is bisected to isolate the poison comment — every other comment in the batch still posts, and the isolated one is rendered in the sticky comment's [`### Findings GitHub rejected inline`](#coverage-ledger) section, so one bad comment can no longer zero out the whole review or silently drop a finding. Set `INLINE_COMMENTS: false` for a summary-comment-only review.
 
 The verdict comment is compatible with [`parse-verdict.sh`](https://github.com/Falconiere/toolu/blob/main/plugins/pr-babysit/scripts/parse-verdict.sh) and the [`pr-babysit`](https://github.com/Falconiere/toolu/tree/main/plugins/pr-babysit) automation loop, so toolu users can drop this into CI and their existing babysit workflow consumes the verdict without changes. The elements that contract depends on — the `### Code Review` heading, at least one checked `- [x]` box, the `### Findings` block, and the machine-readable label — are present in **both** verbosity modes (below).
 
@@ -318,6 +318,36 @@ These changes apply in **both** modes, independent of `VERBOSITY`:
 - `### Review Plan` and `### Other checks` are omitted entirely when the model returns nothing for them (no `_No … provided._` filler).
 
 The verdict label at the bottom is machine-readable: `` `merge-approved` `` or `` `request-changes` ``. `pr-babysit` parses it to decide whether the PR is ready to merge. Unless `MANAGE_LABELS` is `false`, the same verdict is also applied as a real PR **label chip** (the opposite one is removed), so PRs are filterable in the GitHub UI — this needs `issues: write` in the workflow's `permissions` block.
+
+## Coverage ledger
+
+Every review posts a **coverage ledger**, so a large PR can never silently lose files the way a flat "1 of 9 chunks failed" note used to — the sticky comment always accounts for every changed path by name when something needs your attention. It renders as its own `### Coverage` section: a one-line summary of counts per status is always present, plus per-path rows for the statuses below that must stay visible, capped at 50 rows (a "… N more" line covers the rest).
+
+| Status | Meaning |
+|---|---|
+| `reviewed` | The model read this file's diff and returned a verdict for it. |
+| `pattern` | This file's change is byte-identical (once normalized) to the same change in 3+ other files — only the group's **exemplar** was actually sent to a model call; a finding on the exemplar applies to every member. See [Finding clustering](#finding-clustering). |
+| `rename` | An exact or near-exact rename with no content of its own to review. |
+| `formatting` | A whitespace-only change (empty diff under `git diff -w`). |
+| `vendored` / `generated` | Excluded via a `linguist-vendored`/`linguist-generated` attribute in `.gitattributes` — a repo-declared exclusion, distinct from the built-in noise filter below. |
+| `excluded` | Dropped by the [noise filter](#how-it-works) or binary detection before diffing; a `reason` names why (`lockfile`, `build-output`, `large-file`, `minified`, `generated`, `binary`, …). |
+| `carried` | Out of this round's [incremental scope](#review-memory) (or a cluster member whose exemplar wasn't re-examined) — not re-reviewed this round, so its prior finding rides forward unchanged rather than being silently dropped or falsely reported fixed. |
+| `unreviewed` | Attempted and failed — a schema failure that survived bisection, a file past a set `MAX_CHUNKS` cap, or (rare) a path no layer accounted for at all. |
+| `pending` | Not yet attempted because `MAX_WALL_MS` ran out this run — resumable, see [`@toolu resume`](#toolu-resume-resuming-a-paused-run). |
+
+**Any `unreviewed` or `pending` entry degrades a would-be `approved` verdict to `error`** — the same fail-safe rule the reviewer has always applied to a failed chunk, now driven by the ledger: an approval can't honestly claim to cover code nobody read.
+
+Findings that can't reach an inline comment are never silently lost either — they render in two companion sections, each capped the same way: `### Unanchored findings` (files GitHub's own diff omits, or whose line can't be mapped onto it) and `### Findings GitHub rejected inline` (a comment isolated by 422-bisection that still failed on its own). See [Inline comments & suggestions](#inline-comments--suggestions).
+
+The ledger section is itself droppable under GitHub's 65 KB comment-size ceiling, but last: an oversized comment first drops the per-path exception rows (keeping the one-line summary), then drops the whole `### Coverage` section, and only *then* starts trimming findings, worst-severity-last. Coverage accounting is the last thing to go, not the first.
+
+## Finding clustering
+
+A defect that repeats identically across many files — the same convention violation copy-pasted, the same missing check after a mechanical refactor — used to post one inline comment per file, sometimes hundreds on a large PR. Findings sharing the same category and near-identical text across **3 or more files** now collapse into one **cluster**: one inline comment, posted on an exemplar file, whose body enumerates every other file carrying the same finding. Smaller repeats (1–2 files) stay individual comments, as before.
+
+The sticky comment's `### Repeated findings` section lists every multi-member cluster the same way — the exemplar's finding, the member count, and the full member-path list — and says explicitly: **dismissing or resolving the exemplar's thread dismisses the whole pattern**, member findings included. That's deliberate, not a quirk of the implementation: every member still keeps its own individual fingerprint internally (nothing is merged for tracking purposes — the underlying finding count in the marker and in [Review memory](#review-memory)'s recap is the true count), so a later push that fixes only *some* members re-splits the cluster and reopens a thread under whichever exemplar is still valid.
+
+Across rounds, cluster identity is pinned: the same exemplar's thread is reused while that finding is still present. If the exemplar gets fixed but other members remain, the thread stays **open** under a newly promoted exemplar (the lowest surviving member) with a reply explaining the handoff — a cluster's thread resolves only once **every** member is gone.
 
 ## Custom identity (GitHub App)
 
@@ -446,7 +476,8 @@ checkout step is needed.
   default `write`) can trigger. The permission check is denied on *any* error
   (non-2xx, missing field, network failure) — never failing open.
 - Comments from bots, non-PR issues, or comments without the `TRIGGER_PHRASE` +
-  `review` are ignored **before** any permission API call (no noise).
+  `review` (or `TRIGGER_PHRASE` + `resume`, below) are ignored **before** any
+  permission API call (no noise).
 - The trailing text (`focus on …`) is treated as an **untrusted focus hint**: it
   is sanitized and injected into the user prompt inside a delimited UNTRUSTED
   block as a hint about *where* to look — **never** as instructions, and it
@@ -454,6 +485,20 @@ checkout step is needed.
 - An allowed trigger reacts 👀 on the comment; a denied one reacts 👎.
 - A scoped/steered review (`@toolu review focus on …`) does **not** recompute
   "resolved" — see [Review memory](#review-memory).
+
+### `@toolu resume`: resuming a paused run
+
+When `MAX_WALL_MS` cuts a run short mid-review, the sticky comment says so, and the round is left resumable: the marker records which files were attempted-and-failed (`unreviewed`) and which were never reached (`pending`) without touching `reviewed_tree`, so nothing yet reviewed counts as done. Three things resume it, and all three review **only the exception paths** — never the whole diff again:
+
+- any subsequent push to the PR (its own new/changed lines join the exception paths automatically — see [Review memory](#review-memory));
+- a workflow re-run of the same event;
+- the `@toolu resume` comment, behind the **same permission gate** as `@toolu review`:
+
+```
+@toolu resume
+```
+
+`@toolu resume` never re-reviews files that already reached complete coverage, and never clears memory or `reviewed_tree`. Contrast with `@toolu review`, which is still a **full** re-review — it clears `reviewed_tree` and both exception lists and starts over. If there is nothing left to resume (no exception paths recorded — e.g. a run that never actually paused), `@toolu resume` falls back to a full review rather than silently doing nothing.
 
 ## Review memory
 
@@ -566,8 +611,9 @@ resolution without posting the note again.
 | `RULES_MAX_BYTES` | no | `32768` | Byte cap on the gathered rules. Files are added in priority order until the cap; whole files past it are dropped with a truncation notice. |
 | `MAX_FILES` | no | `0` (unlimited) | Maximum changed files (counted **after** generated/vendored/excluded files are dropped) before the action skips. `0` reviews any number of files — the only ceiling is your OpenRouter billing balance. Set a positive value to opt into a hard skip on huge PRs. |
 | `MAX_DIFF_LINES` | no | `0` (unlimited) | Maximum diff lines before truncation, applied **before** chunking. `0` reviews the whole diff. Set a positive value to keep the first N lines (lexicographic by file path) and append a truncation notice. |
-| `MAX_CHUNK_LINES` | no | `1500` | Per-chunk diff-line budget. When the diff exceeds this, it is split into chunks of **whole files** (≤ this many primed lines each), each reviewed in its own model call and the results merged — so a large PR no longer overwhelms a single call and abstains. Module-coupled files (e.g. a Rust `#[path]`/`mod` parent and its child) always share a chunk, and a single file over the budget rides alone **with its full post-change content attached** as read-only context, so the model never judges a construct from a truncated view. A chunk whose call fails is retried once; if it still fails the merged verdict is marked **incomplete** (never a confident approval over unreviewed files). `0` disables chunking (always one call). |
-| `MAX_CHUNKS` | no | `20` | Maximum chunks (= model calls) per review, bounding cost and wall-clock on very large PRs. Files beyond the limit are not reviewed and the comment says so. `0` = unlimited. |
+| `MAX_CHUNK_LINES` | no | `1500` | Per-chunk diff-line budget, applied to the diff **after** [distillation](#how-it-works) has collapsed mechanical repeats/renames/formatting away. When the remaining diff exceeds this, it is split into packages of **whole files** (≤ this many primed lines each), each reviewed in its own model call and the results merged — so a large PR no longer overwhelms a single call and abstains. Module-coupled files (e.g. a Rust `#[path]`/`mod` parent and its child) always share a package, and a single file over the budget rides alone **with its full post-change content attached** as read-only context, so the model never judges a construct from a truncated view. A package whose call fails to produce valid structured output is split and retried in bisecting halves (up to 4 leaves) to isolate just the file(s) actually at fault, instead of writing off the whole package; a leaf that still fails is recorded `unreviewed` in the [coverage ledger](#coverage-ledger) (never a confident approval over unreviewed files). `0` disables chunking (always one call). |
+| `MAX_CHUNKS` | no | `0` | Maximum chunks (= model calls) per review, bounding cost and wall-clock on very large PRs. **`0` (default, changed from `20` prior to `@v7` — see [v7 migration](#v7-migration)) = unlimited.** When set, files beyond the cap are recorded **per-file** as `unreviewed` in the [coverage ledger](#coverage-ledger) — not a prose footnote — which also degrades a would-be `approved` verdict to `error`. |
+| `MAX_WALL_MS` | no | `0` | Soft wall-clock budget, in milliseconds, for the whole review loop. `0` (default) = off, never interrupts a run. When set and exceeded mid-run, packages not yet started are recorded `pending` in the [coverage ledger](#coverage-ledger) instead of being attempted, `reviewed_tree` does **not** advance, and the round becomes resumable — via [`@toolu resume`](#toolu-resume-resuming-a-paused-run), a plain workflow re-run, or automatically on the PR's next push. Checked before every package and before every bisection split; a call already in flight always finishes. |
 | `REQUEST_TIMEOUT_MS` | no | `180000` (3 min) | Per-attempt model deadline in milliseconds. Each chunk gets up to this long per attempt (retried a few times) before it is aborted and the chunk abstains (`This operation was aborted`). Raise it for slow/large models, lower it to fail faster. A non-positive value falls back to the default. |
 | `TOKEN` | no | `${{ github.token }}` | GitHub token for posting and editing comments. |
 | `APP_ID` | no | — | GitHub App id. Set together with `APP_PRIVATE_KEY` to post as a custom-branded App (`Toolu — Code Review`) instead of `github-actions[bot]`. Both must be set or the action falls back to the default identity. See [Custom identity](#custom-identity-github-app). |
@@ -639,6 +685,20 @@ By default (`FAIL_ON: changes`) the action **fails its own job** when the bot's 
 
 The gate governs the verdict only; a thrown infra error fails the job regardless of `FAIL_ON`. A `skip` (non-trigger event) never blocks.
 
+## v7 migration
+
+`@v7` ships the size-proof review pipeline described throughout this README — deterministic diff distillation (renames/formatting/mechanical repeats collapsed before any model call) → a small intent-brief call → bounded per-package reviewers with schema bisection → a deterministic reducer (carry-forward, clustering, publish hardening). No input is **removed**, but defaults and comment shapes change, so it ships as a new major tag rather than a silent behavior flip:
+
+| What changed | Detail |
+|---|---|
+| `MAX_CHUNKS` default | `20` → `0` (unlimited). Files beyond an explicitly-set cap are now recorded per-file `unreviewed` in the [coverage ledger](#coverage-ledger), not a prose footnote. |
+| Comment shape | The sticky comment gains three new sections — `### Coverage`, `### Repeated findings`, `### Unanchored findings` — see [Coverage ledger](#coverage-ledger) and [Finding clustering](#finding-clustering). |
+| Prompt bytes | The user prompt's block order changed (the shared prefix — system, codebase overview, project rules, brief, prior threads — now extends further before the per-package blocks, for prompt-cache efficiency), so prompt byte counts differ from `@v6` even on an identical diff. The review's substance is unaffected. |
+| Inline anchoring | The `subject_type: "file"` fallback is **gone** — a finding on a file GitHub's own diff can't anchor a comment to is never posted as a file-level comment. It appears in the sticky comment's `### Unanchored findings` section instead. See [Inline comments & suggestions](#inline-comments--suggestions). |
+| New input | `MAX_WALL_MS` — soft wall-clock budget, resumable via [`@toolu resume`](#toolu-resume-resuming-a-paused-run). See [Inputs](#inputs). |
+
+No workflow YAML changes are required to adopt `@v7` — bump the pinned ref (`falconiere/toolu-ghactions/code-review@v7`) and the new behavior applies on the next run. If any downstream tooling parses the sticky comment's markdown directly (rather than the machine-readable verdict label `pr-babysit` uses), re-check it against the new section shapes above; the verdict label, checklist line, and `### Findings` block are unchanged.
+
 ## Packaging (v2)
 
 v2 is a **TypeScript node24 JavaScript action** — `runs: node24`, `main: dist/index.cjs`,
@@ -668,6 +728,38 @@ bun install        # deps + git hooks (lefthook)
 bun run check      # typecheck + lint (oxlint, type-aware) + fmt:check (oxfmt) + test (vitest)
 bun run build      # esbuild → dist/index.cjs (commit it; CI fails if it drifts from src)
 ```
+
+## Eval harness
+
+`code-review/evals/` is a **live eval harness**, not a unit test: it fetches a real
+PR's changed files via the `gh` CLI, replays them into a scratch git repo, and runs
+the SAME `runReview()` entry point this action calls — distill → cartographer →
+chunked package reviewers (bisection included) → clustering → render — with a REAL
+model call, but with GitHub posting swapped for a recording fake so nothing is
+actually posted. It then prints a scorecard: changed files, per-stratum counts,
+pattern groups (count + biggest), packages, model calls (cartographer vs.
+package-layer, which folds in any bisection retries), findings raw vs. clustered,
+coverage-status counts, marker bytes vs. the 65 000-char comment-size ceiling, and
+wall time.
+
+It is **excluded from `bun run check`** — evals/ sits outside `tsconfig.json`'s
+`include` and outside oxlint/oxfmt's walk (see `package.json`'s `lint`/`fmt`
+scripts), and vitest's own `include` glob never reaches it either. Its own tests
+live in `evals/__tests__/`, run directly with `bun test evals/__tests__`.
+
+```bash
+cd code-review
+bun run eval -- --help                            # usage; no key, gh, or network needed
+
+API_KEY=sk-or-... bun run eval -- \                # a live run (needs `gh`, authenticated)
+  --pr Falconiere/comemory#72 \
+  --provider openrouter --model deepseek/deepseek-v4-pro \
+  --out scorecard.json
+```
+
+Flags: `--pr <owner/repo#number>` (default `Falconiere/comemory#72`), `--provider`/
+`--model` (defaulting to this action's own defaults), `--max-wall-ms` (forwarded as
+`MAX_WALL_MS`), `--out <file>` (also write the scorecard as JSON).
 
 ## License
 

@@ -2,7 +2,9 @@
 // single review decision. Port of resolve-event.sh.
 //
 // A `pull_request` event always runs a FULL review of HEAD. An `issue_comment`
-// event is an `@toolu review …` re-trigger; because issue_comment runs with the
+// event is an `@toolu review …` re-trigger — or an `@toolu resume`, which reruns
+// only the last round's exception paths behind the SAME permission gate (spec
+// §True incremental + resumable); because issue_comment runs with the
 // repo's secrets, the permission gate FAILS CLOSED — ANY uncertainty (the
 // permission lookup throwing, or returning no permission string) means
 // run=false. A bot-authored comment never triggers, and an @mention that
@@ -29,6 +31,10 @@ export interface EventPayload {
     number?: number;
     base?: { ref?: string };
     head?: { sha?: string; ref?: string };
+    /** The PR's title/body — UNTRUSTED author text. Read by the Layer 1
+     *  cartographer (sanitized + fenced, src/review/cartographer.ts). */
+    title?: string;
+    body?: string;
     /** The PR's opener. Read by `buildContext()` on a `pull_request` event —
      *  on an `issue_comment` re-trigger the author lives on `issue.user` instead
      *  (see that field's own doc). */
@@ -44,6 +50,10 @@ export interface EventPayload {
      * `issue_comment` deliveries always carry this on an issue/PR that exists.
      */
     user?: { login?: string };
+    /** The PR's title/body on an `issue_comment` event (GitHub mirrors a PR's
+     *  fields onto its "issue" twin) — UNTRUSTED, same use as `pull_request`'s. */
+    title?: string;
+    body?: string;
   };
   comment?: { id?: number; body?: string; user?: { login?: string; type?: string } };
 }
@@ -89,8 +99,16 @@ export interface EventResolution {
   head_sha?: string;
   /** The trimmed instruction text after "<phrase> review" (@mention only). */
   instruction?: string;
-  /** True for a whole-PR review; false when an @mention instruction scopes it. */
+  /** True for a whole-PR review; false when an @mention instruction scopes it,
+   *  and always false on a `<phrase> resume` (which reviews exception paths only). */
   full_review: boolean;
+  /**
+   * Set by the `<phrase> resume` trigger: review ONLY the last round's exception
+   * paths (`unreviewed_paths` ∪ `pending_paths`) and do NOT clear the reviewed
+   * state (spec §True incremental + resumable). Absent on every other path —
+   * `<phrase> review` remains the full re-review escape hatch.
+   */
+  resume?: boolean;
   /** The PR number, when resolved. */
   pr_number?: number;
   /** The triggering commenter login (@mention only). */
@@ -159,14 +177,12 @@ async function resolveIssueComment(
   // Guard 2: the comment must be on a pull request, not a plain issue.
   if (payload.issue?.pull_request == null) return deny("not-a-pull-request");
 
-  // Guard 3: the body must contain "<phrase> review" (case-insensitive). The
-  // instruction is the trimmed remainder, sliced from the ORIGINAL body so it
-  // keeps its case.
-  const body = payload.comment?.body ?? "";
-  const triggerLc = `${triggerPhrase.toLowerCase()} review`;
-  const idx = body.toLowerCase().indexOf(triggerLc);
-  if (idx < 0) return deny("no-trigger");
-  const instruction = body.slice(idx + triggerLc.length).trim();
+  // Guard 3: the body must contain "<phrase> review" or "<phrase> resume"
+  // (case-insensitive). The instruction is the trimmed remainder, sliced from the
+  // ORIGINAL body so it keeps its case.
+  const trigger = findTrigger(payload.comment?.body ?? "", triggerPhrase.toLowerCase());
+  if (trigger === null) return deny("no-trigger");
+  const { resume, instruction } = trigger;
 
   const prNumber = payload.issue?.number;
   const commentId = payload.comment?.id;
@@ -196,16 +212,40 @@ async function resolveIssueComment(
 
   return {
     run: true,
-    reason: "mention",
+    reason: resume ? "mention-resume" : "mention",
     review_head: "FETCH_HEAD",
     base_ref: baseRef,
-    // full_review=false ONLY when an instruction scopes the review.
-    full_review: instruction === "",
+    // full_review=false ONLY when an instruction scopes the review — and never on a
+    // resume, which re-reviews the exception paths alone.
+    full_review: !resume && instruction === "",
+    ...(resume ? { resume: true } : {}),
     instruction,
     ...(prNumber !== undefined ? { pr_number: prNumber } : {}),
     commenter,
     ...(commentId !== undefined ? { comment_id: commentId } : {}),
   };
+}
+
+/**
+ * Find the review trigger in a comment body: `<phrase> review` (full re-review) or
+ * `<phrase> resume` (spec §True incremental — re-review the exception paths only,
+ * same permission gate, reviewed state NOT cleared). Both are matched
+ * case-insensitively; when a body carries both, the FIRST one wins, so the
+ * remainder sliced as the instruction always belongs to the trigger that fired.
+ * Returns null when neither phrase appears.
+ */
+function findTrigger(
+  body: string,
+  phrase: string,
+): { resume: boolean; instruction: string } | null {
+  const lower = body.toLowerCase();
+  const candidates = [
+    { resume: false, at: lower.indexOf(`${phrase} review`), length: phrase.length + 7 },
+    { resume: true, at: lower.indexOf(`${phrase} resume`), length: phrase.length + 7 },
+  ].filter((c) => c.at >= 0);
+  if (candidates.length === 0) return null;
+  const first = candidates.reduce((a, b) => (a.at <= b.at ? a : b));
+  return { resume: first.resume, instruction: body.slice(first.at + first.length).trim() };
 }
 
 /**

@@ -4,6 +4,12 @@
 // a line-for-line port of format-verdict.sh's render_body and its helpers.
 import type { Finding } from "@/llm/schema.js";
 import type { MechanicalFinding } from "@/mechanical/sarif.js";
+import type { FindingCluster } from "@/review/cluster.js";
+import {
+  buildClusterSection,
+  buildDroppedSection,
+  buildUnanchoredSection,
+} from "@/review/sections.js";
 
 /** Severity rank, blocker (worst) → nit (least). Used to order/shrink findings. */
 export const SEVERITY_RANK: Record<Finding["severity"], number> = {
@@ -68,6 +74,15 @@ export interface ReviewBody {
   mechanical: MechanicalFinding[];
   /** MAX_ROUNDS surrender note shown under the verdict line ("" → omit). */
   capNote: string;
+  /** Pre-rendered coverage-ledger section (review/ledger.ts). Unlike recap/history
+   *  it IS droppable: it joins the size ladder ahead of findings (verdict.ts). */
+  ledger: string;
+  /** Findings GitHub could not anchor inline — rendered in their own section. */
+  unanchored: Finding[];
+  /** Findings whose inline comment GitHub rejected (422) even posted alone. */
+  dropped: Finding[];
+  /** This round's clusters; the multi-member ones get an enumerated block. */
+  clusters: FindingCluster[];
 }
 
 /**
@@ -107,7 +122,18 @@ export function renderBody(body: ReviewBody, findingsSection: string): string {
   // Findings is unconditional: parse-verdict.sh extracts findings from this exact block.
   section += `### Findings (${body.findings.length})\n\n`;
   section += `${findingsSection}\n\n`;
+  // A repeated finding is posted once, on its exemplar — this is where the files it
+  // stands for are named, and where the "dismissing it dismisses the pattern" rule
+  // is stated (spec §Layer 3).
+  section += buildClusterSection(body.clusters);
+  // Findings with no possible inline anchor would otherwise vanish entirely.
+  section += buildUnanchoredSection(body.unanchored);
+  // …and so would the ones GitHub's Reviews API refused outright (spec §Publish
+  // hardening: bisection "posts the survivors, and reports the dropped ones").
+  section += buildDroppedSection(body.dropped);
   section += buildMechanicalSection(body.mechanical, body.llmErrored);
+  // Per-file coverage: what was reviewed, carried, excluded, or NOT reviewed.
+  if (body.ledger !== "") section += `${body.ledger}\n`;
   if (body.otherChecks !== "") section += `### Other checks\n${body.otherChecks}\n\n`;
   // Top-N renders ONLY from the model's explicit list — it is no longer auto-generated
   // from findings (that was a verbatim duplicate of the severity-sorted Findings list).

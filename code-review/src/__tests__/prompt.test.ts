@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { buildPrompt, sanitizeInstruction, PromptError } from "@/prompt.js";
 import type { DiffData } from "@/git/diff.js";
 import type { MechanicalFinding } from "@/mechanical/sarif.js";
+import type { Brief } from "@/review/cartographer.js";
 
 // Security-focused: the REAL prompts/review-checklist.txt is read from disk, and
 // real DiffData is assembled — no mocks. The malicious instruction exercises the
@@ -453,5 +454,172 @@ describe("buildPrompt — prior review threads (accept-or-argue)", () => {
     // The raw multi-line / fenced form must NOT appear verbatim; the sanitized form does.
     expect(env.user).not.toContain(malicious);
     expect(env.user).toContain(sanitizeInstruction(malicious));
+  });
+});
+
+describe("buildPrompt — block order (prompt-cache-friendly shared prefix)", () => {
+  it("places the shared-prefix blocks (project rules, reviewer request) before the per-package blocks (changed files, mechanical findings)", () => {
+    const env = buildPrompt({
+      diff: sampleDiff(),
+      checklistPath: CHECKLIST_PATH,
+      projectRules: "### CLAUDE.md\nAlways use tabs.\n",
+      reviewInstruction: "focus on auth",
+      mechanicalFindings: [
+        {
+          tool: "gitleaks",
+          ruleId: "github-pat",
+          path: "src/app.ts",
+          line: 5,
+          severity: "error",
+          message: "secret detected",
+        },
+      ],
+    });
+    const rulesIdx = env.user.indexOf("## Project Conventions & Rules");
+    const requestIdx = env.user.indexOf("## Reviewer request");
+    const changedIdx = env.user.indexOf("## Changed Files");
+    const mechanicalIdx = env.user.indexOf("Deterministic findings to assess");
+    expect(rulesIdx).toBeGreaterThanOrEqual(0);
+    expect(requestIdx).toBeGreaterThan(rulesIdx);
+    expect(changedIdx).toBeGreaterThan(requestIdx);
+    expect(mechanicalIdx).toBeGreaterThan(changedIdx);
+  });
+});
+
+describe("buildPrompt — PR brief + rules-changed notice (AC-11)", () => {
+  const BRIEF: Brief = {
+    intent: "This PR migrates the auth module to constant-time comparisons across the codebase.",
+    global_facts: [
+      "CLAUDE.md is modified in this PR",
+      "the auth module is renamed across 40 files",
+    ],
+    package_hints: [
+      { name: "auth-core", path_prefixes: ["src/auth/"], risk: "high" },
+      { name: "docs", path_prefixes: ["docs/"], risk: "low" },
+    ],
+  };
+
+  it("renders the brief ONLY inside its own UNTRUSTED fence, and the rules-changed notice OUTSIDE it", () => {
+    const env = buildPrompt({
+      diff: sampleDiff(),
+      checklistPath: CHECKLIST_PATH,
+      brief: BRIEF,
+      rulesChanged: ["CLAUDE.md"],
+    });
+
+    // The brief is fenced with the same <<<TOKEN ... TOKEN>>> idiom as the reviewer request.
+    const fenceStart = env.user.indexOf("<<<BRIEF");
+    const fenceEnd = env.user.indexOf("BRIEF>>>") + "BRIEF>>>".length;
+    expect(fenceStart).toBeGreaterThanOrEqual(0);
+    expect(fenceEnd).toBeGreaterThan(fenceStart);
+    expect(env.user).toContain("## PR brief (UNTRUSTED");
+
+    // The brief's own content (intent, a global fact, a hint name) lives ONLY inside the fence.
+    for (const needle of [
+      "auth-core",
+      "the auth module is renamed across 40 files",
+      BRIEF.intent,
+    ]) {
+      const idx = env.user.indexOf(needle);
+      expect(idx).toBeGreaterThanOrEqual(fenceStart);
+      expect(idx).toBeLessThan(fenceEnd);
+    }
+
+    // The trusted, code-generated rules-changed notice sits OUTSIDE the brief's fence,
+    // in the per-package section (after it closes) — never inside an untrusted block.
+    expect(env.user).toContain("## Rules files changed in this PR (TRUSTED, code-generated)");
+    expect(env.user).toContain(
+      "Rules file(s) CLAUDE.md changed in this PR; base-ref rules may be stale",
+    );
+    const noticeIdx = env.user.indexOf("## Rules files changed in this PR");
+    expect(noticeIdx).toBeGreaterThan(fenceEnd);
+  });
+
+  it("carries the full 600-char intent and every one of 24 package_hint names into the envelope — no 500-char truncation", () => {
+    const intent = "x".repeat(600);
+    const hints: Brief["package_hints"] = Array.from({ length: 24 }, (_, i) => ({
+      name: `pkg-${i}`,
+      path_prefixes: [`src/pkg${i}/`],
+      risk: "normal",
+    }));
+    const brief: Brief = { intent, global_facts: [], package_hints: hints };
+
+    const env = buildPrompt({ diff: sampleDiff(), checklistPath: CHECKLIST_PATH, brief });
+
+    expect(intent.length).toBe(600);
+    expect(env.user).toContain(intent);
+    for (const h of hints) {
+      expect(env.user).toContain(h.name);
+    }
+  });
+
+  it("keeps the shared prefix (through the reviewer-request block) byte-identical across two different chunks of the same review", () => {
+    const shared = {
+      checklistPath: CHECKLIST_PATH,
+      codebaseOverview: "Shared overview.",
+      projectRules: "### CLAUDE.md\nAlways use tabs.\n",
+      brief: BRIEF,
+      priorThreads: [
+        {
+          path: "src/shared.ts",
+          line: 3,
+          finding: "shared finding",
+          replies: [{ author: "human-dev", body: "shared reply" }],
+        },
+      ],
+      reviewInstruction: "focus on the auth module",
+    };
+
+    const envA = buildPrompt({
+      ...shared,
+      diff: sampleDiff({
+        diff: "diff --git a/pkg-a/x.ts b/pkg-a/x.ts\n+a",
+        changed_files: ["pkg-a/x.ts"],
+        total_files: 1,
+      }),
+      rulesChanged: ["CLAUDE.md"],
+      mechanicalFindings: [
+        {
+          tool: "gitleaks",
+          ruleId: "r1",
+          path: "pkg-a/x.ts",
+          line: 1,
+          severity: "error",
+          message: "m1",
+        },
+      ],
+    });
+
+    const envB = buildPrompt({
+      ...shared,
+      diff: sampleDiff({
+        diff: "diff --git a/pkg-b/y.ts b/pkg-b/y.ts\n+b\n+c\n+d",
+        changed_files: ["pkg-b/y.ts", "pkg-b/z.ts"],
+        total_files: 2,
+      }),
+      // Deliberately no rulesChanged/mechanicalFindings for this chunk — the per-package
+      // tail differs; only the shared prefix must stay identical.
+    });
+
+    // The first per-package heading (spec §Layer 2) is the robust split marker: everything
+    // before it must depend only on review-global data, never on the chunk.
+    const splitMarker = "\n\n## Changed Files";
+    const splitA = envA.user.indexOf(splitMarker);
+    const splitB = envB.user.indexOf(splitMarker);
+    expect(splitA).toBeGreaterThan(0);
+    expect(splitB).toBeGreaterThan(0);
+    const prefixA = envA.user.slice(0, splitA);
+    const prefixB = envB.user.slice(0, splitB);
+    expect(prefixA).toBe(prefixB);
+    // Sanity check: the two envelopes are NOT identical overall (the per-package tail differs).
+    expect(envA.user).not.toBe(envB.user);
+  });
+
+  it("omits both the brief and the rules-changed notice when neither is provided", () => {
+    const env = buildPrompt({ diff: sampleDiff(), checklistPath: CHECKLIST_PATH });
+    expect(env.user).not.toContain("PR brief");
+    expect(env.user).not.toContain("<<<BRIEF");
+    expect(env.user).not.toContain("BRIEF>>>");
+    expect(env.user).not.toContain("Rules files changed in this PR");
   });
 });
