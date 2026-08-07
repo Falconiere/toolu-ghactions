@@ -8,12 +8,13 @@
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "lint": "oxlint --type-aware --deny-warnings",
-    "lint:fix": "oxlint --fix",
-    "fmt": "oxfmt",
-    "fmt:check": "oxfmt --check",
+    "lint": "oxlint --type-aware --deny-warnings --ignore-pattern=evals",
+    "lint:fix": "oxlint --fix --ignore-pattern=evals",
+    "fmt": "oxfmt '!evals/**'",
+    "fmt:check": "oxfmt --check '!evals/**'",
     "prepare": "cd \"$(git rev-parse --show-toplevel)\" && lefthook install",
-    "check": "bun run typecheck && bun run lint && bun run fmt:check && bun run test"
+    "check": "bun run typecheck && bun run lint && bun run fmt:check && bun run test",
+    "eval": "bun evals/run.ts"
   },
   "dependencies": {
     "@actions/core": "^1.11.1",

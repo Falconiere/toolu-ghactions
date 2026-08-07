@@ -64,6 +64,9 @@ export interface ActionInputs {
   maxChunkLines: number;
   /** Max chunks (= model calls) per review, bounding cost; files beyond are skipped (0 = unlimited). */
   maxChunks: number;
+  /** Soft wall-clock budget (ms) for the whole review loop; packages not yet started
+   *  when it is exceeded are recorded pending and left for a resume run (0 = off). */
+  maxWallMs: number;
   /** Per-attempt model deadline in ms before an attempt is aborted and retried (must fit the model). */
   requestTimeoutMs: number;
   /** GitHub token for posting/editing comments. */
@@ -266,7 +269,8 @@ export function readInputs(): ActionInputs {
     maxRounds: Math.max(0, intInput("MAX_ROUNDS", 0)),
     maxDiffLines: intInput("MAX_DIFF_LINES", 0),
     maxChunkLines: intInput("MAX_CHUNK_LINES", 1500),
-    maxChunks: intInput("MAX_CHUNKS", 20),
+    maxChunks: intInput("MAX_CHUNKS", 0),
+    maxWallMs: intInput("MAX_WALL_MS", 0),
     requestTimeoutMs: validateTimeout(
       intInput("REQUEST_TIMEOUT_MS", DEFAULT_REQUEST_TIMEOUT_MS),
       "REQUEST_TIMEOUT_MS",

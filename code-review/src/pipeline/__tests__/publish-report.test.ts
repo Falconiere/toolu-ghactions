@@ -12,6 +12,7 @@ import type { GithubContext, PipelineOctokit } from "@/pipeline/types.js";
 import type { ActionInputs } from "@/inputs.js";
 import type { BlockableVerdict } from "@/review/gate.js";
 import { thread } from "@/review/__tests__/reconcile-helpers.js";
+import { fingerprint } from "@/state.js";
 import { POST_TIMEOUT_MS } from "@/report/post.js";
 
 /** A fully-populated ActionInputs, overridable per test. */
@@ -38,6 +39,7 @@ function baseInputs(over: Partial<ActionInputs> = {}): ActionInputs {
     maxDiffLines: 0,
     maxChunkLines: 0,
     maxChunks: 20,
+    maxWallMs: 0,
     requestTimeoutMs: 180000,
     token: "ghs_test",
     appId: "",
@@ -57,13 +59,17 @@ function baseInputs(over: Partial<ActionInputs> = {}): ActionInputs {
 
 /** A minimal in-memory PipelineOctokit. `calls` records, in order, every
  *  externally-observable mutation so ordering (AC-26) is assertable against the
- *  injected `fetch`'s own push into the same array. */
-function fakeOctokit(calls: string[]): PipelineOctokit {
+ *  injected `fetch`'s own push into the same array; `bodies`, when passed,
+ *  collects each posted sticky-comment body. */
+function fakeOctokit(calls: string[], bodies: string[] = []): PipelineOctokit {
   return {
     rest: {
       issues: {
         listComments: async () => ({ data: [] }),
-        createComment: async () => ({ data: { html_url: "https://github.com/o/r/issues/1#c1" } }),
+        createComment: async (p) => {
+          bodies.push(p.body);
+          return { data: { html_url: "https://github.com/o/r/issues/1#c1" } };
+        },
         updateComment: async () => ({ data: { html_url: "https://github.com/o/r/issues/1#c1" } }),
         createLabel: async () => ({}),
         removeLabel: async () => ({}),
@@ -133,6 +139,10 @@ function basePublishInput(
     prior: null,
     stickyId: undefined,
     mechanical: [],
+    // A complete-coverage round over one reviewed file: no `unreviewed`/`pending`
+    // entry, so the ledger's degrade rule leaves the verdict alone (AC-13).
+    ledger: { entries: { "src/a.ts": { status: "reviewed" } } },
+    exceptionPaths: new Set<string>(),
     scope: null,
     reviewedSha: "abc123",
     fullReview: true,
@@ -267,5 +277,76 @@ describe("publish — post() runs strictly after postInline (AC-26)", () => {
     // resolves it: a closing reply, then the resolve mutation, both via octokit —
     // and only THEN does report-run.ts's post() fire.
     expect(calls).toEqual(["thread-reply", "thread-resolve", "report-post"]);
+  });
+});
+
+describe("publish — cluster members are expanded on BOTH sides of the report partition", () => {
+  it("reports every member of a clustered finding as `new`, with no partition failure", async () => {
+    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+    const calls: string[] = [];
+    const posted: unknown[] = [];
+    const bodies: string[] = [];
+    const octokit = fakeOctokit(calls, bodies);
+    const fetchStub: typeof fetch = async (_url, init) => {
+      calls.push("report-post");
+      posted.push(JSON.parse(typeof init?.body === "string" ? init.body : "{}"));
+      return new Response("{}", { status: 200 });
+    };
+
+    // The same defect, same category and text, on three distinct paths: exactly
+    // the shape review/cluster.ts collapses into ONE exemplar-led cluster.
+    const text = "Unwrap on a Result that can be an Err in this handler.";
+    const stamped = ["src/a.ts", "src/b.ts", "src/c.ts"].map((path) => ({
+      path,
+      line: 12,
+      severity: "high" as const,
+      category: "correctness",
+      text,
+      fp: fingerprint({ path, category: "correctness", text }),
+    }));
+
+    const input = basePublishInput(octokit, {
+      stamped,
+      // The live prior thread sits on an unrelated path, so it maps to no cluster
+      // and still lands in `toResolve` (the `fixed` row every test here relies on).
+      priorThreads: [
+        thread({ fp: "fp-dropped", threadId: "T_live", path: "src/zzz.ts", line: 99 }),
+      ],
+      ledger: {
+        entries: {
+          "src/a.ts": { status: "reviewed" },
+          "src/b.ts": { status: "reviewed" },
+          "src/c.ts": { status: "reviewed" },
+        },
+      },
+      fetch: fetchStub,
+    });
+
+    const result = await publish(input);
+
+    // ONE inline comment for the cluster (its exemplar), not three.
+    expect(calls).toEqual(["review-create", "thread-reply", "thread-resolve", "report-post"]);
+    // partitionFindings() ran its exhaustiveness check over expanded member lists
+    // on both sides; a representative-only `applied` would have returned
+    // {ok:false} and reported nothing but a warning.
+    expect(warn).not.toHaveBeenCalled();
+    const body: { findings?: { new?: { fp: string }[] } } = JSON.parse(
+      JSON.stringify(posted[0] ?? {}),
+    );
+    expect((body.findings?.new ?? []).map((f) => f.fp).sort()).toEqual(
+      stamped.map((f) => f.fp).sort(),
+    );
+    // The action's own count is the member count, not the representative count.
+    expect(result.findingsCount).toBe(3);
+    // The sticky comment carries the cluster body: the members it stands for and
+    // the settlement rule the author needs BEFORE resolving the exemplar's thread.
+    const comment = bodies.at(-1) ?? "";
+    expect(comment).toContain("### Repeated findings (1)");
+    // Members are enumerated in review/cluster.ts's fp order (its determinism rule),
+    // and the exemplar is the lowest fp — here src/b.ts.
+    expect(comment).toContain("Same finding in 3 files: `src/b.ts`, `src/c.ts`, `src/a.ts`");
+    expect(comment).toContain("_Dismissing this thread dismisses the pattern (3 files)._");
+    // The findings list itself shows the cluster ONCE, not three times.
+    expect(comment).toContain("### Findings (1)");
   });
 });

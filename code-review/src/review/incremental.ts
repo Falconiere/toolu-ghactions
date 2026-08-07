@@ -33,16 +33,22 @@ function coveredByPriorFinding(f: ReconcileFinding, prior: Finding[]): boolean {
 
 /**
  * Split this run's findings into kept / dropped under the incremental scope.
- * Kept: anchored to a line changed since the last review, OR covered by a prior
- * thread (strict or nearby), OR covered by a prior-state finding. Dropped:
- * everything else — a finding about already-reviewed, since-unchanged code.
- * A null scope keeps everything (full review).
+ * Kept: anchored to a line changed since the last review, OR on an EXCEPTION path,
+ * OR covered by a prior thread (strict or nearby), OR covered by a prior-state
+ * finding. Dropped: everything else — a finding about already-reviewed,
+ * since-unchanged code. A null scope keeps everything (full review).
+ *
+ * `exceptionPaths` are the resume lists (`unreviewed_paths`/`pending_paths`, spec
+ * §True incremental): a path the last round attempted-and-failed or never reached
+ * is in scope at FILE level regardless of which of its lines the tree-diff reports,
+ * so a resume run's findings survive this filter. Absent/empty → today's behaviour.
  */
 export function dropOutOfScope<F extends ReconcileFinding>(
   findings: F[],
   scope: IncrementalScope | null,
   priorThreads: PriorThread[],
   priorFindings: Finding[],
+  exceptionPaths?: ReadonlySet<string>,
 ): { kept: F[]; dropped: F[] } {
   if (scope === null) return { kept: findings, dropped: [] };
   const kept: F[] = [];
@@ -51,7 +57,7 @@ export function dropOutOfScope<F extends ReconcileFinding>(
     // f.line is always a real int here: the finding schema (llm/schema.ts)
     // requires `line: z.number().int()`, so no file-level/lineless finding can
     // reach this filter — only PRIOR-state findings have an optional line.
-    const inScope = scope.get(f.path)?.has(f.line) === true;
+    const inScope = scope.get(f.path)?.has(f.line) === true || exceptionPaths?.has(f.path) === true;
     const carried = coveredByThread(f, priorThreads) || coveredByPriorFinding(f, priorFindings);
     (inScope || carried ? kept : dropped).push(f);
   }

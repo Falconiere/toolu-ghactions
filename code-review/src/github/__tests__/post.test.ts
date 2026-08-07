@@ -1,9 +1,23 @@
 import { describe, it, expect } from "vitest";
-import { postInlineReview } from "@/github/review.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { MAX_COMMENTS_PER_REVIEW, postInlineReview } from "@/github/review.js";
 import type { ReviewClient, ReviewComment, ReviewTarget } from "@/github/review.js";
 import { setVerdictLabel } from "@/github/label.js";
 import type { LabelClient, LabelTarget } from "@/github/label.js";
 import type { Finding } from "@/llm/schema.js";
+import { extractFpMarker } from "@/review/fpmarker.js";
+import { fingerprint } from "@/state.js";
+
+const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
+
+/** The real 422 body PR-72 run 31155450420 got back from the Reviews GraphQL
+ *  mutation: it rejects `subjectType` and a null `position` outright — evidence
+ *  that there never was a safe file-level fallback (AC-5). */
+function pr72FixtureText(): string {
+  return readFileSync(join(FIXTURES, "pr72-createreview-422.txt"), "utf8");
+}
 
 const REVIEW_TARGET: ReviewTarget = {
   owner: "test-org",
@@ -77,6 +91,42 @@ describe("postInlineReview", () => {
     expect(span?.body).toContain("```suggestion\nfor (let i = 0; i < n; i++) {\n```");
   });
 
+  // AC-4: a cluster exemplar's body is DECORATED before posting (the members it
+  // stands for are appended — pipeline/reduce.ts's decorateExemplars). The posted
+  // marker must still carry the fp the pipeline STAMPED from the raw finding: a fp
+  // recomputed from the decorated text would differ, and the thread's identity
+  // would rotate on every round — no dedup, no reply-in-place, no resolve.
+  it("stamps the marker from the finding's own fp, so decorating the body cannot rotate it", async () => {
+    const raw: Finding = {
+      path: "src/a.ts",
+      line: 10,
+      severity: "high",
+      category: "correctness",
+      text: "off-by-one",
+    };
+    const stamped = { ...raw, fp: fingerprint(raw) };
+    const decorated = {
+      ...stamped,
+      text: `${raw.text}\n\nSame finding in 3 files: \`src/a.ts\`, \`src/b.ts\`, \`src/c.ts\``,
+    };
+
+    const plain = fakeReviewClient();
+    await postInlineReview(plain.client, [stamped], REVIEW_TARGET);
+    const decor = fakeReviewClient();
+    await postInlineReview(decor.client, [decorated], REVIEW_TARGET);
+
+    const plainFp = extractFpMarker(plain.calls[0]?.comments[0]?.body ?? "");
+    const decoratedBody = decor.calls[0]?.comments[0]?.body ?? "";
+    // The stamped fp is what reaches the wire…
+    expect(plainFp).toBe(stamped.fp);
+    // …the decoration really did change the body…
+    expect(decoratedBody).toContain("Same finding in 3 files");
+    // …and the marker is byte-identical regardless.
+    expect(extractFpMarker(decoratedBody)).toBe(stamped.fp);
+    // Proving the point: a fp recomputed from the decorated text would be different.
+    expect(fingerprint(decorated)).not.toBe(stamped.fp);
+  });
+
   it("skips (no review posted) when there are no anchored findings", async () => {
     const { client, calls } = fakeReviewClient();
     // A finding with no `line` is unanchorable — it exercises the runtime guard.
@@ -140,7 +190,7 @@ function fakeValidatingClient(
 const PATCH_10_TO_14 = "@@ -8,3 +10,5 @@\n line-a\n+line-b\n+line-c\n+line-d\n line-e";
 
 describe("postInlineReview — anchor validation against GitHub's diff", () => {
-  it("degrades an unmappable line to a file-level comment; the rest still post", async () => {
+  it("reports an unmappable line as unanchored (never file-level); the rest still post", async () => {
     const { client, calls } = fakeValidatingClient([
       { filename: "src/a.ts", patch: PATCH_10_TO_14 },
     ]);
@@ -157,16 +207,14 @@ describe("postInlineReview — anchor validation against GitHub's diff", () => {
     const r = await postInlineReview(client, findings, REVIEW_TARGET);
 
     expect(r.posted).toBe(true);
-    expect(r.count).toBe(2);
-    expect(r.degraded).toBe(1);
+    expect(r.count).toBe(1);
+    expect(r.batches).toBe(1);
+    expect(r.unanchored).toHaveLength(1);
+    expect(r.unanchored[0]?.text).toBe("line off the diff");
     expect(calls).toHaveLength(1);
-    const [anchored, fileLevel] = calls[0]!.comments;
+    expect(calls[0]?.comments).toHaveLength(1);
+    const [anchored] = calls[0]!.comments;
     expect(anchored).toMatchObject({ path: "src/a.ts", line: 10, side: "RIGHT" });
-    expect(fileLevel).toMatchObject({ path: "src/a.ts", subject_type: "file" });
-    expect(fileLevel?.line).toBeUndefined();
-    // A suggestion cannot commit without a line anchor — stripped on degrade.
-    expect(fileLevel?.body).not.toContain("```suggestion");
-    expect(fileLevel?.body).toContain("line off the diff");
   });
 
   it("drops findings on paths GitHub's diff does not show; the rest still post", async () => {
@@ -181,6 +229,9 @@ describe("postInlineReview — anchor validation against GitHub's diff", () => {
     expect(r.posted).toBe(true);
     expect(r.count).toBe(1);
     expect(calls[0]?.comments.map((c) => c.path)).toEqual(["src/a.ts"]);
+    // A path GitHub's diff doesn't show at all is "no patch" too — unanchored,
+    // not silently dropped: the sticky comment still carries it.
+    expect(r.unanchored.map((f) => f.path)).toEqual(["ghost.ts"]);
   });
 
   it("collapses a span whose start is off the diff to its valid end line", async () => {
@@ -213,7 +264,7 @@ describe("postInlineReview — anchor validation against GitHub's diff", () => {
     expect(only?.start_line).toBeUndefined();
   });
 
-  it("retries ONCE with everything file-level when the batch still 422s", async () => {
+  it("bisects the batch when the whole thing 422s once, posting both halves individually", async () => {
     const { client, calls } = fakeValidatingClient(
       [{ filename: "src/a.ts", patch: PATCH_10_TO_14 }],
       { failFirst: true },
@@ -224,12 +275,127 @@ describe("postInlineReview — anchor validation against GitHub's diff", () => {
     ];
     const r = await postInlineReview(client, findings, REVIEW_TARGET);
     expect(r.posted).toBe(true);
-    expect(r.degraded).toBe(2);
-    expect(calls).toHaveLength(1); // the throwing attempt recorded nothing
-    for (const c of calls[0]!.comments) {
-      expect(c.subject_type).toBe("file");
-      expect(c.line).toBeUndefined();
+    expect(r.count).toBe(2);
+    expect(r.dropped).toEqual([]);
+    // The whole 2-comment batch 422d once, so it bisected into two single-comment
+    // reviews — both of which succeed (the fake's single failure is spent).
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call.comments).toHaveLength(1);
+      expect(call.comments[0]?.line).toBeDefined();
     }
+  });
+});
+
+describe("postInlineReview — batching + 422 bisection (AC-5)", () => {
+  it("batches at MAX_COMMENTS_PER_REVIEW and reports no-patch files as unanchored — never subject_type", async () => {
+    const anchorableFiles = Array.from({ length: 45 }, (_, i) => ({
+      filename: `f${i}.ts`,
+      patch: "@@ -1,1 +1,1 @@\n+x",
+    }));
+    // No `patch` key at all — GitHub omits it on binary/huge files.
+    const unanchorableFiles = Array.from({ length: 5 }, (_, i) => ({ filename: `g${i}.ts` }));
+    const { client, calls } = fakeValidatingClient([...anchorableFiles, ...unanchorableFiles]);
+
+    const findings: Finding[] = [
+      ...Array.from(
+        { length: 45 },
+        (_, i): Finding => ({
+          path: `f${i}.ts`,
+          line: 1,
+          severity: "low",
+          text: `anchorable ${i}`,
+        }),
+      ),
+      ...Array.from(
+        { length: 5 },
+        (_, i): Finding => ({
+          path: `g${i}.ts`,
+          line: 1,
+          severity: "low",
+          text: `unanchorable ${i}`,
+        }),
+      ),
+    ];
+
+    const r = await postInlineReview(client, findings, REVIEW_TARGET);
+
+    expect(r.posted).toBe(true);
+    expect(r.count).toBe(45);
+    expect(r.batches).toBe(2);
+    expect(r.dropped).toEqual([]);
+    expect(r.unanchored).toHaveLength(5);
+    expect(r.unanchored.map((f) => f.path).sort()).toEqual(
+      Array.from({ length: 5 }, (_, i) => `g${i}.ts`).sort(),
+    );
+    expect(calls).toHaveLength(2);
+    expect(calls.map((c) => c.comments.length).sort((a, b) => a - b)).toEqual([15, 30]);
+    expect(calls[0]?.comments).toHaveLength(MAX_COMMENTS_PER_REVIEW);
+
+    // The real 422 body rejects exactly `subjectType`/`position` — scan the
+    // recorded request payloads directly to prove neither key is ever emitted.
+    const serialized = JSON.stringify(calls.flatMap((c) => c.comments));
+    expect(serialized).not.toContain("subject_type");
+    expect(serialized).not.toContain("subjectType");
+    expect(serialized).not.toContain('"position"');
+  });
+
+  it("bisects a batch containing one poison comment (real PR-72 422) so the rest still post", async () => {
+    const fixtureText = pr72FixtureText();
+    const poisonPath = "poison.ts";
+    const calls: { comments: ReviewComment[] }[] = [];
+    const client: ReviewClient = {
+      rest: {
+        pulls: {
+          createReview: async (p) => {
+            if (p.comments.some((c) => c.path === poisonPath)) {
+              throw new Error(fixtureText);
+            }
+            calls.push({ comments: p.comments });
+            return {
+              data: {
+                html_url: "https://github.com/test-org/test-repo/pull/42#pullrequestreview-poison",
+              },
+            };
+          },
+        },
+      },
+    };
+    const findings: Finding[] = [
+      { path: "a.ts", line: 1, severity: "low", text: "ok a" },
+      { path: poisonPath, line: 1, severity: "low", text: "bad anchor" },
+      { path: "b.ts", line: 1, severity: "low", text: "ok b" },
+    ];
+
+    const r = await postInlineReview(client, findings, REVIEW_TARGET);
+
+    expect(r.posted).toBe(true);
+    expect(r.count).toBe(2);
+    expect(r.reason).toBeUndefined();
+    expect(r.dropped).toHaveLength(1);
+    expect(r.dropped[0]?.path).toBe(poisonPath);
+    const postedPaths = calls.flatMap((c) => c.comments.map((cm) => cm.path)).sort();
+    expect(postedPaths).toEqual(["a.ts", "b.ts"]);
+  });
+
+  it("the builder emits line/side, never the fixture's rejected subjectType/position fields", async () => {
+    const fixtureText = pr72FixtureText();
+    // The real 422 rejects exactly these two GraphQL variable fields — the
+    // evidence that a file-level (`subject_type`, no `line`) shape is unsafe.
+    expect(fixtureText).toContain("subjectType");
+    expect(fixtureText).toContain("position");
+
+    const { client, calls } = fakeReviewClient();
+    const findings: Finding[] = [{ path: "src/a.ts", line: 5, severity: "low", text: "x" }];
+    await postInlineReview(client, findings, REVIEW_TARGET);
+
+    const comment = calls[0]?.comments[0];
+    expect(comment).toBeDefined();
+    expect(comment?.line).toBe(5);
+    expect(comment?.side).toBe("RIGHT");
+    expect(comment).not.toHaveProperty("position");
+    expect(comment).not.toHaveProperty("subjectType");
+    expect(comment).not.toHaveProperty("subject_type");
   });
 });
 

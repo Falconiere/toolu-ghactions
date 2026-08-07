@@ -87,6 +87,61 @@ describe("fingerprint() is immune to category normalization (AC-21)", () => {
   });
 });
 
+// --- AC-7 golden fp compat: fingerprint() is untouched by the s2 marker-fields change. ---
+// The hexes below are LITERAL strings, computed from fingerprint() BEFORE the s2 diff
+// (the s2 diff never edits canonString()/fingerprint()/FP_SEP — only additive schema
+// fields and diffState's next_state carrier, both outside the fingerprint path). Path,
+// category, and text vary — including a unicode path/text and a whitespace/tab/newline
+// variant — because normText's regex-based normalization (case fold, punctuation strip,
+// whitespace collapse, 200-char slice) is exactly the code most likely to shift under an
+// incautious touch, and Unicode/whitespace edge cases are where a regex rewrite drifts.
+describe("golden fingerprint hexes are unchanged by the s2 marker-fields diff (AC-7)", () => {
+  const golden: Array<{ finding: Finding; fp: string }> = [
+    {
+      finding: {
+        path: "src/a.ts",
+        category: "correctness",
+        text: "Off-by-one error in loop bound.",
+      },
+      fp: "5e93deb48e7c7ec7f0869b29af2bf24971fc377c",
+    },
+    {
+      finding: {
+        path: "src/ünïcödé.ts",
+        category: "style",
+        text: "  Emoji check: 🚀 rocket   ship  ",
+      },
+      fp: "cd433b531b81ca26a88c57a76442963231df4615",
+    },
+    {
+      finding: {
+        path: "src/b.ts",
+        category: "security",
+        text: "SQL injection via string concatenation!!",
+      },
+      fp: "041d133e84596ca7b7d2ba72726ce5f98f7c9918",
+    },
+    {
+      finding: { path: "src/c.ts", category: "perf", text: "Loop\tallocates\neach\titeration" },
+      fp: "cdd0e227acf1bc57792a6e78c16990d2cc781be7",
+    },
+    {
+      finding: {
+        path: "日本語/パス.ts",
+        category: "correctness",
+        text: "Unicode PATH and 中文文本 mixed.",
+      },
+      fp: "8fc230a23619b60b5c8cef3d4b2c8ab160d29999",
+    },
+  ];
+
+  it("matches the hardcoded pre-change hex digests byte-for-byte", () => {
+    for (const { finding, fp } of golden) {
+      expect(fingerprint(finding)).toBe(fp);
+    }
+  });
+});
+
 describe("src/state.ts does not import from src/report/ (AC-21 structural guard)", () => {
   it("has no import/require/dynamic-import path under report/", () => {
     // Plain source-text check, not a behavioural one: the claim is "this module

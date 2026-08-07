@@ -8,6 +8,13 @@
 // model call failed. Only when EVERY chunk errored does the merged verdict stay
 // "error". Results must arrive in chunk-index order (the caller preserves it) so
 // the merged output is deterministic regardless of completion order.
+//
+// LEAF-AWARE: the input is one {@link PackageResults} entry per chunk, not one
+// result per chunk. A chunk reviewed whole contributes its single result; a chunk
+// that bisected on a schema failure (review/bisect.ts) contributes its LEAF
+// results — so a chunk whose halves all succeeded is fully covered and must NOT
+// count as a failed chunk, while a chunk with a failed leaf still does (its leaf's
+// files went unreviewed). Failure counting is therefore per chunk, not per result.
 import type { ProviderResult } from "./reviewWithModel.js";
 
 /** Max entries kept when unioning per-chunk `top_must_fix` lists. */
@@ -26,33 +33,49 @@ const MERGED_REVIEW_PLAN_CAP = 280;
 const MERGED_OTHER_CHECKS_CAP = 1000;
 
 /**
- * Merge per-chunk {@link ProviderResult}s into one. Findings concatenate in input
- * order (files never repeat across chunks → no dedup). Verdict: "changes" if any
- * non-error chunk requests changes; "approved" ONLY when every chunk approved —
- * a failed chunk means unreviewed files, and an "approved" over unreviewed files
- * is a confident verdict the review cannot honestly make, so a would-be approval
- * with failed chunks degrades to "error" (review incomplete; never auto-merges).
- * "changes" findings from surviving chunks are always kept, with `error`
- * recording "M/N chunks failed" and `partial` set. An empty input is a defensive
- * "error" result (the pipeline's fast path means it is never reached in practice).
+ * One chunk's contribution to the merge: the results that actually covered it —
+ * a single result for a chunk reviewed whole, or the LEAF results for a chunk that
+ * bisected. An entry is "failed" when ANY of its results errored; an empty entry
+ * (nothing was attempted — e.g. the wall clock ran out) merges as nothing at all,
+ * its paths accounted for `pending` in the coverage ledger instead.
  */
-export function mergeResults(results: ProviderResult[]): ProviderResult {
-  if (results.length === 0) {
+export type PackageResults = ProviderResult[];
+
+/**
+ * Merge per-chunk {@link PackageResults} into one {@link ProviderResult}. Findings
+ * concatenate in input order (files never repeat across chunks → no dedup).
+ * Verdict: "changes" if any non-error result requests changes; "approved" ONLY
+ * when every chunk was fully covered — a failed chunk means unreviewed files, and
+ * an "approved" over unreviewed files is a confident verdict the review cannot
+ * honestly make, so a would-be approval with failed chunks degrades to "error"
+ * (review incomplete; never auto-merges). "changes" findings from surviving chunks
+ * are always kept, with `error` recording "M/N chunks failed" and `partial` set.
+ * An empty input is a defensive "error" result (the pipeline's fast path means it
+ * is never reached in practice).
+ */
+export function mergeResults(chunks: PackageResults[]): ProviderResult {
+  // A chunk nothing covered contributes nothing — not a success, not a failure.
+  const covered = chunks.filter((chunk) => chunk.length > 0);
+  if (covered.length === 0) {
     return { verdict: "error", findings: [], error: "no chunks reviewed" };
   }
+  const results = covered.flat();
 
+  // Failure is counted per CHUNK: a bisected chunk whose leaves all landed is fully
+  // covered, however many results it took; one failed leaf fails its chunk.
+  const failed = covered.filter((chunk) => chunk.some((r) => r.verdict === "error"));
   const errored = results.filter((r) => r.verdict === "error");
   const succeeded = results.filter((r) => r.verdict !== "error");
   // A salvaged chunk has verdict "changes" (so it counts as a success above) but
   // was recovered from a length-truncated response — surface that distinctly below.
-  const partials = results.filter((r) => r.partial);
+  const partials = covered.filter((chunk) => chunk.some((r) => r.partial));
 
   const verdict: ProviderResult["verdict"] =
     succeeded.length === 0
       ? "error"
       : succeeded.some((r) => r.verdict === "changes")
         ? "changes"
-        : errored.length > 0
+        : failed.length > 0
           ? "error" // all survivors approved, but files went unreviewed — inconclusive.
           : "approved";
 
@@ -67,16 +90,16 @@ export function mergeResults(results: ProviderResult[]): ProviderResult {
     top_must_fix: capUnion(results.flatMap((r) => r.top_must_fix ?? [])),
   };
 
-  if (partials.length > 0 || errored.length > 0) merged.partial = true;
-  if (errored.length > 0) {
-    const first = errored[0]!;
+  if (partials.length > 0 || failed.length > 0) merged.partial = true;
+  const first = errored[0];
+  if (failed.length > 0 && first !== undefined) {
     merged.error =
-      `${errored.length}/${results.length} chunks failed (after a retry) — the files in ` +
+      `${failed.length}/${covered.length} chunks failed (after a retry) — the files in ` +
       `those chunks were NOT reviewed: ${first.error ?? "unknown error"}`;
     if (first.finishReason !== undefined) merged.finishReason = first.finishReason;
   } else if (partials.length > 0) {
     merged.error =
-      `${partials.length}/${results.length} chunks truncated at the output-token limit — ` +
+      `${partials.length}/${covered.length} chunks truncated at the output-token limit — ` +
       `recovered the findings completed before the cut; later findings may be missing. ` +
       `Raise MAX_TOKENS to avoid.`;
     merged.finishReason = "length";

@@ -374,3 +374,57 @@ describe("fetchDiff — generated/vendored exclusion + renames", () => {
     expect(r.changed_files).toEqual(["src/app.ts"]);
   });
 });
+
+describe("fetchDiff — batched blob classification (src/git/batchRead.ts)", () => {
+  it("drops a >1MB blob as large-file end-to-end (batched cat-file --batch-check size)", () => {
+    const dir = featureRepo();
+    const big = Array.from({ length: 120_000 }, (_, i) => `const x${i} = ${i};`).join("\n") + "\n";
+    expect(Buffer.byteLength(big, "utf8")).toBeGreaterThan(1_000_000);
+    writeFile(dir, "data/generated-blob.ts", big);
+    writeFile(dir, "src/app.ts", "export const x = 1\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "big blob + real code", "--quiet");
+
+    const r = fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 8000 });
+    expect(r.dropped_files.find((d) => d.path === "data/generated-blob.ts")?.reason).toBe(
+      "large-file",
+    );
+    expect(r.changed_files).toEqual(["src/app.ts"]);
+  });
+
+  it("drops a hash-named minified file end-to-end (batched cat-file --batch bounded content)", () => {
+    const dir = featureRepo();
+    const longLine = "z".repeat(6000);
+    // Not under a build-output/vendored dir, so only the content rule can catch it —
+    // this exercises the real batchRead content read, not a path-only static rule.
+    writeFile(dir, "web/assets/bundle-Qcc39ab.js", `${longLine}\n`);
+    writeFile(dir, "src/app.ts", "export const x = 1\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "minified bundle + real code", "--quiet");
+
+    const r = fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 8000 });
+    expect(r.dropped_files.find((d) => d.path === "web/assets/bundle-Qcc39ab.js")?.reason).toBe(
+      "minified",
+    );
+    expect(r.changed_files).toEqual(["src/app.ts"]);
+  });
+
+  it("end-to-end: a long line past the 64 KiB bound is NOT flagged minified (intentional parity break)", () => {
+    const dir = featureRepo();
+    const filler = Array.from({ length: 4000 }, (_, i) => `const x${i} = ${i};`).join("\n") + "\n";
+    const longLine = "z".repeat(6000);
+    const content = `${filler}${longLine}\n`;
+    expect(Buffer.byteLength(content, "utf8")).toBeGreaterThan(65536);
+    expect(Buffer.byteLength(content, "utf8")).toBeLessThan(1_000_000);
+    // Hash-suffixed but NOT under a build-output dir, so only the content rule applies.
+    writeFile(dir, "sdk/gen-Qcc39ab.js", content);
+    writeFile(dir, "src/app.ts", "export const x = 1\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "long-line-past-bound + real code", "--quiet");
+
+    const r = fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 8000 });
+    expect(r.dropped_files.find((d) => d.path === "sdk/gen-Qcc39ab.js")).toBeUndefined();
+    expect(r.changed_files).toContain("sdk/gen-Qcc39ab.js");
+    expect(r.changed_files).toContain("src/app.ts");
+  });
+});

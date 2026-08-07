@@ -18,8 +18,11 @@ export type BlobSize = (path: string) => number;
 /** First-line marker scan window — fetch-diff.sh pipes the blob through `head -20`. */
 const GENERATED_HEAD_LINES = 20;
 
-/** Blob-size ceiling: a file over ~1MB is a dump/bundle/vendored blob — drop it. */
-const LARGE_FILE_BYTES = 1_000_000;
+/** Blob-size ceiling: a file over ~1MB is a dump/bundle/vendored blob — drop it.
+ *  Exported so the batched blob reader (`src/git/batchRead.ts`) can apply this
+ *  same cutoff BEFORE fetching content — a blob over it never needs a content
+ *  read, it's already going to classify "large-file". */
+export const LARGE_FILE_BYTES = 1_000_000;
 
 /** A single line longer than this (UTF-8 BYTES) marks machine-generated/minified content. */
 const MINIFIED_LINE_BYTES = 5000;

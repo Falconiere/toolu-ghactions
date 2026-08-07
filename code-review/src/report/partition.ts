@@ -79,7 +79,10 @@ export interface PartitionedFindings {
   dismissed: DismissedFinding[];
 }
 
-/** Everything {@link partitionFindings} needs from one run. */
+/** Everything {@link partitionFindings} needs from one run. When the run was
+ *  CLUSTERED, `applied` and `findings` must both already be expanded from cluster
+ *  representatives to full members (report/expand.ts) — the exhaustiveness check
+ *  below compares them by fp and cannot see a member that never arrived. */
 export interface PartitionInput {
   /** postInline's return value — the reconcile plan narrowed to mutations GitHub
    *  actually accepted (a failed `resolveThread`/`replyToThread` call is absent). */

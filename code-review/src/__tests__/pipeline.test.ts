@@ -235,6 +235,7 @@ function baseInputs(overrides: Partial<ActionInputs> = {}): ActionInputs {
     maxDiffLines: 0,
     maxChunkLines: 0, // never chunk: existing tests exercise the single-call fast path
     maxChunks: 20,
+    maxWallMs: 0,
     requestTimeoutMs: 180000,
     token: "ghs_test",
     appId: "",
@@ -1349,4 +1350,416 @@ describe("runReview — incremental scope (natural convergence)", () => {
     const state = decodeMarker(marker ?? "");
     expect("reviewed_sha" in state && state.reviewed_sha).toBe(headSha);
   });
+});
+
+// ---------------------------------------------------------------------------
+// s12 — tree-based incremental scope, partial/resume rounds, the coverage
+// ledger, and the ledger-keyed verdict degrade. Same harness as above: real
+// temp git repos, the real recorded fixtures through an injected fetch, and the
+// recording fake Octokit — whose comment store PERSISTS across runReview calls,
+// so a second run really does read the marker the first one wrote.
+// ---------------------------------------------------------------------------
+
+/** A routing fetch that also RECORDS every outgoing prompt (system + user), so a
+ *  test can assert which files a package reviewer actually saw. */
+function recordingRoutingFetch(
+  routes: Array<[match: string, fixture: string]>,
+  calls: { system: string; user: string }[],
+): typeof fetch {
+  return async (_url, init) => {
+    const raw = typeof init?.body === "string" ? init.body : "";
+    const body: { messages?: { role: string; content: string }[] } = JSON.parse(raw || "{}");
+    const messages = body.messages ?? [];
+    calls.push({
+      system: messages.find((m) => m.role === "system")?.content ?? "",
+      user: messages.find((m) => m.role === "user")?.content ?? "",
+    });
+    const hit = routes.find(([m]) => raw.includes(m));
+    const fixture = hit ? hit[1] : "approved";
+    const fixtureBody = JSON.parse(readFileSync(join(FIXTURES, `${fixture}.json`), "utf8"));
+    return new Response(JSON.stringify(fixtureBody), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+}
+
+/** The Layer 2 (package reviewer) prompts only — the Layer 1 cartographer call
+ *  carries a manifest, never diff text, and would otherwise skew every count. */
+function packagePrompts(calls: { system: string; user: string }[]): string[] {
+  return calls.filter((c) => !c.system.includes("You are the cartographer")).map((c) => c.user);
+}
+
+/** The `## Diff` block of a captured package prompt — the only place it shows code. */
+function promptDiff(prompt: string | undefined): string {
+  const user = prompt ?? "";
+  return user.slice(user.indexOf("\n\n## Diff\n"));
+}
+
+/** The last posted comment body. */
+function lastBody(rec: Recorded): string {
+  return rec.updated.at(-1)?.body ?? rec.created.at(-1)?.body ?? "";
+}
+
+/** The state marker of the LAST comment this run posted. */
+function lastMarker(rec: Recorded): ReviewState | Record<string, never> {
+  return decodeMarker(extractMarker(lastBody(rec)) ?? "");
+}
+
+/** A repo whose feature branch adds `src/util.ts` (the add/subtract bug the
+ *  `findings` fixture flags) plus `count` distinct padding files. */
+function bigFeatureRepo(count: number): { dir: string; headSha: string } {
+  const dir = setupGitRepo();
+  git(dir, "checkout", "-b", "feature", "--quiet");
+  writeFile(
+    dir,
+    "src/util.ts",
+    "export function add(a: number, b: number): number {\n  return a - b;\n}\n",
+  );
+  for (let i = 0; i < count; i++) {
+    const n = String(i).padStart(3, "0");
+    writeFile(dir, `src/pad/f${n}.ts`, `export const pad${n} = ${i};\n`);
+  }
+  git(dir, "add", "-A");
+  git(dir, "commit", "-m", "feature", "--quiet");
+  return { dir, headSha: git(dir, "rev-parse", "HEAD").trim() };
+}
+
+describe("runReview — tree scope (AC-6)", () => {
+  it("round 1 covers every file; a 3-file push re-reviews only those, carrying the rest", async () => {
+    const { dir, headSha } = track(bigFeatureRepo(100));
+    const { octokit, rec } = fakeOctokit();
+
+    const round1 = await runReview({
+      inputs: baseInputs({ inlineComments: false }),
+      octokit,
+      context: prContext(headSha),
+      fetch: routingFetch([["src/util.ts", "findings"]]),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    expect(round1.verdict).toBe("changes");
+    expect(round1.findingsCount).toBe(1);
+    // AC-8: every one of the 101 changed paths is accounted for, exactly once.
+    expect(lastBody(rec)).toContain("reviewed: 101");
+    const state1 = lastMarker(rec);
+    expect("reviewed_tree" in state1 && state1.reviewed_tree).toBe(
+      git(dir, "rev-parse", "HEAD^{tree}").trim(),
+    );
+
+    // --- Round 2: a push touching exactly three padding files.
+    for (const n of ["001", "002", "003"]) {
+      writeFile(dir, `src/pad/f${n}.ts`, `export const pad${n} = 99;\n`);
+    }
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "touch three", "--quiet");
+    const head2 = git(dir, "rev-parse", "HEAD").trim();
+    const calls: { system: string; user: string }[] = [];
+
+    const round2 = await runReview({
+      inputs: baseInputs({ inlineComments: false }),
+      octokit,
+      context: prContext(head2),
+      fetch: recordingRoutingFetch([["src/util.ts", "findings"]], calls),
+      cwd: dir,
+      now: () => 1_700_000_100_000,
+    });
+
+    // Only the three pushed files reached a package reviewer.
+    const prompts = packagePrompts(calls);
+    expect(prompts.length).toBe(1);
+    const diff = promptDiff(prompts[0]);
+    for (const n of ["001", "002", "003"]) expect(diff).toContain(`src/pad/f${n}.ts`);
+    expect(diff).not.toContain("src/pad/f004.ts");
+    expect(diff).not.toContain("src/util.ts");
+    // The ledger says so too: 3 reviewed, the other 98 carried.
+    expect(lastBody(rec)).toContain("reviewed: 3");
+    expect(lastBody(rec)).toContain("carried: 98");
+    // The carried util.ts finding survives into the marker and keeps blocking —
+    // nothing was resolved and nothing was reported fixed.
+    expect(round2.verdict).toBe("changes");
+    expect(round2.findingsCount).toBe(1);
+    expect(rec.resolved).toEqual([]);
+    const state2 = lastMarker(rec);
+    const carriedPaths = "findings" in state2 ? state2.findings.map((f) => f.path) : [];
+    expect(carriedPaths).toContain("src/util.ts");
+  }, 60_000);
+
+  it("an identical tree re-reviews nothing at all", async () => {
+    const { dir, headSha } = track(bigFeatureRepo(3));
+    const { octokit, rec } = fakeOctokit();
+
+    await runReview({
+      inputs: baseInputs({ inlineComments: false }),
+      octokit,
+      context: prContext(headSha),
+      fetch: routingFetch([["src/util.ts", "findings"]]),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    // A rebase that preserves the tree: same content, new commit sha.
+    git(dir, "commit", "--allow-empty", "-m", "rebase", "--quiet");
+    const head2 = git(dir, "rev-parse", "HEAD").trim();
+    const calls: { system: string; user: string }[] = [];
+
+    const round2 = await runReview({
+      inputs: baseInputs({ inlineComments: false }),
+      octokit,
+      context: prContext(head2),
+      fetch: recordingRoutingFetch([["src/util.ts", "findings"]], calls),
+      cwd: dir,
+      now: () => 1_700_000_100_000,
+    });
+
+    // Zero files in scope → zero package reviewers and zero cartographer calls
+    // (there is nothing to map): the round costs no model calls at all.
+    expect(calls.length).toBe(0);
+    expect(lastBody(rec)).toContain("carried: 4");
+    // The prior finding still stands: a round that read nothing cannot approve it away.
+    expect(round2.verdict).toBe("changes");
+    expect(round2.findingsCount).toBe(1);
+    expect(rec.resolved).toEqual([]);
+  }, 30_000);
+});
+
+/** A repo that packs into two chunks under a small budget, with the FIRST chunk
+ *  (path-sorted) clean and the second carrying the `findings` fixture's file. */
+function twoChunkSpillRepo(): { dir: string; headSha: string } {
+  const dir = setupGitRepo();
+  git(dir, "checkout", "-b", "feature", "--quiet");
+  const pad = Array.from({ length: 40 }, (_, n) => `export const pad_${n} = ${n}`).join("\n");
+  writeFile(dir, "aaa/pad.ts", `${pad}\n`);
+  writeFile(
+    dir,
+    "src/util.ts",
+    "export function add(a: number, b: number): number {\n  return a - b;\n}\n",
+  );
+  git(dir, "add", "-A");
+  git(dir, "commit", "-m", "two chunks", "--quiet");
+  return { dir, headSha: git(dir, "rev-parse", "HEAD").trim() };
+}
+
+/** An `@toolu …` issue_comment context for PR #7. */
+function commentContext(headSha: string, body: string): GithubContext {
+  return {
+    eventName: "issue_comment",
+    payload: {
+      issue: { number: 7, pull_request: {} },
+      comment: { id: 42, body, user: { login: "human-dev", type: "User" } },
+    },
+    repo: { owner: "test-org", repo: "test-repo" },
+    sha: headSha,
+    serverUrl: "https://github.com",
+    runId: 12345,
+  };
+}
+
+describe("runReview — partial rounds, @toolu resume, ledger degrade (AC-10, AC-13)", () => {
+  it("a MAX_CHUNKS spill persists the exception list, appends no history, and degrades the verdict", async () => {
+    const { dir, headSha } = track(twoChunkSpillRepo());
+    const { octokit, rec } = fakeOctokit();
+
+    // Chunk 1 (aaa/pad.ts) is reviewed clean; src/util.ts spills past MAX_CHUNKS=1
+    // and is ledgered unreviewed — today's silent coverage loss, now loud.
+    const result = await runReview({
+      inputs: baseInputs({
+        maxChunkLines: 15,
+        maxChunks: 1,
+        inlineComments: false,
+        manageLabels: false,
+      }),
+      octokit,
+      context: prContext(headSha),
+      fetch: routingFetch([["src/util.ts", "findings"]]),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    // AC-13: a would-be approval over an unreviewed file is an error verdict,
+    // with the same FAIL_ON consequence as any other error.
+    expect(result.verdict).toBe("error");
+    expect(shouldBlock(result.verdict, parseFailOn("error"))).toBe(true);
+    expect(shouldBlock(result.verdict, parseFailOn("changes"))).toBe(false);
+    expect(lastBody(rec)).toContain("`src/util.ts`: unreviewed");
+
+    // AC-10: the exception list is persisted, no history entry is appended, and
+    // the tree is NOT advanced — the next round must not think this was complete.
+    const state = lastMarker(rec);
+    expect("unreviewed_paths" in state && state.unreviewed_paths).toEqual(["src/util.ts"]);
+    expect("history" in state && state.history.length).toBe(0);
+    expect("reviewed_tree" in state).toBe(false);
+  }, 30_000);
+
+  it("an already-exceeded MAX_WALL_MS records every package pending (not unreviewed), appends no history, and degrades the verdict", async () => {
+    const { dir, headSha } = track(twoChunkSpillRepo());
+    const { octokit, rec } = fakeOctokit();
+
+    // MAX_CHUNKS is unlimited here — the deadline alone stops the round. Under
+    // the pinned clock below (fixed far in the past vs. the real Date.now() the
+    // wall deadline is checked against — review/bisect.ts's deadlinePassed), any
+    // positive MAX_WALL_MS is already exceeded before the first package call.
+    const result = await runReview({
+      inputs: baseInputs({
+        maxChunkLines: 15,
+        maxChunks: 0,
+        maxWallMs: 1,
+        inlineComments: false,
+        manageLabels: false,
+      }),
+      octokit,
+      context: prContext(headSha),
+      fetch: routingFetch([["src/util.ts", "findings"]]),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    // AC-13: an approval cannot be honest over pending files either — same degrade
+    // as the unreviewed (MAX_CHUNKS-spill) case above.
+    expect(result.verdict).toBe("error");
+    expect(lastBody(rec)).toContain("`aaa/pad.ts`: pending");
+    expect(lastBody(rec)).toContain("`src/util.ts`: pending");
+
+    // AC-10: pending_paths (not unreviewed_paths) is what persists — the same
+    // exception-list machinery a resume run reads (pipeline/scope.ts).
+    const state = lastMarker(rec);
+    expect("pending_paths" in state && state.pending_paths).toEqual(["aaa/pad.ts", "src/util.ts"]);
+    expect("unreviewed_paths" in state).toBe(false);
+    expect("history" in state && state.history.length).toBe(0);
+    expect("reviewed_tree" in state).toBe(false);
+  }, 30_000);
+
+  it("`@toolu resume` reviews only the exception paths; its findings reach the comment and complete the round", async () => {
+    const { dir, headSha } = track(twoChunkSpillRepo());
+    const { octokit, rec } = fakeOctokit();
+    const inputs = baseInputs({
+      maxChunkLines: 15,
+      maxChunks: 1,
+      inlineComments: false,
+      manageLabels: false,
+    });
+
+    await runReview({
+      inputs,
+      octokit,
+      context: prContext(headSha),
+      fetch: routingFetch([["src/util.ts", "findings"]]),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    // The resume runs against FETCH_HEAD, as an issue_comment run does in prod.
+    git(dir, "update-ref", "FETCH_HEAD", "HEAD");
+    const calls: { system: string; user: string }[] = [];
+
+    const resumed = await runReview({
+      inputs,
+      octokit,
+      context: commentContext(headSha, "@toolu resume"),
+      fetch: recordingRoutingFetch([["src/util.ts", "findings"]], calls),
+      cwd: dir,
+      now: () => 1_700_000_100_000,
+      lookupPermission: async () => "write",
+    });
+
+    // Only the previously-unreviewed file was sent to a reviewer…
+    const prompts = packagePrompts(calls);
+    expect(prompts.length).toBe(1);
+    const diff = promptDiff(prompts[0]);
+    expect(diff).toContain("src/util.ts");
+    expect(diff).not.toContain("aaa/pad.ts");
+    // …its finding survived the incremental filter into the posted comment…
+    expect(resumed.verdict).toBe("changes");
+    expect(resumed.findingsCount).toBe(1);
+    expect(lastBody(rec)).toContain("Function add performs subtraction");
+    // …and the completing round appended exactly one history entry, clearing the
+    // exception list and recording the tree it finally covered.
+    const state = lastMarker(rec);
+    expect("history" in state && state.history.length).toBe(1);
+    expect("unreviewed_paths" in state).toBe(false);
+    expect("reviewed_tree" in state && state.reviewed_tree).toBe(
+      git(dir, "rev-parse", "HEAD^{tree}").trim(),
+    );
+  }, 30_000);
+
+  it("`@toolu resume` obeys the same permission floor as `@toolu review`", async () => {
+    const { dir, headSha } = track(twoChunkSpillRepo());
+    const { octokit, rec } = fakeOctokit();
+    git(dir, "update-ref", "FETCH_HEAD", "HEAD");
+
+    const result = await runReview({
+      inputs: baseInputs({ inlineComments: false, manageLabels: false }),
+      octokit,
+      context: commentContext(headSha, "@toolu resume"),
+      fetch: replayFetch("approved"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+      lookupPermission: async () => "read",
+    });
+
+    expect(result.verdict).toBe("skip");
+    expect(rec.created).toEqual([]);
+    expect(rec.updated).toEqual([]);
+  }, 30_000);
+
+  it("`@toolu resume` with nothing pending falls back to a full review", async () => {
+    const { dir, headSha } = track(featureRepoWithChange());
+    const { octokit, rec } = fakeOctokit();
+    git(dir, "update-ref", "FETCH_HEAD", "HEAD");
+    const calls: { system: string; user: string }[] = [];
+
+    const result = await runReview({
+      inputs: baseInputs({ inlineComments: false, manageLabels: false }),
+      octokit,
+      context: commentContext(headSha, "@toolu resume"),
+      fetch: recordingRoutingFetch([["src/util.ts", "findings"]], calls),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+      lookupPermission: async () => "write",
+    });
+
+    // No marker, so no exception paths: reviewing the whole PR is the answer that
+    // is never wrong (a no-op reply would leave the author with a stale sticky).
+    expect(result.verdict).toBe("changes");
+    expect(result.findingsCount).toBe(1);
+    expect(packagePrompts(calls).length).toBe(1);
+    expect(lastBody(rec)).toContain("reviewed: 1");
+  }, 30_000);
+});
+
+describe("runReview — the coverage ledger accounts for every path (AC-8)", () => {
+  it("counts changed, excluded (dropped + binary) paths exactly once each", async () => {
+    const dir = setupGitRepo();
+    track({ dir });
+    git(dir, "checkout", "-b", "feature", "--quiet");
+    writeFile(
+      dir,
+      "src/util.ts",
+      "export function add(a: number, b: number): number {\n  return a - b;\n}\n",
+    );
+    writeFile(dir, "src/other.ts", "export const other = 1;\n");
+    // Dropped by the noise classifier (lockfile), and a real binary blob.
+    writeFile(dir, "package-lock.json", '{\n  "lockfileVersion": 3\n}\n');
+    writeFile(dir, "assets/logo.bin", " binary payload ");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "mixed", "--quiet");
+    const headSha = git(dir, "rev-parse", "HEAD").trim();
+    const { octokit, rec } = fakeOctokit();
+
+    await runReview({
+      inputs: baseInputs({ inlineComments: false, manageLabels: false, verbosity: "full" }),
+      octokit,
+      context: prContext(headSha),
+      fetch: routingFetch([["src/util.ts", "findings"]]),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    const body = lastBody(rec);
+    // 2 reviewed + 2 excluded = the 4 changed paths, each named exactly once.
+    expect(body).toContain("reviewed: 2 · excluded: 2");
+    expect(body).toContain("`package-lock.json`: excluded (lockfile)");
+    expect(body).toContain("`assets/logo.bin`: excluded (binary)");
+  }, 30_000);
 });

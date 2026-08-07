@@ -35,20 +35,20 @@ async function resultFrom(fixture: string): Promise<ProviderResult> {
 
 describe("mergeResults", () => {
   it("returns a changes verdict when any chunk requests changes", async () => {
-    const merged = mergeResults([await resultFrom("approved"), await resultFrom("findings")]);
+    const merged = mergeResults([[await resultFrom("approved")], [await resultFrom("findings")]]);
     expect(merged.verdict).toBe("changes");
     expect(merged.error).toBeUndefined();
   });
 
   it("returns approved only when every non-error chunk approves", async () => {
-    const merged = mergeResults([await resultFrom("approved"), await resultFrom("approved")]);
+    const merged = mergeResults([[await resultFrom("approved")], [await resultFrom("approved")]]);
     expect(merged.verdict).toBe("approved");
   });
 
   it("concatenates findings in input (chunk) order", async () => {
     const findings = await resultFrom("findings"); // 1 finding
     const approved = await resultFrom("approved"); // 0 findings
-    const merged = mergeResults([findings, approved, findings]);
+    const merged = mergeResults([[findings], [approved], [findings]]);
     expect(merged.findings.length).toBe(findings.findings.length * 2);
     expect(merged.findings[0]).toEqual(findings.findings[0]);
   });
@@ -56,7 +56,7 @@ describe("mergeResults", () => {
   it("unions and caps top_must_fix across chunks", async () => {
     const a = await resultFrom("approved"); // top_must_fix: 1 entry
     const b = await resultFrom("findings"); // top_must_fix: 1 different entry
-    const merged = mergeResults([a, b, a]); // duplicate `a` must not double-count
+    const merged = mergeResults([[a], [b], [a]]); // duplicate `a` must not double-count
     const expected = new Set([...(a.top_must_fix ?? []), ...(b.top_must_fix ?? [])]);
     expect(new Set(merged.top_must_fix)).toEqual(expected);
     expect((merged.top_must_fix ?? []).length).toBe(expected.size);
@@ -67,7 +67,7 @@ describe("mergeResults", () => {
     const bad = await resultFrom("empty-content"); // verdict:"error"
     expect(bad.verdict).toBe("error");
 
-    const merged = mergeResults([good, bad]);
+    const merged = mergeResults([[good], [bad]]);
     // Surviving verdict, not abstained.
     expect(merged.verdict).toBe("changes");
     expect(merged.findings).toEqual(good.findings);
@@ -78,7 +78,7 @@ describe("mergeResults", () => {
     const good = await resultFrom("approved");
     const bad = await resultFrom("empty-content"); // verdict:"error"
 
-    const merged = mergeResults([good, bad]);
+    const merged = mergeResults([[good], [bad]]);
     // The surviving chunks approved, but a chunk's files went unreviewed — the merged
     // verdict must be inconclusive (error → "review incomplete", request-changes label).
     expect(merged.verdict).toBe("error");
@@ -88,11 +88,47 @@ describe("mergeResults", () => {
 
   it("stays error only when every chunk errored", async () => {
     const merged = mergeResults([
-      await resultFrom("empty-content"),
-      await resultFrom("empty-content"),
+      [await resultFrom("empty-content")],
+      [await resultFrom("empty-content")],
     ]);
     expect(merged.verdict).toBe("error");
     expect(merged.error).toContain("2/2 chunks failed");
+  });
+
+  // Leaf-results contract (spec §Layer 2): a chunk that bisected on a schema failure
+  // hands its LEAF results to the merge, never the failed parent.
+  it("does not count a chunk fully covered by its bisection leaves as failed", async () => {
+    const whole = await resultFrom("approved");
+    const leafA = await resultFrom("approved");
+    const leafB = await resultFrom("approved");
+
+    // Chunk 2 needed two calls to cover it — every file was still reviewed.
+    const merged = mergeResults([[whole], [leafA, leafB]]);
+
+    expect(merged.verdict).toBe("approved");
+    expect(merged.error).toBeUndefined();
+    expect(merged.partial).toBeUndefined();
+  });
+
+  it("counts a chunk with a failed leaf as ONE failed chunk (its leaf's files went unreviewed)", async () => {
+    const whole = await resultFrom("approved");
+    const leafOk = await resultFrom("findings");
+    const leafBad = await resultFrom("empty-content"); // verdict:"error"
+
+    const merged = mergeResults([[whole], [leafOk, leafBad]]);
+
+    // The good leaf's findings survive; the chunk still counts as failed once (not
+    // twice, and not zero times) — 1 of the 2 chunks, not 1 of the 3 results.
+    expect(merged.findings).toEqual(leafOk.findings);
+    expect(merged.verdict).toBe("changes");
+    expect(merged.partial).toBe(true);
+    expect(merged.error).toContain("1/2 chunks failed");
+  });
+
+  it("skips chunks nothing covered (wall-clock pending) instead of counting them", async () => {
+    const merged = mergeResults([[await resultFrom("approved")], []]);
+    expect(merged.verdict).toBe("approved");
+    expect(merged.error).toBeUndefined();
   });
 
   it("returns a defensive error result for an empty input", () => {
@@ -110,7 +146,7 @@ describe("mergeResults", () => {
     expect((chunk.review_plan ?? "").length).toBeLessThanOrEqual(280);
     expect((chunk.other_checks ?? "").length).toBeLessThanOrEqual(600);
 
-    const merged = mergeResults([chunk, chunk, chunk]);
+    const merged = mergeResults([[chunk], [chunk], [chunk]]);
 
     // review_plan clipped to 280 chars + the marker; the first 280 are verbatim.
     expect(merged.review_plan).toHaveLength(281);
@@ -125,7 +161,7 @@ describe("mergeResults", () => {
 
   it("leaves within-budget merged narrative fields unclipped (no spurious marker)", async () => {
     // A single chunk under both caps must pass through untouched — no … appended.
-    const merged = mergeResults([await resultFrom("verbose")]);
+    const merged = mergeResults([[await resultFrom("verbose")]]);
     expect(merged.review_plan?.endsWith("…")).toBe(false);
     expect(merged.other_checks?.endsWith("…")).toBe(false);
   });

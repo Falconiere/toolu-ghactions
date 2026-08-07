@@ -3,27 +3,38 @@
 //
 // Advisory + non-fatal: the review event is always COMMENT (never hard-blocks
 // merge — the summary comment + the agent-merge label remain the authority), and
-// ANY failure (no PR context, unset token, an unanchorable-line 422, etc.) is
+// ANY failure (no PR context, unset token, a wholesale API failure, etc.) is
 // caught and reported, never thrown. Only findings anchored by a real `line`
 // are posted; a multi-line span uses start_line..line.
 //
 // ANCHOR VALIDATION: GitHub resolves a comment's `line` against ITS OWN diff of
 // the PR, which can differ from the diff we reviewed (rename detection, merge
-// bases). One comment whose line GitHub cannot resolve 422s the WHOLE review —
-// every other comment is lost. So before posting we fetch the PR's file patches
-// (pulls.listFiles) and validate each anchor against GitHub's actual RIGHT-side
-// lines: an unanchorable finding DEGRADES to a file-level comment
-// (subject_type "file") instead of sinking the batch, and a finding on a path
-// GitHub doesn't show at all is dropped (the summary comment still carries it).
-// A residual 422 retries ONCE with every comment converted to file-level.
-import { errorMessage } from "@/errors.js";
+// bases). Before posting we fetch the PR's file patches (pulls.listFiles) and
+// validate each anchor against GitHub's actual RIGHT-side lines: a finding whose
+// file has no patch, or whose line/span cannot be mapped onto GitHub's diff at
+// all, is UNANCHORED. There is no file-level fallback — GitHub's Reviews
+// GraphQL mutation rejects `subjectType`/a null `position` outright (see the
+// real PR-72 422 response captured in `__tests__/fixtures/pr72-createreview-
+// 422.txt`) — so an unanchored finding is simply never posted inline; the
+// caller renders `InlineReviewResult.unanchored` into the sticky summary
+// comment instead.
+//
+// BATCHING + 422 BISECTION (src/github/reviewBatch.ts): comments post in
+// batches of at most MAX_COMMENTS_PER_REVIEW so one review's request body
+// stays bounded. If a batch's `createReview` call still 422s, the batch is
+// bisected and each half retried; a single comment that still 422s in
+// isolation is reported in `dropped` instead of sinking its siblings.
 import { fingerprint } from "@/state.js";
 import { appendFpMarker } from "@/review/fpmarker.js";
 import type { Finding } from "@/llm/schema.js";
+import { MAX_COMMENTS_PER_REVIEW, postComments } from "@/github/reviewBatch.js";
+import type { PendingComment } from "@/github/reviewBatch.js";
 
-/** One inline review comment in the Reviews-API request body: either line-anchored
- *  (`line` set, optionally a `start_line..line` span) or file-level
- *  (`subject_type: "file"`, no line fields). */
+export { MAX_COMMENTS_PER_REVIEW };
+
+/** One inline review comment in the Reviews-API request body: always
+ *  line-anchored (`line`, optionally a `start_line..line` span). There is no
+ *  file-level shape — see the header comment. */
 export interface ReviewComment {
   path: string;
   body: string;
@@ -31,7 +42,6 @@ export interface ReviewComment {
   line?: number;
   start_line?: number;
   start_side?: "RIGHT";
-  subject_type?: "file";
 }
 
 /** One file of the PR diff as GitHub reports it (`pulls.listFiles`). `patch` is
@@ -66,6 +76,16 @@ export interface ReviewClient {
   };
 }
 
+/**
+ * A finding that may already carry the state fingerprint the pipeline stamped on it
+ * (`pipeline/reviewCall.ts`'s `StampedFinding`). {@link buildComment} PREFERS that
+ * stamped value over recomputing one: the body is DECORATED before posting (a
+ * cluster exemplar's enumerates its members — `pipeline/reduce.ts`), and a fp
+ * recomputed from the decorated text would rotate the thread's identity, so the
+ * next run could neither dedup, reply in place, nor resolve it.
+ */
+export type PostableFinding = Finding & { fp?: string };
+
 /** Repo + PR coordinates and the head commit the review anchors to. */
 export interface ReviewTarget {
   owner: string;
@@ -76,15 +96,20 @@ export interface ReviewTarget {
 
 /** Outcome of {@link postInlineReview} — non-fatal, so failures are reported, not thrown. */
 export interface InlineReviewResult {
-  /** Whether a review was posted. */
+  /** Whether at least one comment was posted. */
   posted: boolean;
-  /** Number of inline comments posted (0 when skipped). */
+  /** Number of inline comments actually posted (0 when skipped/failed). */
   count: number;
-  /** How many findings degraded to file-level comments (unanchorable in GitHub's diff). */
-  degraded?: number;
-  /** The created review's html_url when posted. */
+  /** Number of `createReview` batches issued (MAX_COMMENTS_PER_REVIEW each), 0 when skipped. */
+  batches: number;
+  /** Findings that could not be anchored to GitHub's own diff — never posted
+   *  inline; the caller renders these into the sticky summary comment. */
+  unanchored: Finding[];
+  /** Findings whose comment still 422d after batch bisection isolated it alone. */
+  dropped: Finding[];
+  /** The first created review's html_url when at least one batch posted. */
   url?: string;
-  /** Why nothing was posted (skip reason or caught error message). */
+  /** Why nothing was posted at all (skip reason or a wholesale caught error). */
   reason?: string;
 }
 
@@ -94,7 +119,7 @@ export interface InlineReviewResult {
  * finding carries one. A span wider than one line uses start_line..line; a
  * single line just sets `line`. Mirrors the jq object built in post-review.sh.
  */
-function buildComment(f: Finding): ReviewComment {
+function buildComment(f: PostableFinding): ReviewComment {
   const severity = f.severity || "note";
   const category = f.category ? ` _(${f.category})_` : "";
   const suggestion =
@@ -103,9 +128,11 @@ function buildComment(f: Finding): ReviewComment {
       : "";
   // Embed the finding fingerprint as a hidden marker so a later run recognises THIS
   // thread as its own (to dedup, reply in place, or resolve — see review/reconcile.ts).
+  // The STAMPED fp wins: it was computed from the raw finding, before any body
+  // decoration, so decorating cannot rotate the thread identity (see PostableFinding).
   const body = appendFpMarker(
     `**${severity}**${category}: ${f.text ?? ""}${suggestion}`,
-    fingerprint(f),
+    f.fp ?? fingerprint(f),
   );
 
   const end = f.end_line ?? f.line;
@@ -122,22 +149,11 @@ function buildComment(f: Finding): ReviewComment {
   return { path: f.path, body, line: f.line, side: "RIGHT" };
 }
 
-/** Strip a comment's line anchors, keeping it as a file-level comment. The
- *  ```suggestion block (committable only against concrete lines) is removed too —
- *  GitHub rejects a suggestion without a line anchor. */
-function toFileLevel(c: ReviewComment): ReviewComment {
-  return {
-    path: c.path,
-    body: c.body.replace(/```suggestion[\s\S]*?```\n?/g, "").trim(),
-    subject_type: "file",
-  };
-}
-
 /**
  * GitHub's OWN anchorable RIGHT-side lines per path: every new-file line each
  * patch displays (context + additions), parsed from `pulls.listFiles`. Returns
  * null when the client has no `listFiles` or the fetch fails — the caller then
- * posts unvalidated (best-effort), relying on the file-level retry.
+ * posts unvalidated (best-effort).
  */
 async function fetchAnchorableLines(
   octokit: ReviewClient,
@@ -190,108 +206,95 @@ function patchRightLines(patch: string | undefined): Set<number> {
 
 /**
  * Validate one comment's anchors against GitHub's diff lines for its path.
- * Span → single-line → file-level, degrading only as far as needed; null means
- * the path isn't in GitHub's diff at all (drop the comment entirely).
+ * Span → single-line, collapsing only as far as needed. Returns null when the
+ * comment cannot be anchored at all — the path isn't in GitHub's diff, or
+ * neither end of the span maps onto it — so the caller reports it unanchored
+ * instead of posting (there is no file-level fallback, see the header comment).
  */
 function validateAnchor(
   c: ReviewComment,
   anchorable: Map<string, Set<number>>,
-): { comment: ReviewComment; degraded: boolean } | null {
+): ReviewComment | null {
   const lines = anchorable.get(c.path);
   if (lines === undefined) return null;
   if (c.line !== undefined && lines.has(c.line)) {
     // A span additionally needs its start anchored; collapse to the end line if not.
     if (c.start_line !== undefined && !lines.has(c.start_line)) {
       const { start_line: _s, start_side: _ss, ...single } = c;
-      return { comment: single, degraded: false };
+      return single;
     }
-    return { comment: c, degraded: false };
+    return c;
   }
   // The end anchor is off GitHub's diff; the start might still be on it.
   if (c.start_line !== undefined && lines.has(c.start_line)) {
     const { start_line: _s, start_side: _ss, ...rest } = c;
-    return { comment: { ...rest, line: c.start_line }, degraded: false };
+    return { ...rest, line: c.start_line };
   }
-  return { comment: toFileLevel(c), degraded: true };
+  return null;
 }
 
 /**
  * Post inline review comments for the in-diff findings, best-effort.
  *
- * Only findings with a real `line` are posted (they are expected to be
- * already anchored to the diff by the validate step). Anchors are then
- * re-validated against GitHub's OWN diff (see the header comment): unanchorable
- * findings degrade to file-level comments, findings on paths GitHub doesn't
- * show are dropped, and a residual 422 retries once with everything file-level
- * — one bad anchor never sinks the batch. With no postable comments, nothing
- * is posted. ANY error is caught and returned in `reason`; this never throws —
- * the summary comment already conveys the verdict.
+ * Only findings with a real `line` are candidates; the rest are unanchored by
+ * construction. Anchors are then re-validated against GitHub's OWN diff (see
+ * the header comment): unanchorable findings never post — they come back in
+ * `unanchored` for the caller to render into the sticky summary comment.
+ * Posting itself batches and 422-bisects (`src/github/reviewBatch.ts`), so one
+ * poison comment can no longer sink the whole run. ANY error is caught and
+ * returned in `reason`; this never throws.
  *
  * @param octokit - the injected REST client.
- * @param findings - validated findings (those with a `line` become comments).
+ * @param findings - candidate findings (those with a `line` become comments).
  * @param target - repo, PR number, and the head sha to anchor the review to.
  */
 export async function postInlineReview(
   octokit: ReviewClient,
-  findings: Finding[],
+  findings: PostableFinding[],
   target: ReviewTarget,
 ): Promise<InlineReviewResult> {
-  const built = findings.filter((f) => f.line != null).map(buildComment);
-  if (built.length === 0) {
-    return { posted: false, count: 0, reason: "no anchored findings" };
+  const anchoredByLine = findings.filter((f) => f.line != null);
+  const withoutLine = findings.filter((f) => f.line == null);
+  if (anchoredByLine.length === 0) {
+    return {
+      posted: false,
+      count: 0,
+      batches: 0,
+      unanchored: findings,
+      dropped: [],
+      reason: "no anchored findings",
+    };
   }
+  const built: PendingComment[] = anchoredByLine.map((f) => ({
+    finding: f,
+    comment: buildComment(f),
+  }));
 
   // Validate anchors against GitHub's diff when we can fetch it.
   const anchorable = await fetchAnchorableLines(octokit, target);
-  let comments = built;
-  let degraded = 0;
+  let postable = built;
+  const unanchored: Finding[] = [...withoutLine];
   if (anchorable !== null) {
-    comments = [];
-    for (const c of built) {
-      const v = validateAnchor(c, anchorable);
-      if (v === null) continue; // path not in GitHub's diff — summary still has it.
-      if (v.degraded) degraded++;
-      comments.push(v.comment);
-    }
-    if (comments.length === 0) {
-      return { posted: false, count: 0, reason: "no anchored findings" };
-    }
-  }
-
-  const post = async (batch: ReviewComment[]): Promise<InlineReviewResult> => {
-    const summary = `🤖 AI Code Review — ${batch.length} inline comment(s). See the summary comment for the full verdict.`;
-    const { data } = await octokit.rest.pulls.createReview({
-      owner: target.owner,
-      repo: target.repo,
-      pull_number: target.prNumber,
-      commit_id: target.headSha,
-      event: "COMMENT",
-      body: summary,
-      comments: batch,
-    });
-    return { posted: true, count: batch.length, degraded, url: data.html_url };
-  };
-
-  try {
-    return await post(comments);
-  } catch (err) {
-    // Last-resort degrade: some anchor GitHub still couldn't resolve. Convert every
-    // comment to file-level (always resolvable for an in-diff path) and retry once,
-    // so the batch posts instead of vanishing.
-    const anyAnchored = comments.some((c) => c.line !== undefined);
-    if (anyAnchored) {
-      const fileLevel = comments.map(toFileLevel);
-      degraded = fileLevel.length;
-      try {
-        return await post(fileLevel);
-      } catch (retryErr) {
-        return {
-          posted: false,
-          count: 0,
-          reason: errorMessage(retryErr, "reviews API request failed"),
-        };
+    postable = [];
+    for (const b of built) {
+      const comment = validateAnchor(b.comment, anchorable);
+      if (comment === null) {
+        unanchored.push(b.finding);
+        continue;
       }
+      postable.push({ finding: b.finding, comment });
     }
-    return { posted: false, count: 0, reason: errorMessage(err, "reviews API request failed") };
+    if (postable.length === 0) {
+      return {
+        posted: false,
+        count: 0,
+        batches: 0,
+        unanchored,
+        dropped: [],
+        reason: "no anchored findings",
+      };
+    }
   }
+
+  return postComments(octokit, postable, target, unanchored);
 }

@@ -78,6 +78,22 @@ export interface ReviewOptions {
   timeoutMs?: number;
   /** Outer attempts against a hang/timeout (default {@link MAX_ATTEMPTS}); each gets its own timeoutMs. */
   maxAttempts?: number;
+  /**
+   * RAW-JSON mode: do NOT enforce the {@link Verdict} schema on this call.
+   *
+   * The one non-review structured call in the pipeline is Layer 1's cartographer
+   * (`src/review/cartographer.ts`), whose brief does not fit the Verdict shape at
+   * all — in particular `other_checks` is `.max(600)`, while a real brief
+   * serializes well past that, so routing `mapPr` through the enforced schema
+   * would silently truncate it (spec §Layer 1). With `rawJson`, generateObject
+   * runs with `output: "no-schema"` (the model is still asked for JSON, but no
+   * schema is injected or validated) and the parsed object is handed back
+   * SERIALIZED on {@link ProviderResult.other_checks} — the channel
+   * `extractBriefPayload` already reads — with the neutral, non-abstaining
+   * `verdict: "approved"` and no findings. Recovery is skipped on this path:
+   * `recover()` reconstructs a Verdict-shaped result, which is meaningless here.
+   */
+  rawJson?: boolean;
 }
 
 /**
@@ -97,6 +113,18 @@ export interface ProviderResult {
   /** True when the result was salvaged from a length-truncated response: the
    *  findings completed before the cut were recovered, later ones may be missing. */
   partial?: boolean;
+  /**
+   * Present ONLY when `verdict` is "error": why the call failed, so a caller (Layer 2's
+   * bisection, upcoming) can tell a bisectable failure from one that would only multiply
+   * load if retried. `"schema"` — {@link NoObjectGeneratedError}: empty content, a
+   * length-truncation cut too early to recover, or output that never matched the Verdict
+   * schema. `"timeout"` — every attempt was aborted by our own per-attempt deadline
+   * (see {@link REQUEST_TIMEOUT_MS}); a transient stall, not a schema problem. `"transport"`
+   * — an HTTP or network-level failure reaching the provider at all (5xx after the SDK's
+   * own retries, DNS/connection errors) — surfaces as {@link APICallError} or a bare fetch
+   * failure, never {@link NoObjectGeneratedError}.
+   */
+  failure?: "schema" | "transport" | "timeout";
 }
 
 /**
@@ -142,14 +170,13 @@ export async function reviewWithModel(
     timeout.unref?.();
 
     try {
-      const { object } = await generateObject({
+      const call = {
         model,
-        schema: Verdict,
         // JSON mode (not the SDK default "tool" mode): the bash reads the verdict
         // from .choices[0].message.content via response_format, NOT from a tool
         // call. "json" sends response_format and parses message.content, matching
         // the deployed wire contract and the recorded fixtures.
-        mode: "json",
+        mode: "json" as const,
         system: envelope.system,
         prompt: envelope.user,
         temperature: 0,
@@ -157,7 +184,17 @@ export async function reviewWithModel(
         maxRetries: opts.maxRetries ?? 2,
         abortSignal: controller.signal,
         providerOptions,
-      });
+      };
+
+      // Raw-JSON mode (the cartographer — see ReviewOptions.rawJson): no schema is
+      // injected into the prompt and none is validated; the model's JSON object
+      // rides back serialized on `other_checks`.
+      if (opts.rawJson === true) {
+        const { object } = await generateObject({ ...call, output: "no-schema" });
+        return { verdict: "approved", findings: [], other_checks: JSON.stringify(object) };
+      }
+
+      const { object } = await generateObject({ ...call, schema: Verdict });
 
       return {
         verdict: object.verdict,
@@ -203,10 +240,14 @@ export async function reviewWithModel(
       // Recover what the response DID contain rather than discarding a whole pass:
       // the findings completed before a truncation cut, or a complete response whose
       // values deviate from the strict schema. Returns null when nothing is usable.
-      const recovered = recover(err);
+      // Skipped in raw-JSON mode: recover() rebuilds a VERDICT-shaped result, which
+      // would hand the cartographer a salvaged review instead of its brief.
+      const recovered = opts.rawJson === true ? null : recover(err);
       if (recovered !== null) return recovered;
-      // Empty content, or nothing recoverable: abstain.
-      return abstain(err);
+      // Empty content, or nothing recoverable: abstain. `controller.signal.aborted` is
+      // the source of truth for "our own per-attempt deadline fired" — read here, in the
+      // same scope as the controller, rather than re-derived from the error's shape.
+      return abstain(err, controller.signal.aborted);
     } finally {
       clearTimeout(timeout);
     }
@@ -214,7 +255,22 @@ export async function reviewWithModel(
 
   // Unreachable: every loop path either returns or continues, and the final attempt
   // always returns. Present so TypeScript sees a total function.
-  return abstain(new Error("OpenRouter request failed"));
+  return abstain(new Error("OpenRouter request failed"), false);
+}
+
+/**
+ * Classify a thrown error into a bisectability cause. `aborted` — read from the live
+ * AbortController at the call site — takes priority: an aborted request can ALSO throw
+ * something that looks schema-shaped downstream, but the cause was our own deadline, not
+ * the model's output. Otherwise a {@link NoObjectGeneratedError} is a schema failure
+ * (generateObject only throws that class for empty/truncated/nonconforming output); every
+ * other error reaching here — {@link APICallError} for HTTP 5xx after the SDK's own
+ * retries, or a bare fetch/network failure — is a transport failure.
+ */
+function classifyFailure(err: unknown, aborted: boolean): "schema" | "transport" | "timeout" {
+  if (aborted) return "timeout";
+  if (NoObjectGeneratedError.isInstance(err)) return "schema";
+  return "transport";
 }
 
 /**
@@ -222,11 +278,12 @@ export async function reviewWithModel(
  * off a {@link NoObjectGeneratedError} when present (that is the error generateObject
  * throws for empty content — the reasoning-budget bug surfaces here as "length").
  */
-function abstain(err: unknown): ProviderResult {
+function abstain(err: unknown, aborted: boolean): ProviderResult {
   const result: ProviderResult = {
     verdict: "error",
     findings: [],
     error: errorMessage(err, "OpenRouter request failed"),
+    failure: classifyFailure(err, aborted),
   };
   if (NoObjectGeneratedError.isInstance(err) && err.finishReason !== undefined) {
     result.finishReason = err.finishReason;

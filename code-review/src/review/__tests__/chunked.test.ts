@@ -2,6 +2,9 @@ import { describe, it, expect, afterEach } from "vitest";
 import { fetchDiff } from "@/git/diff.js";
 import type { DiffData } from "@/git/diff.js";
 import { reviewChunked } from "@/review/chunked.js";
+import { splitDiffByFile } from "@/git/chunk.js";
+import type { Brief } from "@/review/cartographer.js";
+import type { CoverageEntry } from "@/review/ledger.js";
 import type { ProviderResult } from "@/llm/reviewWithModel.js";
 import type { MechanicalFinding } from "@/mechanical/sarif.js";
 import type { Envelope } from "@/prompt.js";
@@ -59,6 +62,8 @@ describe("reviewChunked", () => {
       maxChunkLines: 1500,
       maxChunks: 20,
       mechanical: [],
+      brief: null,
+      onCoverage: () => {},
       buildEnvelope: () => STUB_ENVELOPE,
       review: async () => {
         calls++;
@@ -77,6 +82,8 @@ describe("reviewChunked", () => {
       maxChunkLines: 0,
       maxChunks: 20,
       mechanical: [],
+      brief: null,
+      onCoverage: () => {},
       buildEnvelope: () => STUB_ENVELOPE,
       review: async () => {
         calls++;
@@ -97,6 +104,8 @@ describe("reviewChunked", () => {
       maxChunkLines: 20,
       maxChunks: 20,
       mechanical: [],
+      brief: null,
+      onCoverage: () => {},
       buildEnvelope: () => STUB_ENVELOPE,
       review: async () => {
         calls++;
@@ -143,6 +152,8 @@ describe("reviewChunked", () => {
       maxChunkLines: 20,
       maxChunks: 20,
       mechanical,
+      brief: null,
+      onCoverage: () => {},
       buildEnvelope: recordingEnvelope(calls),
       review: async () => APPROVED,
     });
@@ -176,6 +187,8 @@ describe("reviewChunked", () => {
       maxChunkLines: 40, // each file ~35 lines: ungrouped packing would split the pair.
       maxChunks: 20,
       mechanical: [],
+      brief: null,
+      onCoverage: () => {},
       buildEnvelope: recordingEnvelope(calls),
       review: async () => APPROVED,
     });
@@ -202,6 +215,8 @@ describe("reviewChunked", () => {
       maxChunkLines: 10, // far below the file's diff size → oversized chunk rides alone.
       maxChunks: 20,
       mechanical: [],
+      brief: null,
+      onCoverage: () => {},
       buildEnvelope: (subDiff) => {
         seen.push(subDiff);
         return STUB_ENVELOPE;
@@ -228,6 +243,8 @@ describe("reviewChunked", () => {
       maxChunkLines: 10, // both chunks oversized → both try to attach context.
       maxChunks: 20,
       mechanical: [],
+      brief: null,
+      onCoverage: () => {},
       buildEnvelope: (subDiff) => {
         seen.push(subDiff);
         return STUB_ENVELOPE;
@@ -253,6 +270,8 @@ describe("reviewChunked", () => {
       maxChunkLines: 20,
       maxChunks: 20,
       mechanical: [],
+      brief: null,
+      onCoverage: () => {},
       buildEnvelope: (subDiff) => ({ ...STUB_ENVELOPE, user: subDiff.changed_files.join(",") }),
       review: async (env) => {
         if (!env.user.includes("omega")) return APPROVED;
@@ -279,6 +298,8 @@ describe("reviewChunked", () => {
       maxChunkLines: 20,
       maxChunks: 20,
       mechanical: [],
+      brief: null,
+      onCoverage: () => {},
       buildEnvelope: (subDiff) => ({ ...STUB_ENVELOPE, user: subDiff.changed_files.join(",") }),
       review: async (env) => {
         if (!env.user.includes("omega")) return APPROVED;
@@ -305,10 +326,347 @@ describe("reviewChunked", () => {
       maxChunkLines: 20,
       maxChunks: 2,
       mechanical: [],
+      brief: null,
+      onCoverage: () => {},
       buildEnvelope: () => STUB_ENVELOPE,
       review: async () => APPROVED,
     });
     expect(result.other_checks).toContain("not reviewed");
     expect(result.other_checks).toContain("c/big.ts");
+  });
+});
+
+// ── Layer 2 (AC-3): bounded schema-only bisection, per-path coverage, wall clock,
+// prompt-cache warm-up. The scripted review() keys on the envelope's file list, which
+// buildEnvelope carries verbatim — so a call's identity IS the set of files it reviewed.
+
+const SCHEMA_FAIL: ProviderResult = {
+  verdict: "error",
+  findings: [],
+  error: "response did not match the schema",
+  failure: "schema",
+};
+const TIMEOUT_FAIL: ProviderResult = {
+  verdict: "error",
+  findings: [],
+  error: "the provider timed out",
+  failure: "timeout",
+};
+
+const PKG_2 = [
+  "p1/a.ts",
+  "p1/b.ts",
+  "p1/c.ts",
+  "p1/d.ts",
+  "p2/a.ts",
+  "p2/b.ts",
+  "p2/c.ts",
+  "p2/d.ts",
+];
+const PKG_3 = [...PKG_2, "p3/a.ts", "p3/b.ts", "p3/c.ts", "p3/d.ts"];
+
+/** Equal-size files (identical path/content lengths ⇒ identical segment line counts)
+ *  plus the budget that packs exactly `perPackage` of them per package. */
+function packedDiff(
+  paths: string[],
+  perPackage: number,
+): { diff: DiffData; maxChunkLines: number } {
+  const diff = diffWithFiles(paths.map((path) => ({ path, lines: 10 })));
+  const perFile = Math.max(...splitDiffByFile(diff.diff).map((s) => s.lines));
+  return { diff, maxChunkLines: perFile * perPackage };
+}
+
+/** An envelope whose `user` is the chunk's file list — the scripted review's input. */
+function pathsEnvelope(subDiff: DiffData): Envelope {
+  return { ...STUB_ENVELOPE, user: subDiff.changed_files.join(",") };
+}
+
+/** A "changes" result carrying one finding, so a leaf's findings are traceable. */
+function findingOn(path: string): ProviderResult {
+  return {
+    verdict: "changes",
+    findings: [{ path, line: 1, severity: "low", text: `nit in ${path}` }],
+  };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+describe("reviewChunked bisection and coverage", () => {
+  it("bisects a schema-failing package to the poison file: only it is unreviewed", async () => {
+    const { diff, maxChunkLines } = packedDiff(PKG_2, 4);
+    const poison = "p2/c.ts";
+    const seen: string[][] = [];
+    const coverage = new Map<string, CoverageEntry>();
+
+    const result = await reviewChunked({
+      diff,
+      maxChunkLines,
+      maxChunks: 0,
+      mechanical: [],
+      brief: null,
+      buildEnvelope: pathsEnvelope,
+      review: async (env) => {
+        const paths = env.user.split(",");
+        seen.push(paths);
+        return paths.includes(poison) ? SCHEMA_FAIL : findingOn(paths[0] ?? "");
+      },
+      onCoverage: (path, entry) => coverage.set(path, entry),
+    });
+
+    // Packing pinned: two packages of four (the call budget below assumes it).
+    expect(seen[0]).toHaveLength(4);
+    // The poison package cost 1 (whole) + 1 (its failing half) + 1 (its failing
+    // quarter) = 3 calls — the BISECT_MAX_DEPTH=2 ceiling is 1 + 2 + 4 = 7.
+    const poisonCalls = seen.filter((paths) => paths.includes(poison));
+    expect(poisonCalls.length).toBe(3);
+    expect(poisonCalls.length).toBeLessThanOrEqual(7);
+    // Total calls for that package (halves + quarters incl. the clean ones) ≤ 7.
+    const packageCalls = seen.filter((paths) => paths.some((p) => p.startsWith("p2/")));
+    expect(packageCalls.length).toBeLessThanOrEqual(7);
+    // It was bisected all the way down to a leaf holding the poison file ALONE.
+    expect(seen).toContainEqual([poison]);
+
+    // Every other path is reviewed; only the poison file is unreviewed.
+    expect(coverage.get(poison)).toEqual({ status: "unreviewed" });
+    for (const path of diff.changed_files.filter((p) => p !== poison)) {
+      expect(coverage.get(path)).toEqual({ status: "reviewed" });
+    }
+
+    // The surviving leaves' findings reach the merged result — bisection salvages
+    // the package instead of writing off all four files.
+    expect(result.findings.map((f) => f.path)).toContain("p2/d.ts");
+    // And exactly ONE of the two packages counts as failed (the leaf's, not the parent's).
+    expect(result.error).toContain("1/2 chunks failed");
+  });
+
+  it("spends at most 7 calls on a package where EVERY leaf schema-fails", async () => {
+    // The worst case BISECT_MAX_DEPTH=2 allows: nothing in either package is
+    // recoverable, so both bisect to their depth-2 leaves and every leaf fails.
+    const { diff, maxChunkLines } = packedDiff(PKG_2, 4);
+    const seen: string[][] = [];
+    const coverage = new Map<string, CoverageEntry>();
+
+    const result = await reviewChunked({
+      diff,
+      maxChunkLines,
+      maxChunks: 0,
+      mechanical: [],
+      brief: null,
+      buildEnvelope: pathsEnvelope,
+      review: async (env) => {
+        seen.push(env.user.split(","));
+        return SCHEMA_FAIL;
+      },
+      onCoverage: (path, entry) => coverage.set(path, entry),
+    });
+
+    // Per package: 1 (whole) + 2 (halves) + 4 (quarters) = 7, depth-first. The
+    // quarters are leaves (depth limit) and get NO extra retry — that is exactly
+    // what holds the ceiling at 7 rather than 11.
+    const p1 = seen.filter((paths) => paths.every((p) => p.startsWith("p1/")));
+    expect(p1.map((paths) => paths.length)).toEqual([4, 2, 1, 1, 2, 1, 1]);
+    expect(p1.length).toBe(7);
+    expect(seen.length).toBe(14); // both packages, nothing more
+    for (const path of diff.changed_files) {
+      expect(coverage.get(path)).toEqual({ status: "unreviewed" });
+    }
+    expect(result.verdict).toBe("error");
+  });
+
+  it("does not degrade the verdict for a package its bisection fully covered", async () => {
+    const { diff, maxChunkLines } = packedDiff(PKG_2, 4);
+    const coverage = new Map<string, CoverageEntry>();
+
+    const result = await reviewChunked({
+      diff,
+      maxChunkLines,
+      maxChunks: 0,
+      mechanical: [],
+      brief: null,
+      buildEnvelope: pathsEnvelope,
+      // Schema failure driven by envelope SIZE: a 4-file package always fails, both
+      // of its 2-file halves always succeed → every package is covered by its leaves.
+      review: async (env) => (env.user.split(",").length > 2 ? SCHEMA_FAIL : APPROVED),
+      onCoverage: (path, entry) => coverage.set(path, entry),
+    });
+
+    expect(result.verdict).toBe("approved");
+    expect(result.error).toBeUndefined();
+    expect(result.partial).toBeUndefined();
+    for (const path of diff.changed_files) {
+      expect(coverage.get(path)).toEqual({ status: "reviewed" });
+    }
+  });
+
+  it("never bisects a timeout failure — one retry, then the package is unreviewed", async () => {
+    const { diff, maxChunkLines } = packedDiff(PKG_2, 4);
+    const seen: string[][] = [];
+    const coverage = new Map<string, CoverageEntry>();
+
+    const result = await reviewChunked({
+      diff,
+      maxChunkLines,
+      maxChunks: 0,
+      mechanical: [],
+      brief: null,
+      buildEnvelope: pathsEnvelope,
+      review: async (env) => {
+        const paths = env.user.split(",");
+        seen.push(paths);
+        return paths.includes("p2/a.ts") ? TIMEOUT_FAIL : APPROVED;
+      },
+      onCoverage: (path, entry) => coverage.set(path, entry),
+    });
+
+    const failing = seen.filter((paths) => paths.includes("p2/a.ts"));
+    expect(failing.length).toBe(2); // first pass + exactly one retry, as today
+    // A transient stall must never multiply load: no envelope was ever split.
+    expect(failing.every((paths) => paths.length === 4)).toBe(true);
+    for (const path of diff.changed_files.filter((p) => p.startsWith("p2/"))) {
+      expect(coverage.get(path)).toEqual({ status: "unreviewed" });
+    }
+    expect(result.verdict).toBe("error");
+  });
+
+  it("attempts nothing when the wall deadline is already past: zero calls, all pending", async () => {
+    const { diff, maxChunkLines } = packedDiff(PKG_2, 4);
+    const coverage = new Map<string, CoverageEntry>();
+    let calls = 0;
+
+    const result = await reviewChunked({
+      diff,
+      maxChunkLines,
+      maxChunks: 0,
+      mechanical: [],
+      brief: null,
+      buildEnvelope: pathsEnvelope,
+      review: async () => {
+        calls++;
+        return APPROVED;
+      },
+      onCoverage: (path, entry) => coverage.set(path, entry),
+      wallDeadline: Date.now() - 1,
+    });
+
+    // The deadline is checked BEFORE every package — including the warm-up one.
+    expect(calls).toBe(0);
+    for (const path of diff.changed_files) {
+      expect(coverage.get(path)).toEqual({ status: "pending" });
+    }
+    expect(result.verdict).toBe("error");
+  });
+
+  it("keeps the packages completed before the deadline and marks the rest pending", async () => {
+    const { diff, maxChunkLines } = packedDiff(PKG_2, 4);
+    const coverage = new Map<string, CoverageEntry>();
+    const seen: string[][] = [];
+
+    const result = await reviewChunked({
+      diff,
+      maxChunkLines,
+      maxChunks: 0,
+      mechanical: [],
+      brief: null,
+      buildEnvelope: pathsEnvelope,
+      review: async (env) => {
+        seen.push(env.user.split(","));
+        await sleep(150); // outlives the deadline set 50 ms out below
+        return APPROVED;
+      },
+      onCoverage: (path, entry) => coverage.set(path, entry),
+      wallDeadline: Date.now() + 50,
+    });
+
+    // Only the warm-up package was in flight when time ran out; the second is untouched.
+    expect(seen).toHaveLength(1);
+    for (const path of diff.changed_files.filter((p) => p.startsWith("p1/"))) {
+      expect(coverage.get(path)).toEqual({ status: "reviewed" });
+    }
+    for (const path of diff.changed_files.filter((p) => p.startsWith("p2/"))) {
+      expect(coverage.get(path)).toEqual({ status: "pending" });
+    }
+    // What completed is kept — a timed-out run still reports its reviewed package.
+    expect(result.verdict).toBe("approved");
+  });
+
+  it("issues the FIRST package alone (prompt-cache warm-up) before the rest fan out", async () => {
+    const { diff, maxChunkLines } = packedDiff(PKG_3, 4);
+    const events: string[] = [];
+
+    await reviewChunked({
+      diff,
+      maxChunkLines,
+      maxChunks: 0,
+      mechanical: [],
+      brief: null,
+      buildEnvelope: pathsEnvelope,
+      review: async (env) => {
+        const id = env.user.split(",")[0] ?? "";
+        events.push(`start ${id}`);
+        await sleep(30);
+        events.push(`end ${id}`);
+        return APPROVED;
+      },
+      onCoverage: () => {},
+    });
+
+    // Three packages → six events. The first call ENDS before any other begins…
+    expect(events).toHaveLength(6);
+    expect(events[0]).toBe("start p1/a.ts");
+    expect(events[1]).toBe("end p1/a.ts");
+    // …and only then do the remaining two run concurrently (CHUNK_CONCURRENCY ≥ 2).
+    expect(events.slice(2, 4).sort()).toEqual(["start p2/a.ts", "start p3/a.ts"]);
+  });
+
+  it("ledgers files spilled by the MAX_CHUNKS cap as unreviewed, not just a footnote", async () => {
+    const { diff, maxChunkLines } = packedDiff(PKG_2, 4);
+    const coverage = new Map<string, CoverageEntry>();
+
+    await reviewChunked({
+      diff,
+      maxChunkLines,
+      maxChunks: 1, // the second package spills
+      mechanical: [],
+      brief: null,
+      buildEnvelope: pathsEnvelope,
+      review: async () => APPROVED,
+      onCoverage: (path, entry) => coverage.set(path, entry),
+    });
+
+    for (const path of diff.changed_files.filter((p) => p.startsWith("p2/"))) {
+      expect(coverage.get(path)).toEqual({ status: "unreviewed", reason: "chunk-limit" });
+    }
+  });
+
+  it("passes the brief to every envelope build, bisected halves included", async () => {
+    const { diff, maxChunkLines } = packedDiff(PKG_2, 4);
+    const brief: Brief = {
+      intent: "tighten the review loop",
+      global_facts: ["monorepo"],
+      package_hints: [{ name: "p2", path_prefixes: ["p2/"], risk: "high" }],
+    };
+    const briefs: Array<Brief | null> = [];
+
+    await reviewChunked({
+      diff,
+      maxChunkLines,
+      maxChunks: 0,
+      mechanical: [],
+      brief,
+      buildEnvelope: (subDiff, _mechanical, seenBrief) => {
+        briefs.push(seenBrief);
+        return pathsEnvelope(subDiff);
+      },
+      // Force one package to bisect so the halves' envelope builds are observed too.
+      review: async (env) => (env.user.split(",").length > 2 ? SCHEMA_FAIL : APPROVED),
+      onCoverage: () => {},
+    });
+
+    expect(briefs.length).toBeGreaterThan(2);
+    expect(briefs.every((b) => b === brief)).toBe(true);
   });
 });

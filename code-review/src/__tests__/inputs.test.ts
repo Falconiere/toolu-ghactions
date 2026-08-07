@@ -55,6 +55,33 @@ describe("REQUEST_TIMEOUT_MS", () => {
   });
 });
 
+describe("MAX_CHUNKS", () => {
+  it("defaults to 0 (unlimited)", () => {
+    expect(readInputs().maxChunks).toBe(0);
+  });
+
+  it("honors a positive override", () => {
+    setInput("MAX_CHUNKS", "5");
+    expect(readInputs().maxChunks).toBe(5);
+  });
+});
+
+describe("MAX_WALL_MS", () => {
+  it("defaults to 0 (off)", () => {
+    expect(readInputs().maxWallMs).toBe(0);
+  });
+
+  it("parses a positive override", () => {
+    setInput("MAX_WALL_MS", "600000");
+    expect(readInputs().maxWallMs).toBe(600000);
+  });
+
+  it("falls back to 0 on a non-numeric value", () => {
+    setInput("MAX_WALL_MS", "abc");
+    expect(readInputs().maxWallMs).toBe(0);
+  });
+});
+
 describe("FAIL_ON", () => {
   it("defaults to blocking on 'changes' when unset (gate on by default)", () => {
     const failOn = readInputs().failOn;

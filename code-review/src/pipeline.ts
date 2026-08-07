@@ -23,7 +23,9 @@ import { setVerdictLabel } from "./github/label.js";
 import type { LabelTarget } from "./github/label.js";
 import { upsertComment } from "./github/comment.js";
 import type { ReviewTarget } from "./github/review.js";
-import { resolveHeadSha, sinceChangedLines } from "./pipeline/git.js";
+import { resolveHeadSha, resolveTreeSha, sinceChangedLines } from "./pipeline/git.js";
+import { filterDiffToScope, resolveTreeScope } from "./pipeline/scope.js";
+import type { ScopeMode } from "./pipeline/scope.js";
 import { locatePrior, postInProgress } from "./pipeline/sticky.js";
 import type { PriorSticky } from "./pipeline/sticky.js";
 import type { IncrementalScope } from "./review/incremental.js";
@@ -50,6 +52,10 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
   const cwd = deps.cwd ?? process.cwd();
   const now = deps.now ?? Date.now;
   const startMs = now();
+  // MAX_WALL_MS soft budget: undefined (off) when unset, else an epoch-ms deadline
+  // the review loop checks against (review/bisect.ts's `deadlinePassed`) — computed
+  // once, off the same start timestamp `publish()` uses for the run's duration.
+  const wallDeadline = inputs.maxWallMs > 0 ? startMs + inputs.maxWallMs : undefined;
 
   const event = await resolveTrigger(deps);
   if (!event || event.pr_number === undefined) {
@@ -97,15 +103,36 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
 
   const scope = incrementalScope(deps, found, reviewHead, cwd);
 
+  // TREE scope (spec §True incremental): which FILES this round re-reviews. Null =
+  // full diff (fail-open). Everything it drops is carried — not re-reviewed, prior
+  // findings re-injected in publish so no thread is falsely resolved.
+  const treeScope = resolveTreeScope({
+    prior: found.prior,
+    mode: scopeMode(deps, event),
+    reviewHead,
+    cwd,
+  });
+  const scoped =
+    treeScope === null ? { diff, carried: [] } : filterDiffToScope(diff, treeScope.inScope);
+  if (scoped.carried.length > 0) {
+    process.stdout.write(
+      `  Incremental: ${scoped.diff.total_files} of ${diff.total_files} changed file(s) in scope; ` +
+        `${scoped.carried.length} carried from the last review\n`,
+    );
+  }
+
   const reviewed = await reviewAndValidate({
     inputs,
-    diff,
+    diff: scoped.diff,
     event,
     priorThreads,
     reviewHead,
     cwd,
     sarifDir: deps.sarifDir,
     fetch: deps.fetch,
+    carriedPaths: scoped.carried,
+    wallDeadline,
+    ...prText(context),
   });
 
   return publish({
@@ -113,7 +140,7 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     context,
     target,
     inputs,
-    diff,
+    diff: scoped.diff,
     priorThreads,
     scope,
     reviewedSha,
@@ -122,6 +149,12 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     result: reviewed.result,
     stamped: reviewed.stamped,
     mechanical: reviewed.mechanical,
+    ledger: reviewed.ledger,
+    exceptionPaths: treeScope?.exceptions ?? new Set<string>(),
+    // The tree this run reviewed, recorded as `reviewed_tree` when coverage is
+    // COMPLETE (state.ts). Undefined when the head does not resolve — the next
+    // round then simply fails open to a full review.
+    ...treeOf(reviewHead, cwd),
     prior: found.prior,
     stickyId,
     fullReview: event.full_review,
@@ -129,6 +162,38 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     now,
     fetch: deps.fetch,
   });
+}
+
+/**
+ * How this run picks its file set (see pipeline/scope.ts). Memory off → no
+ * narrowing at all. `@toolu resume` → the exception paths only. Any other
+ * issue_comment (`@toolu review`) stays the explicit FULL re-review escape hatch,
+ * which is also what clears the marker's tree + exception lists: the completing
+ * run rewrites them from its own ledger.
+ */
+function scopeMode(deps: ReviewDeps, event: EventResolution): ScopeMode {
+  if (!deps.inputs.reviewMemory) return "full";
+  if (event.resume === true) return "resume";
+  return deps.context.eventName === "pull_request" ? "incremental" : "full";
+}
+
+/** The review head's root tree sha, as publish's optional `headTree`. */
+function treeOf(reviewHead: string, cwd: string): { headTree?: string } {
+  const tree = resolveTreeSha(reviewHead, cwd);
+  return tree === null ? {} : { headTree: tree };
+}
+
+/** The PR's title/body — UNTRUSTED author text, read from whichever payload shape
+ *  the triggering event carries (a `pull_request` object, or the "issue" twin
+ *  GitHub mirrors a PR onto for `issue_comment`). Sanitized and fenced downstream
+ *  by the Layer 1 cartographer, never elsewhere. */
+function prText(context: GithubContext): { prTitle: string; prBody: string } {
+  const pr = context.payload?.pull_request;
+  const issue = context.payload?.issue;
+  return {
+    prTitle: pr?.title ?? issue?.title ?? "",
+    prBody: pr?.body ?? issue?.body ?? "",
+  };
 }
 
 /**

@@ -82,9 +82,13 @@ inputs:
     required: false
     default: '1500'
   MAX_CHUNKS:
-    description: 'Maximum number of chunks (= model calls) per review, bounding cost and wall-clock on very large PRs. Files beyond the limit are not reviewed and the comment says so. 0 = unlimited. Default 20.'
+    description: 'Maximum number of chunks (= model calls) per review, bounding cost on very large PRs. 0 (default) = unlimited. When set, files beyond the cap are recorded per-file as unreviewed in the coverage ledger (and the comment says so) instead of being reviewed.'
     required: false
-    default: '20'
+    default: '0'
+  MAX_WALL_MS:
+    description: 'Soft wall-clock budget in milliseconds for the whole review loop. 0 (default) = off. When the budget is exceeded mid-run, packages not yet started are recorded as pending in the coverage ledger instead of being attempted, and the round is resumable — via `@toolu resume`, a plain re-run, or automatically on the next push.'
+    required: false
+    default: '0'
   REQUEST_TIMEOUT_MS:
     description: 'Per-attempt model deadline in milliseconds. Each chunk gets up to this long per attempt (retried a few times) before it is aborted and the chunk abstains ("This operation was aborted"). Raise it for slow/large models, lower it to fail faster. Default 180000 (3 min).'
     required: false
@@ -243,6 +247,7 @@ runs:
         INPUT_MAX_DIFF_LINES: ${{ inputs.MAX_DIFF_LINES }}
         INPUT_MAX_CHUNK_LINES: ${{ inputs.MAX_CHUNK_LINES }}
         INPUT_MAX_CHUNKS: ${{ inputs.MAX_CHUNKS }}
+        INPUT_MAX_WALL_MS: ${{ inputs.MAX_WALL_MS }}
         INPUT_REQUEST_TIMEOUT_MS: ${{ inputs.REQUEST_TIMEOUT_MS }}
         INPUT_TOKEN: ${{ inputs.TOKEN }}
         INPUT_APP_ID: ${{ inputs.APP_ID }}

@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### ⚠ BREAKING CHANGES
+
+* **code-review:** `@v7` — size-proof review pipeline. `MAX_CHUNKS` default changes `20` → `0` (unlimited); the sticky comment gains new sections (coverage ledger, repeated-finding clusters, unanchored findings) and prompt byte counts change; the `subject_type: "file"` inline-comment fallback is removed (unanchorable findings now render in the sticky comment instead). No input is removed. See `code-review/README.md` → "v7 migration" for the full list.
+
+### Features
+
+* **code-review:** layered review pipeline (deterministic diff distillation → intent-brief cartographer → bounded, schema-bisecting package reviewers → deterministic reducer) so review cost scales with substantive change instead of diff bytes, with provable per-file coverage on any PR size.
+* **code-review:** coverage ledger — every changed path is accounted for exactly once in the sticky comment (`reviewed`/`pattern`/`rename`/`formatting`/`vendored`/`generated`/`excluded`/`carried`/`unreviewed`/`pending`); a would-be `approved` verdict degrades to `error` when any file is `unreviewed`/`pending`.
+* **code-review:** finding clustering — a defect repeated identically across 3+ files collapses to one inline comment (exemplar + enumerated members) instead of one per file; dismissing the exemplar's thread dismisses the whole cluster.
+* **code-review:** `MAX_WALL_MS` input — soft wall-clock budget for the review loop; a run that runs out of time persists a resumable state and completes via `@toolu resume`, a plain re-run, or the PR's next push.
+* **code-review:** batched inline-comment publishing with 422 bisection, so one comment GitHub's Reviews API rejects can no longer zero out the whole review.
+
 ## [6.6.0](https://github.com/Falconiere/toolu-ghactions/compare/v6.5.4...v6.6.0) (2026-08-05)
 
 
