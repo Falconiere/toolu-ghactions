@@ -41236,7 +41236,7 @@ function buildHeader(duration, jobUrl2) {
 // src/github/reviewBatch.ts
 var MAX_COMMENTS_PER_REVIEW = 30;
 function isRecord2(value) {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isUnprocessable(err) {
   if (isRecord2(err) && err["status"] === 422) return true;
@@ -41846,11 +41846,9 @@ function settleVerdict(input, reduction, exceptions) {
   const removed = suppressed.length + scoped.dropped.length;
   if (verdict === "changes" && findings.length === 0 && removed > 0) {
     verdict = "approved";
-    validated.verdict = "approved";
   }
   if (verdict === "approved" && lastVerdict(input) === "changes" && hasCarried(findings, reduction)) {
     verdict = "changes";
-    validated.verdict = "changes";
   }
   const cap = applyRoundCap({
     verdict,
@@ -41861,7 +41859,6 @@ function settleVerdict(input, reduction, exceptions) {
   let capNote = "";
   if (cap.capped) {
     verdict = "approved";
-    validated.verdict = "approved";
     capNote = `Round cap reached (MAX_ROUNDS=${input.inputs.maxRounds}): no blocker findings after ${input.inputs.maxRounds} review rounds \u2014 verdict auto-approved; the findings below are advisory.`;
     process.stdout.write(`  ${capNote}
 `);
@@ -41873,6 +41870,7 @@ function settleVerdict(input, reduction, exceptions) {
 
 ${note}`;
   }
+  validated.verdict = verdict;
   return { validated, findings, suppressed, verdict, capNote, capped: cap.capped };
 }
 function lastVerdict(input) {
@@ -41887,7 +41885,6 @@ function hasCarried(findings, reduction) {
 function degradeOnCoverage(validated, verdict, exceptions) {
   if (exceptions.complete || verdict !== "approved") return verdict;
   const count = exceptions.unreviewed.length + exceptions.pending.length;
-  validated.verdict = "error";
   if (validated.error === void 0 || validated.error === "") {
     validated.error = `${count} file(s) were not reviewed this run (see Coverage below) \u2014 an approval over unreviewed files would be a verdict this review cannot make.`;
   }
