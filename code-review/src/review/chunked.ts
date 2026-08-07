@@ -115,7 +115,10 @@ export async function reviewChunked(opts: ChunkedReviewOptions): Promise<Provide
 
   // Warm-up: the first package is issued ALONE so its shared prompt prefix is in the
   // provider's cache before the rest fan out. Best-effort — correctness never depends
-  // on the cache, only the call ORDER changes.
+  // on the cache, only the call ORDER changes. A SINGLE-package run takes this same
+  // path and costs nothing extra: chunks[0] always exists (the empty case returned at
+  // the guard above), and the fan-out below is over an empty index list — one call, no
+  // concurrency.
   const first = await runPackage(0);
   const rest = await mapWithConcurrency(
     chunks.map((_chunk, i) => i).slice(1),
