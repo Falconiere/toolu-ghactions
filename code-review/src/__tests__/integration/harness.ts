@@ -171,7 +171,11 @@ export function commentContext(headSha: string, body: string): GithubContext {
 
 // ── Reading the run's products ──────────────────────────────────────────────
 
-/** The LAST sticky-comment body this run posted. */
+/** The chronologically last sticky-comment body this run posted: prefers the most
+ *  recent update over the most recent create. Safe because `upsertComment` posts
+ *  AT MOST once per `runReview` call and github/comment.ts's marker-based lookup
+ *  rediscovers an existing sticky on every later round, so a create can never
+ *  follow an update within one `Recorded` — see github/comment.ts's module doc. */
 export function lastBody(rec: Recorded): string {
   return rec.updated.at(-1)?.body ?? rec.created.at(-1)?.body ?? "";
 }
