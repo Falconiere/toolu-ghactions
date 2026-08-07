@@ -3,6 +3,7 @@
 // truncate at a hunk boundary. Port of fetch-diff.sh, driving `git` via
 // execFileSync (not simple-git) so argv and exit-code handling match the bash.
 import { execFileSync } from "node:child_process";
+import { unquoteGitPath } from "./path.js";
 import { shapeDiff, type ShapedFile } from "./shape.js";
 import { noiseReason, LARGE_FILE_BYTES } from "./noise.js";
 import { anyGlobMatches } from "./globs.js";
@@ -82,10 +83,28 @@ export class DiffResolutionError extends Error {
   }
 }
 
+/**
+ * Force RAW (unescaped) non-ASCII bytes in every path git prints. Under git's
+ * default `core.quotepath=true` a path with any non-ASCII byte comes back
+ * C-quoted (`"\346\227\245..."`), which then (a) fails as a pathspec when it is
+ * fed back to `git diff -- <path>`, (b) fails as `git show <ref>:<path>`, and
+ * (c) can never compare equal to a path read from a `-z` producer such as
+ * pipeline/git.ts's `treeDiffPaths` — the incremental scope would silently
+ * classify the file as unchanged. Paths containing `"`, `\`, or a control
+ * character (a newline included) stay C-quoted even here, which is what keeps
+ * one-path-per-line splitting safe; every producer in this repo therefore uses
+ * this same flag so all of them agree byte-for-byte.
+ */
+const QUOTEPATH_OFF = ["-c", "core.quotepath=false"];
+
 /** Run `git` and return stdout, or null when git exits non-zero (the `|| true` idiom). */
 function gitOrNull(args: string[], cwd: string): string | null {
   try {
-    return execFileSync("git", args, { cwd, encoding: "utf8", maxBuffer: 1024 * 1024 * 1024 });
+    return execFileSync("git", [...QUOTEPATH_OFF, ...args], {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024 * 1024,
+    });
   } catch {
     return null;
   }
@@ -198,7 +217,7 @@ function parseNumstat(numstat: string): NumstatRow[] {
     if (secondTab === -1) continue;
     const added = row.slice(0, firstTab);
     const removed = rest.slice(0, secondTab);
-    const path = rest.slice(secondTab + 1);
+    const path = unquoteGitPath(rest.slice(secondTab + 1));
     if (path === "") continue;
     rows.push({ added, removed, path });
   }
@@ -338,7 +357,10 @@ export function fetchDiff(opts: DiffOptions): DiffData {
   // REVIEW diff below runs WITH -M so a move renders as a rename, not delete+add.
   const changedFiles =
     gitOrNull(["diff", "--no-renames", "--name-only", mergeBase, reviewHead], cwd) ?? "";
-  const changedPaths = changedFiles.split("\n").filter((l) => l.trim() !== "");
+  const changedPaths = changedFiles
+    .split("\n")
+    .filter((l) => l.trim() !== "")
+    .map(unquoteGitPath);
   const totalFiles = changedPaths.length;
 
   if (totalFiles === 0) {
@@ -458,7 +480,7 @@ function deletedInRange(mergeBase: string, reviewHead: string, cwd: string): Set
     if (!line.startsWith("D")) continue;
     const tab = line.indexOf("\t");
     if (tab === -1) continue;
-    const path = line.slice(tab + 1);
+    const path = unquoteGitPath(line.slice(tab + 1));
     if (path !== "") out.add(path);
   }
   return out;
@@ -483,7 +505,9 @@ function detectRenames(
     if (parts.length < 3) continue;
     const from = parts[1];
     const to = parts[2];
-    if (from !== undefined && to !== undefined && kept.has(to)) out.push({ from, to });
+    if (from === undefined || to === undefined) continue;
+    const rename = { from: unquoteGitPath(from), to: unquoteGitPath(to) };
+    if (kept.has(rename.to)) out.push(rename);
   }
   return out;
 }

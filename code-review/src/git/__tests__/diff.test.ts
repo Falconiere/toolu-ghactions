@@ -4,7 +4,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fetchDiff } from "@/git/diff.js";
-import { git, setupGitRepo, writeFile, removeRepo, makeTmpDir } from "./helpers.js";
+import { splitDiffByFile } from "@/git/chunk.js";
+import { readFileAt } from "@/pipeline/git.js";
+import { git, setupGitRepo, writeFile, removeRepo, makeTmpDir, canCreateFile } from "./helpers.js";
 
 // REAL temp git repos (no mocks), mirroring the cases in __tests__/fetch-diff.bats.
 // No `origin` remote in the fixtures, so the base resolves to the local `main`
@@ -427,4 +429,131 @@ describe("fetchDiff — batched blob classification (src/git/batchRead.ts)", () 
     expect(r.changed_files).toContain("sdk/gen-Qcc39ab.js");
     expect(r.changed_files).toContain("src/app.ts");
   });
+
+  // Mutation guard for the test above: SAME file size band (64 KiB – 1 MB), same
+  // long line, moved BEFORE the 64 KiB bound. The verdict must flip to minified —
+  // otherwise "not flagged" would pass for the wrong reason (e.g. content never
+  // read at all in this band) and the bounded-content read would be untested.
+  it("end-to-end: the same long line BEFORE the 64 KiB bound IS flagged minified", () => {
+    const dir = featureRepo();
+    const head = Array.from({ length: 1000 }, (_, i) => `const h${i} = ${i};`).join("\n") + "\n";
+    const longLine = "z".repeat(6000);
+    const tail = Array.from({ length: 4000 }, (_, i) => `const t${i} = ${i};`).join("\n") + "\n";
+    const content = `${head}${longLine}\n${tail}`;
+    // The long line starts well inside the first 64 KiB...
+    expect(Buffer.byteLength(head, "utf8")).toBeLessThan(65536);
+    // ...while the file as a whole sits in the same band as the case above.
+    expect(Buffer.byteLength(content, "utf8")).toBeGreaterThan(65536);
+    expect(Buffer.byteLength(content, "utf8")).toBeLessThan(1_000_000);
+    writeFile(dir, "sdk/gen-Qcc39ab.js", content);
+    writeFile(dir, "src/app.ts", "export const x = 1\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "long-line-before-bound + real code", "--quiet");
+
+    const r = fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 8000 });
+    expect(r.dropped_files.find((d) => d.path === "sdk/gen-Qcc39ab.js")?.reason).toBe("minified");
+    expect(r.changed_files).toEqual(["src/app.ts"]);
+  });
+});
+
+// Every path git prints is C-quoted when it holds a character git cannot print
+// literally. Decoding at the boundary (git/path.ts) is what makes the path usable
+// again as a pathspec (`git diff -- <path>`) and as a `git show <ref>:<path>`
+// operand — without it these files reach the review with no diff text at all.
+describe("fetchDiff — C-quoted paths decode to real paths", () => {
+  /** Commit `files` on a feature branch and fetch the diff. */
+  function diffOver(files: Record<string, string>): {
+    dir: string;
+    r: ReturnType<typeof fetchDiff>;
+  } {
+    const dir = featureRepo();
+    for (const [path, content] of Object.entries(files)) writeFile(dir, path, content);
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "special-character paths", "--quiet");
+    return { dir, r: fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 8000 }) };
+  }
+
+  it.skipIf(!canCreateFile('we"ird.ts'))(
+    'reports we"ird.ts under its real name, with a real diff segment',
+    () => {
+      const { dir, r } = diffOver({
+        'we"ird.ts': "export const q = 1\n",
+        "src/app.ts": "export const x = 1\n",
+      });
+
+      // The raw name reaches changed_files — this is what the GitHub API, the
+      // coverage ledger, and the state marker all key on.
+      expect(r.changed_files.sort()).toEqual(['we"ird.ts', "src/app.ts"].sort());
+      expect(r.changed_files.some((p) => p.startsWith('"'))).toBe(false);
+
+      // A real segment exists: the pathspec matched, so the file was actually diffed.
+      const segment = splitDiffByFile(r.diff).find((s) => s.path === 'we"ird.ts');
+      expect(segment?.diff).toContain("L1: +export const q = 1");
+      // shape.ts agrees with chunk.ts on the path, so line anchors resolve.
+      expect(r.files.find((f) => f.path === 'we"ird.ts')?.changed_lines).toEqual([1]);
+      // And the post-change content reader (oversized-chunk context) resolves it.
+      expect(readFileAt("HEAD", dir)('we"ird.ts')).toBe("export const q = 1\n");
+    },
+  );
+
+  it.skipIf(!canCreateFile("tab\there.ts"))(
+    "reports a tab-containing name under its real name, with a real diff segment",
+    () => {
+      const { dir, r } = diffOver({
+        "tab\there.ts": "export const t = 1\n",
+        "src/app.ts": "export const x = 1\n",
+      });
+
+      expect(r.changed_files).toContain("tab\there.ts");
+      const segment = splitDiffByFile(r.diff).find((s) => s.path === "tab\there.ts");
+      expect(segment?.diff).toContain("L1: +export const t = 1");
+      expect(readFileAt("HEAD", dir)("tab\there.ts")).toBe("export const t = 1\n");
+    },
+  );
+
+  it.skipIf(!canCreateFile("back\\slash.ts"))(
+    "reports a backslash-containing name under its real name",
+    () => {
+      const { dir, r } = diffOver({ "back\\slash.ts": "export const b = 1\n" });
+      expect(r.changed_files).toEqual(["back\\slash.ts"]);
+      expect(readFileAt("HEAD", dir)("back\\slash.ts")).toBe("export const b = 1\n");
+    },
+  );
+
+  it.skipIf(!canCreateFile('mixed日本"x.ts'))(
+    "reports a name mixing non-ASCII with a forced-quote character",
+    () => {
+      // Under core.quotepath=false git quotes this for the `"` while leaving 日本
+      // as RAW UTF-8 inside the quotes — the case a per-char-code decoder mangles.
+      const { r } = diffOver({ 'mixed日本"x.ts': "export const m = 1\n" });
+      expect(r.changed_files).toEqual(['mixed日本"x.ts']);
+    },
+  );
+
+  it("reports a non-ASCII name under its real name (raw under core.quotepath=false)", () => {
+    const { dir, r } = diffOver({ "日本語.txt": "hello\n" });
+    expect(r.changed_files).toEqual(["日本語.txt"]);
+    expect(splitDiffByFile(r.diff).map((s) => s.path)).toEqual(["日本語.txt"]);
+    expect(readFileAt("HEAD", dir)("日本語.txt")).toBe("hello\n");
+  });
+
+  it.skipIf(!canCreateFile('renamed"target.ts'))(
+    "detects a rename into a quoted path under its real name",
+    () => {
+      // The original must exist on MAIN for the move to read as a rename against
+      // the merge-base rather than an unrelated add.
+      const dir = setupGitRepo();
+      repos.push(dir);
+      writeFile(dir, "src/original.ts", "export const value = 1\n".repeat(8));
+      git(dir, "add", "-A");
+      git(dir, "commit", "-m", "add original", "--quiet");
+      git(dir, "checkout", "-b", "feature", "--quiet");
+      git(dir, "mv", "src/original.ts", 'renamed"target.ts');
+      git(dir, "commit", "-m", "rename into a quoted path", "--quiet");
+
+      const r = fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 8000 });
+      expect(r.changed_files).toContain('renamed"target.ts');
+      expect(r.renames).toEqual([{ from: "src/original.ts", to: 'renamed"target.ts' }]);
+    },
+  );
 });

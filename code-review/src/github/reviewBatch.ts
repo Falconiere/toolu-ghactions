@@ -7,9 +7,16 @@
 // A batch's `createReview` call 422ing bisects the batch and retries each
 // half; a single comment that still 422s in isolation is reported `dropped`
 // instead of thrown. Any OTHER error (permissions, network, ...) is NOT
-// bisectable — it bubbles out of the batch and `postComments` folds it into
-// the wholesale posted:false/reason outcome the caller already handles,
-// exactly as a single unbatched call did before batching existed.
+// bisectable — `postBatch` NEVER throws it: it is captured as that node's
+// `lastError` and contributes no posted/dropped comments there, but is folded
+// into the outcome by RETURNING, not throwing. A single unbatched call (or a
+// batch that fails before any bisection) still ends up posted:false/reason —
+// same outward result as before batching existed — but a batch that bisected
+// keeps a sibling half's real, already-posted comments even when the other
+// half then hits a non-422: an uncaught throw there would otherwise unwind
+// past the sibling's success, and the caller would report posted:false while
+// GitHub already carries those comments — the next round would repost them
+// as duplicates (see the regression test for the exact scenario).
 import { errorMessage } from "@/errors.js";
 import type { Finding } from "@/llm/schema.js";
 import type {
@@ -73,12 +80,26 @@ interface BisectOutcome {
   dropped: Finding[];
   url?: string;
   lastError?: string;
+  /**
+   * Set ONLY by a non-bisectable (non-422) failure node — never by a 422 that
+   * bisection isolated down to a poison drop, which is already fully reported
+   * via `dropped`. Kept separate from `lastError` (which both kinds set, and
+   * which alone still drives the `posted:false` wholesale `reason`) so
+   * `postComments` can surface a partial-failure marker on a `posted:true`
+   * result without also re-surfacing an already-`dropped` finding's own error
+   * as if something were unaccounted for.
+   */
+  failed?: string;
 }
 
 /**
  * Post one batch; on a 422, bisect it and retry each half so a single poison
- * comment cannot sink its siblings. A non-422 error is rethrown so the caller
- * treats the whole batch as a wholesale failure.
+ * comment cannot sink its siblings. This NEVER throws: a non-bisectable error
+ * (permissions, network, ...) is captured as `lastError` and returned with
+ * empty `posted`/`dropped` for this node instead of being rethrown — letting a
+ * throw unwind past an already-resolved SIBLING half (awaited first, in the
+ * bisection branch below) would erase its real, already-posted comments from
+ * the result even though GitHub still carries them.
  */
 async function postBatch(
   octokit: ReviewClient,
@@ -98,8 +119,15 @@ async function postBatch(
     });
     return { posted: batch, dropped: [], url: data.html_url };
   } catch (err) {
-    if (!isUnprocessable(err)) throw err;
     const lastError = errorMessage(err, "reviews API request failed");
+    if (!isUnprocessable(err)) {
+      // Not bisectable — this node's whole batch failed, but that must never
+      // erase a sibling branch's already-posted comments, so this RETURNS
+      // (never throws); the caller folds it into the merged outcome below.
+      // `failed` (unlike a 422's `lastError`) has no `dropped` entry standing in
+      // for it, so postComments treats it as a partial-failure marker instead.
+      return { posted: [], dropped: [], lastError, failed: lastError };
+    }
     if (batch.length <= 1) {
       // Isolated to a single comment and it STILL 422s — that comment is poison;
       // report it dropped instead of failing (or further splitting) anything.
@@ -113,6 +141,7 @@ async function postBatch(
       dropped: [...left.dropped, ...right.dropped],
       url: left.url ?? right.url,
       lastError: right.lastError ?? left.lastError,
+      failed: right.failed ?? left.failed,
     };
   }
 }
@@ -134,21 +163,22 @@ export async function postComments(
   let posted = 0;
   let url: string | undefined;
   let lastError: string | undefined;
+  let failed: string | undefined;
 
   for (let i = 0; i < batches.length; i++) {
     const batch = batches[i];
     if (batch === undefined) continue;
     const body = batchBody(i, batches.length, batch.length, postable.length);
-    try {
-      const outcome = await postBatch(octokit, batch, target, body);
-      posted += outcome.posted.length;
-      dropped.push(...outcome.dropped);
-      url ??= outcome.url;
-      lastError = outcome.lastError ?? lastError;
-    } catch (err) {
-      // Non-422 (permissions, network, ...): this batch is a wholesale failure.
-      lastError = errorMessage(err, "reviews API request failed");
-    }
+    // postBatch() never throws (see its doc) — a non-422/non-bisectable failure
+    // comes back as a zero-posted outcome carrying `lastError`/`failed`, so a
+    // batch that fails after an earlier one succeeded cannot erase that
+    // earlier success.
+    const outcome = await postBatch(octokit, batch, target, body);
+    posted += outcome.posted.length;
+    dropped.push(...outcome.dropped);
+    url ??= outcome.url;
+    lastError = outcome.lastError ?? lastError;
+    failed = outcome.failed ?? failed;
   }
 
   if (posted === 0) {
@@ -161,5 +191,19 @@ export async function postComments(
       reason: lastError ?? "reviews API request failed",
     };
   }
-  return { posted: true, count: posted, batches: batches.length, unanchored, dropped, url };
+  return {
+    posted: true,
+    count: posted,
+    batches: batches.length,
+    unanchored,
+    dropped,
+    url,
+    // Some comments posted for real, but a non-bisectable (non-422) failure
+    // ALSO hit another batch/half — `reason` doubles as that partial-failure
+    // marker here (see InlineReviewResult's doc). A pure 422 that bisection
+    // isolated down to a `dropped` entry deliberately does NOT set this: that
+    // finding is already fully accounted for, so re-surfacing its error as
+    // `reason` would read as "something is unaccounted for" when nothing is.
+    ...(failed !== undefined ? { reason: failed } : {}),
+  };
 }

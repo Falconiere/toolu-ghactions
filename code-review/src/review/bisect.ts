@@ -68,7 +68,17 @@ export async function reviewPackage(
   // because the dominant abstain cause is provider-side nondeterminism. Inside a
   // bisection the split already WAS the retry, so a leaf gets no extra call (that
   // is what keeps the 4 leaves inside the 7-call budget).
-  const final = depth === 0 ? await ctx.review(ctx.buildEnvelope(segments, mechanical)) : result;
+  //
+  // The retry is a DISPATCH, so it obeys the same wall clock as every other one
+  // (chunked.ts's per-package check, bisect()'s between-halves check): a run that
+  // is already past MAX_WALL_MS must not fire a fresh model call. When the deadline
+  // has passed the first result stands and the package falls straight through to
+  // failure handling — these paths were attempted and failed, so they ledger
+  // `unreviewed` exactly as an exhausted retry would, not `pending` (which means
+  // never attempted). Either list resumes the path next round (pipeline/scope.ts
+  // unions them), so skipping the retry costs coverage nothing.
+  const retryable = depth === 0 && !deadlinePassed(ctx.wallDeadline);
+  const final = retryable ? await ctx.review(ctx.buildEnvelope(segments, mechanical)) : result;
   const status = final.verdict === "error" ? "unreviewed" : "reviewed";
   reportCoverage(ctx.onCoverage, segments, { status });
   return [final];

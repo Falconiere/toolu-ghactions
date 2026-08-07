@@ -4,10 +4,12 @@
 // sinks the toolu.sh review-run POST — the pipeline hands the SAME `fetch` to
 // report/post.ts, so the two are routed apart by URL.
 //
-// Three answers are scriptable per package call, because the pipeline treats them
+// Four answers are scriptable per package call, because the pipeline treats them
 // very differently (spec §Layer 2): a verdict payload, a `schema` failure
-// (unparseable content → NoObjectGeneratedError → BISECTABLE), and a `transport`
-// failure (a non-retryable HTTP status → APICallError → never bisects).
+// (unparseable content → NoObjectGeneratedError → BISECTABLE), a `transport`
+// failure (a non-retryable HTTP status → APICallError → never bisects), and a
+// `timeout` (the request never answers until reviewWithModel's own per-attempt
+// AbortController fires → never bisects, but resumable).
 
 const JSON_HEADERS = { "content-type": "application/json" };
 
@@ -39,8 +41,9 @@ export interface ScriptedFinding {
 }
 
 /** A scripted answer to one Layer 2 package call. `fail: "schema"` returns
- *  unparseable content (bisectable); `fail: "transport"` returns HTTP 400. */
-export type Reply = { ok: VerdictPayload } | { fail: "schema" | "transport" };
+ *  unparseable content (bisectable); `fail: "transport"` returns HTTP 400;
+ *  `fail: "timeout"` never answers at all (see {@link hangUntilAborted}). */
+export type Reply = { ok: VerdictPayload } | { fail: "schema" | "transport" | "timeout" };
 
 /** A clean package review. */
 export const APPROVED: VerdictPayload = { verdict: "approved", findings: [] };
@@ -92,6 +95,42 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+/** The request's AbortSignal, wherever `fetch`'s caller put it (init, or a Request). */
+function signalOf(
+  url: Parameters<typeof fetch>[0],
+  init: RequestInit | undefined,
+): AbortSignal | null {
+  if (init?.signal !== undefined && init.signal !== null) return init.signal;
+  return url instanceof Request ? url.signal : null;
+}
+
+/**
+ * Never answer: hang until the CALLER aborts, then reject exactly the way a real
+ * `fetch` does. This is the only way to produce reviewWithModel's `timeout`
+ * classification, which is keyed off ITS OWN per-attempt AbortController having
+ * fired (`classifyFailure(err, aborted)`) — no wire-level status can reach it, so
+ * before this a scenario simply could not exercise the `timeout` path at all.
+ *
+ * A scenario using it MUST pass a small `requestTimeoutMs` (reviewWithModel's
+ * per-attempt deadline, which it retries MAX_ATTEMPTS times), or the run waits
+ * out the 30 s default three times over.
+ */
+function hangUntilAborted(signal: AbortSignal | null): Promise<Response> {
+  return new Promise<Response>((_resolve, reject) => {
+    // No signal means nothing would ever settle this promise; a silently hung
+    // suite is far worse to debug than a loud rejection.
+    if (signal === null) {
+      reject(new Error('model.ts: fail:"timeout" requires an AbortSignal on the request'));
+      return;
+    }
+    const fail = (): void => {
+      reject(new DOMException("This operation was aborted", "AbortError"));
+    };
+    if (signal.aborted) fail();
+    else signal.addEventListener("abort", fail, { once: true });
+  });
+}
+
 /** Build the scripted provider (and toolu.sh sink) for one scenario. */
 export function modelServer(script: ModelScript = {}): ModelServer {
   const calls: CapturedCall[] = [];
@@ -123,7 +162,9 @@ export function modelServer(script: ModelScript = {}): ModelServer {
     script.events?.push(`end ${id}`);
     if ("fail" in reply) {
       // A schema failure is unparseable CONTENT (NoObjectGeneratedError → bisectable);
-      // a transport failure is a non-retryable HTTP status (APICallError → never bisects).
+      // a transport failure is a non-retryable HTTP status (APICallError → never
+      // bisects); a timeout is no answer at all until the caller's own deadline aborts.
+      if (reply.fail === "timeout") return hangUntilAborted(signalOf(url, init));
       return reply.fail === "schema"
         ? chatResponse("this is not JSON at all")
         : new Response('{"error":{"message":"upstream refused"}}', {

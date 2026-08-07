@@ -188,7 +188,16 @@ async function runLive(args: EvalArgs, apiKey: string): Promise<Scorecard> {
       notes: scorecardNotes(tally, coverage, body),
     };
   } finally {
-    removeRepo(scratch.dir);
+    // A cleanup failure here (e.g. a permission error) must never REPLACE a
+    // propagating error from the `try` above — caught and logged on its own,
+    // not left to throw out of `finally` and mask whatever was already in flight.
+    try {
+      removeRepo(scratch.dir);
+    } catch (cleanupErr) {
+      process.stderr.write(
+        `Warning: failed to remove scratch repo ${scratch.dir}: ${errorMessage(cleanupErr)}\n`,
+      );
+    }
   }
 }
 

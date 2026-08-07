@@ -226,6 +226,13 @@ async function resolveIssueComment(
   };
 }
 
+/** Escape a user-supplied phrase for literal use inside a RegExp. Mirrors
+ *  review/dismissal.ts's helper of the same name (kept local — see this
+ *  module's header: no shared regex-trigger module exists yet). */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
  * Find the review trigger in a comment body: `<phrase> review` (full re-review) or
  * `<phrase> resume` (spec §True incremental — re-review the exception paths only,
@@ -233,15 +240,28 @@ async function resolveIssueComment(
  * case-insensitively; when a body carries both, the FIRST one wins, so the
  * remainder sliced as the instruction always belongs to the trigger that fired.
  * Returns null when neither phrase appears.
+ *
+ * `resume` is matched with `\s+resume(?!\w)` — same technique as
+ * review/dismissal.ts's `dismiss` command — so "@toolu resumed the discussion"
+ * (or `resumes`/`resuming`) is ordinary prose, not the trigger: an unanchored
+ * `indexOf("${phrase} resume")` would fire on the "resume" PREFIX of "resumed"
+ * and hand the rest of that word ("d the discussion...") to the model as its
+ * instruction. `review`'s match is intentionally left as the plain `indexOf` it
+ * already was — that has the same class of weakness (e.g. "reviewed"), but it
+ * is PRE-EXISTING behavior from before this fix and out of scope here.
  */
 function findTrigger(
   body: string,
   phrase: string,
 ): { resume: boolean; instruction: string } | null {
   const lower = body.toLowerCase();
+  const reviewAt = lower.indexOf(`${phrase} review`);
+  const resumeMatch = new RegExp(`${escapeRegExp(phrase)}\\s+resume(?!\\w)`, "i").exec(body);
   const candidates = [
-    { resume: false, at: lower.indexOf(`${phrase} review`), length: phrase.length + 7 },
-    { resume: true, at: lower.indexOf(`${phrase} resume`), length: phrase.length + 7 },
+    { resume: false, at: reviewAt, length: phrase.length + 7 },
+    ...(resumeMatch
+      ? [{ resume: true, at: resumeMatch.index, length: resumeMatch[0].length }]
+      : []),
   ].filter((c) => c.at >= 0);
   if (candidates.length === 0) return null;
   const first = candidates.reduce((a, b) => (a.at <= b.at ? a : b));

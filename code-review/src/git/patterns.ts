@@ -19,6 +19,12 @@
 // Only groups of at least PATTERN_MIN_MEMBERS files collapse; anything smaller
 // stays substantive and is reviewed file-by-file. Findings on a group are
 // reported on the exemplar ONLY and never fan out to members (spec §Layer 0).
+//
+// The parsed body also carries each changed line TRIMMED (`removed`/`added`),
+// which is what distill.ts's formatting check compares. Trimmed, NOT despaced:
+// only leading/trailing whitespace may differ for a pair to read as formatting,
+// so an interior whitespace edit — inside a string literal, say — stays
+// substantive and is reviewed (spec §Layer 0's fail-safe direction).
 import { createHash } from "node:crypto";
 
 /** Minimum number of identical-hunk files before a set collapses to one exemplar. */
@@ -50,9 +56,9 @@ export interface HunkBody {
   additions: number;
   /** Count of `-` lines in the body (matches `git diff --numstat` deletions). */
   deletions: number;
-  /** Removed lines' content with ALL whitespace removed, in order. */
+  /** Removed lines' content, TRIMMED (see {@link trimEnds}), in order. */
   removed: string[];
-  /** Added lines' content with ALL whitespace removed, in order. */
+  /** Added lines' content, TRIMMED (see {@link trimEnds}), in order. */
   added: string[];
   /** True when the body carries a `\ No newline at end of file` marker. */
   noNewlineMarker: boolean;
@@ -97,10 +103,10 @@ export function parseHunkBody(segmentDiff: string): HunkBody | null {
       noNewlineMarker = true;
     } else if (line.startsWith("+")) {
       additions++;
-      added.push(despace(line.slice(1)));
+      added.push(trimEnds(line.slice(1)));
     } else if (line.startsWith("-")) {
       deletions++;
-      removed.push(despace(line.slice(1)));
+      removed.push(trimEnds(line.slice(1)));
     }
     normalized.push(line);
   }
@@ -160,7 +166,17 @@ function summarize(body: HunkBody, memberCount: number): string {
   return `identical ${changed}-line ${kind} in ${memberCount} files`;
 }
 
-/** Remove ALL whitespace from a line, the comparison `git diff -w` performs. */
-function despace(content: string): string {
-  return content.replace(/\s+/g, "");
+/**
+ * Strip only LEADING and TRAILING whitespace, leaving the interior byte-identical.
+ *
+ * Deliberately NOT `git diff -w`'s all-whitespace-removed comparison: collapsing
+ * interior whitespace makes a real edit inside a string literal
+ * (`"select * from  t"` → `"select *from t"`) compare equal to its own original,
+ * so distill.ts would classify the file `formatting` and drop it from review
+ * entirely. Trim-only keeps every indentation/trailing-whitespace reflow
+ * classified as formatting while sending any interior change to `substantive`
+ * — the fail-safe direction, which costs tokens but never coverage.
+ */
+function trimEnds(content: string): string {
+  return content.replace(/^\s+/, "").replace(/\s+$/, "");
 }

@@ -130,9 +130,25 @@ describe("parseHunkBody", () => {
     );
     expect(body?.additions).toBe(1);
     expect(body?.deletions).toBe(1);
-    expect(body?.added).toEqual(["constq=20;"]);
-    expect(body?.removed).toEqual(["constq=2;"]);
+    // TRIMMED, not despaced: interior spacing is preserved so that an edit
+    // inside a line can never read as whitespace-only (see distill.ts).
+    expect(body?.added).toEqual(["const q = 20;"]);
+    expect(body?.removed).toEqual(["const q = 2;"]);
     expect(body?.noNewlineMarker).toBe(false);
+  });
+
+  it("trims only the ENDS of a changed line, keeping interior whitespace verbatim", () => {
+    const body = parseHunkBody(
+      shapedSegment("a.ts", "@@ -1,1 +1,1 @@", [
+        'L---: -    const sql = "select * from  t";   ',
+        'L1: +\tconst sql = "select *from t";',
+      ]).diff,
+    );
+    // Leading indent and trailing spaces gone; the in-literal spacing difference
+    // survives, so distill's formatting check sees two DIFFERENT lines.
+    expect(body?.removed).toEqual(['const sql = "select * from  t";']);
+    expect(body?.added).toEqual(['const sql = "select *from t";']);
+    expect(body?.added).not.toEqual(body?.removed);
   });
 
   it("flags a no-newline-at-eof marker and hashes stably regardless of trailing newlines", () => {

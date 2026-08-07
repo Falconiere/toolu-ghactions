@@ -23,15 +23,16 @@ export interface EvalArgs {
 /** A malformed flag or value — the CLI's own fault, not an infra failure. */
 export class ArgError extends Error {}
 
-/** `owner/repo#123` -> its three parts. Throws {@link ArgError} on any other shape. */
+/** `owner/repo#123` -> its three parts. Throws {@link ArgError} on any other
+ *  shape, including a PR number below 1 (`#0` is not a valid PR). */
 export function parsePrRef(ref: string): { owner: string; repo: string; prNumber: number } {
   const m = ref.match(/^([^/\s#]+)\/([^#\s]+)#(\d+)$/);
-  if (!m) {
+  const prNumber = m === null ? 0 : Number(m[3] ?? "0");
+  if (!m || prNumber < 1) {
     throw new ArgError(`--pr must look like "owner/repo#123" (got "${ref}").`);
   }
   const owner = m[1] ?? "";
   const repo = m[2] ?? "";
-  const prNumber = Number(m[3] ?? "0");
   return { owner, repo, prNumber };
 }
 
@@ -65,20 +66,27 @@ Example:
 `;
 }
 
-/** Read the next argv slot as a flag's value, or throw a clear ArgError. */
+/** Read the next argv slot as a flag's value, or throw a clear ArgError. A
+ *  value starting with "--" is treated as the NEXT flag, not this one's value
+ *  (so `--pr --provider deepseek` reports `--pr` as missing its value instead
+ *  of silently swallowing "--provider" as the PR ref). */
 function requireValue(argv: readonly string[], index: number, flag: string): string {
   const value = argv[index];
-  if (value === undefined) throw new ArgError(`${flag} requires a value.`);
+  if (value === undefined || value.startsWith("--")) {
+    throw new ArgError(`${flag} requires a value.`);
+  }
   return value;
 }
 
-/** Read the next argv slot as a non-negative integer, or throw a clear ArgError. */
+/** Read the next argv slot as a non-negative integer, or throw a clear
+ *  ArgError. Requires the raw text to be ALL digits (`/^\d+$/`) — `parseInt`
+ *  alone would silently accept a trailing-garbage value like "12abc" as 12. */
 function requireInt(argv: readonly string[], index: number, flag: string): number {
   const raw = requireValue(argv, index, flag);
-  const n = Number.parseInt(raw, 10);
-  if (!Number.isFinite(n) || n < 0)
+  if (!/^\d+$/.test(raw)) {
     throw new ArgError(`${flag} must be a non-negative integer (got "${raw}").`);
-  return n;
+  }
+  return Number.parseInt(raw, 10);
 }
 
 /**

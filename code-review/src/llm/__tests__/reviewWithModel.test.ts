@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { reviewWithModel } from "@/llm/reviewWithModel.js";
 import type { Envelope } from "@/prompt.js";
+import { changes, modelServer } from "@/__tests__/integration/model.js";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -455,4 +456,57 @@ describe("reviewWithModel", () => {
     expect(result.error).toBeTruthy();
     expect(result.failure).toBe("transport");
   });
+});
+
+// The third failure class had no test anywhere, because nothing could PRODUCE it:
+// `timeout` is classified off reviewWithModel's own per-attempt AbortController
+// firing, so no scripted HTTP status reaches it. The integration harness's
+// `fail: "timeout"` reply (src/__tests__/integration/model.ts) is a request that
+// never answers, which is the real shape — and these tests are what prove the
+// harness genuinely produces the classification the review layers branch on.
+describe("reviewWithModel — the `timeout` failure class", () => {
+  it("abstains with failure `timeout` when every attempt is aborted by its own deadline", async () => {
+    const server = modelServer({ reply: () => ({ fail: "timeout" }) });
+
+    const result = await reviewWithModel(ENVELOPE, {
+      model: "deepseek/deepseek-v4-flash",
+      apiKey: "sk-test",
+      fetch: server.fetch,
+      maxRetries: 0,
+      timeoutMs: 50, // the per-attempt deadline; each attempt hangs past it
+      maxAttempts: 2,
+    });
+
+    expect(result.verdict).toBe("error");
+    expect(result.findings).toEqual([]);
+    // NOT "schema" (nothing unparseable came back) and NOT "transport" (no HTTP
+    // failure happened) — review/bisect.ts branches on exactly this distinction:
+    // a timeout is never bisected, because splitting it would only multiply load.
+    expect(result.failure).toBe("timeout");
+    expect(result.error).toBeTruthy();
+    // Every attempt really was dispatched and really did hang.
+    expect(server.calls).toHaveLength(2);
+  }, 20_000);
+
+  it("recovers on a later attempt when only the FIRST call hangs", async () => {
+    // The hang is per-call, so the harness can script a stall followed by a real
+    // answer — proving the retry loop is what the classification above outlived,
+    // not a permanently broken seam.
+    const server = modelServer({
+      reply: (_call, index) => (index === 0 ? { fail: "timeout" } : changes([])),
+    });
+
+    const result = await reviewWithModel(ENVELOPE, {
+      model: "deepseek/deepseek-v4-flash",
+      apiKey: "sk-test",
+      fetch: server.fetch,
+      maxRetries: 0,
+      timeoutMs: 50,
+      maxAttempts: 2,
+    });
+
+    expect(result.verdict).toBe("changes");
+    expect(result.failure).toBeUndefined();
+    expect(server.calls).toHaveLength(2);
+  }, 20_000);
 });

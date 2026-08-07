@@ -183,20 +183,34 @@ function clusterFor<F extends ReconcileFinding>(
   return idx;
 }
 
-/** Does a settled thread settle this whole cluster? ANY member matching under
- *  {@link matchesSettled} settles EVERY member, blockers included — dismissing the
- *  exemplar dismisses the pattern (spec §Layer 3). The prior-round link extends that
- *  to a cluster whose settled exemplar is already fixed, except on an `"exhausted"`
- *  thread over a cluster holding a blocker: the bot conceding an argument never
- *  silences a showstopper, at any match strength. */
+/**
+ * Does a settled thread settle this whole cluster? ANY member matching under
+ * {@link matchesSettled} settles EVERY member, blockers included — dismissing the
+ * exemplar dismisses the pattern (spec §Layer 3), and the prior-round link extends
+ * that to a cluster whose settled exemplar is already fixed.
+ *
+ * ONE exemption, and it is evaluated FIRST, against the whole cluster: an
+ * `"exhausted"` thread never settles a cluster holding a blocker, at any match
+ * strength. `"exhausted"` is the BOT conceding a stalemate, not a human ruling, so
+ * it may not take a showstopper off the board. {@link matchesSettled} already
+ * carves this out per FINDING, but a cluster's members share one defect while
+ * severity is NOT part of the cluster key — so a mixed-severity cluster whose
+ * `high` member the thread happens to match would otherwise route around the
+ * per-finding carve-out and silence its `blocker` sibling. The exemption must
+ * therefore be read at cluster level, ahead of every match-strength prong.
+ *
+ * Deliberately NOT extended to the other two settlement channels: a GitHub
+ * resolution and an explicit `@toolu dismiss` are HUMAN decisions, and there
+ * dismissing the exemplar dismisses the pattern, blockers included.
+ */
 function clusterSettled<F extends ReconcileFinding>(
   group: F[],
   t: PriorThread,
   priorClusters: Record<string, string> | undefined,
 ): boolean {
+  if (t.dismissal === "exhausted" && group.some((m) => m.severity === "blocker")) return false;
   if (group.some((m) => matchesSettled(m, t))) return true;
   if (group.length === 1) return false;
-  if (t.dismissal === "exhausted" && group.some((m) => m.severity === "blocker")) return false;
   return linkedByPriorCluster(group, t, priorClusters);
 }
 
@@ -280,9 +294,16 @@ export function reconcile<F extends ReconcileFinding>(
     if (open.has(idx)) {
       // A SECOND open thread for the same finding — a duplicate from an earlier run.
       // Keep the first, resolve the extras so duplicates don't accumulate forever.
-      // A CLUSTER's extra thread is left untouched instead: its members are still
-      // live, so resolving it would report code the bot still flags as fixed.
-      if (group.length === 1) toResolve.push(thread);
+      if (group.length === 1) {
+        toResolve.push(thread);
+        continue;
+      }
+      // A CLUSTER's extra thread is never resolved: its members are still live, so
+      // reporting it fixed would be a lie. It is still an UNRESOLVED thread the bot
+      // owns, though, so the module contract holds for it too — an author who had
+      // the last word there gets an answer against the cluster's representative.
+      // Silence would strand a real question on a thread that is never closed.
+      if (authorHasLastWord(thread)) toReply.push({ thread, finding: matched });
       continue;
     }
     open.add(idx);

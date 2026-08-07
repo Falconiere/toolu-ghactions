@@ -18,8 +18,8 @@ degradation spends tokens, never coverage.
 
 ```mermaid
 flowchart TD
-    FD["fetchDiff\n(git/diff.ts)"] --> SC["resolveTreeScope + filterDiffToScope\n(pipeline/scope.ts)"]
-    SC --> L0["Layer 0 — distill()\n(git/distill.ts, git/patterns.ts, git/batchRead.ts)"]
+    FD["fetchDiff\n(git/diff.ts, git/batchRead.ts)"] --> SC["resolveTreeScope + filterDiffToScope\n(pipeline/scope.ts)"]
+    SC --> L0["Layer 0 — distill()\n(git/distill.ts, git/patterns.ts)"]
     L0 --> L1["Layer 1 — mapPr()\n(review/cartographer.ts)"]
     L1 --> PK["groupByBrief\n(pipeline/packages.ts)"]
     PK --> L2["Layer 2 — reviewChunked() / reviewPackage()\n(review/chunked.ts, review/bisect.ts, llm/reviewWithModel.ts)"]

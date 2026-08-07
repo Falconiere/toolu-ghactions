@@ -18,6 +18,10 @@ describe("parsePrRef", () => {
     expect(() => parsePrRef("owner/repo")).toThrow(ArgError);
     expect(() => parsePrRef("owner/repo#abc")).toThrow(ArgError);
   });
+
+  it("rejects PR #0 (not a valid PR number)", () => {
+    expect(() => parsePrRef("owner/repo#0")).toThrow(ArgError);
+  });
 });
 
 describe("parseArgs", () => {
@@ -74,8 +78,22 @@ describe("parseArgs", () => {
 
   it("rejects a flag missing its value", () => {
     expect(() => parseArgs(["--pr"])).toThrow(ArgError);
+    expect(() => parseArgs(["--provider"])).toThrow(ArgError);
+    expect(() => parseArgs(["--model"])).toThrow(ArgError);
+    expect(() => parseArgs(["--out"])).toThrow(ArgError);
+    expect(() => parseArgs(["--max-wall-ms"])).toThrow(ArgError);
     expect(() => parseArgs(["--max-wall-ms", "not-a-number"])).toThrow(ArgError);
     expect(() => parseArgs(["--max-wall-ms", "-5"])).toThrow(ArgError);
+  });
+
+  it("rejects trailing-garbage integers instead of silently truncating them", () => {
+    expect(() => parseArgs(["--max-wall-ms", "12abc"])).toThrow(ArgError);
+    expect(() => parseArgs(["--max-wall-ms", "abc"])).toThrow(ArgError);
+    expect(() => parseArgs(["--max-wall-ms", "-5"])).toThrow(ArgError);
+  });
+
+  it("treats a value starting with '--' as a missing value, naming the starved flag", () => {
+    expect(() => parseArgs(["--pr", "--provider", "deepseek"])).toThrow(/--pr requires a value/);
   });
 });
 

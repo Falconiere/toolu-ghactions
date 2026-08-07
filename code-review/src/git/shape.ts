@@ -4,6 +4,7 @@
 // removed lines get `L---: `. Emits, per file, the set of new-file line numbers
 // present in the diff (context + additions) — the lines an inline comment can
 // anchor to. Line-for-line parity with the awk in shape-diff.sh.
+import { headerOperandPath } from "./path.js";
 
 /** Per-file anchorable line set: the new-file line numbers present in the diff. */
 export interface ShapedFile {
@@ -64,7 +65,9 @@ export function shapeDiff(rawDiff: string): ShapedDiff {
     if (line.startsWith(DIFF_GIT_PREFIX)) {
       out.push(line);
     } else if (line.startsWith(ADD_HEADER_PREFIX)) {
-      path = line.replace(/^\+\+\+ b\//, "").replace(/^\+\+\+ /, "");
+      // Decode git's C-quoting here so `files[].path` is the REAL path, matching
+      // `changed_files` and chunk.ts's segment paths (git/path.ts).
+      path = headerOperandPath(line.slice(ADD_HEADER_PREFIX.length));
       out.push(line);
     } else if (line.startsWith(DEL_HEADER_PREFIX)) {
       out.push(line);

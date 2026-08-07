@@ -157,8 +157,13 @@ export function formatVerdict(
  * that is an integrity failure — throw, never drop the marker.
  */
 function fitToSizeLimit(body: ReviewBody, marker: string, ledgerSummary: string): string {
+  // `ledgerRungs`' FIRST rung is `body` itself (its non-empty tuple type pins that),
+  // so the everything-included render IS the loop's first pass — rendering it before
+  // the loop would render the largest body twice on every single verdict. The seeds
+  // below are only what the compiler needs; the loop always overwrites both, and a
+  // body that somehow escaped it un-rendered fails loudly in assertMarkerLast.
   let current = body;
-  let rendered = renderBody(body, buildFindingsSection(body.findings));
+  let rendered = "";
   for (const rung of ledgerRungs(body, ledgerSummary)) {
     current = rung;
     rendered = renderBody(rung, buildFindingsSection(rung.findings));
@@ -191,10 +196,12 @@ function fitToSizeLimit(body: ReviewBody, marker: string, ledgerSummary: string)
 /**
  * The ladder's ledger rungs, largest first: the body as given, then with the
  * ledger's per-path rows dropped, then with the section gone. A body carrying no
- * ledger has exactly one rung — today's behavior, unchanged.
+ * ledger has exactly one rung — today's behavior, unchanged. The return type is a
+ * NON-EMPTY tuple headed by `body` itself, which is what lets {@link fitToSizeLimit}
+ * fold the everything-included render into the loop instead of computing it twice.
  */
-function ledgerRungs(body: ReviewBody, ledgerSummary: string): ReviewBody[] {
-  const rungs: ReviewBody[] = [body];
+function ledgerRungs(body: ReviewBody, ledgerSummary: string): [ReviewBody, ...ReviewBody[]] {
+  const rungs: [ReviewBody, ...ReviewBody[]] = [body];
   if (body.ledger === "") return rungs;
   if (ledgerSummary !== "" && ledgerSummary !== body.ledger) {
     rungs.push({ ...body, ledger: ledgerSummary });

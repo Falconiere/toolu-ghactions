@@ -212,7 +212,9 @@ export interface DiffInput {
    * carrier into `next_state`: a field not threaded here is dropped next round.
    */
   complete: boolean;
-  /** Root tree sha to record when `complete` is true (ignored otherwise). */
+  /** Root tree sha to record when `complete` is true (ignored otherwise). Absent on
+   *  a complete run means "could not resolve the head tree" — the prior round's
+   *  value is KEPT, never overwritten with nothing. */
   reviewed_tree?: string;
   /** This round's exception list: attempted-and-failed paths, threaded either way. */
   unreviewed_paths?: string[];
@@ -287,7 +289,14 @@ export function diffState(input: DiffInput): DiffResult {
       // run preserves the prior values, so the next round's incremental scope keys
       // off the last head that was FULLY reviewed, not a half-finished one.
       reviewed_sha: input.complete ? input.head_sha : input.prior?.reviewed_sha,
-      reviewed_tree: input.complete ? input.reviewed_tree : input.prior?.reviewed_tree,
+      // A complete round with NO tree supplied keeps the prior tree rather than
+      // erasing it: settle.ts omits `reviewed_tree` when head-tree resolution
+      // fails, and writing `undefined` there would kill tree-based incremental
+      // scoping for every later round. `reviewed_sha` cannot hit this case —
+      // `head_sha` is always supplied — so falling back mirrors it by construction.
+      reviewed_tree: input.complete
+        ? (input.reviewed_tree ?? input.prior?.reviewed_tree)
+        : input.prior?.reviewed_tree,
       // Exception lists and cluster identity are threaded straight from the caller
       // on every run, complete or not: diffState is the only carrier into next_state,
       // so whatever the caller computed this round is what survives to the next.

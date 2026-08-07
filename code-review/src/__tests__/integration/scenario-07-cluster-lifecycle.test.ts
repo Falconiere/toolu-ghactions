@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runReview } from "@/pipeline.js";
 import { git, writeFile } from "@/git/__tests__/helpers.js";
 import { extractFpMarker } from "@/review/fpmarker.js";
+import { fingerprint } from "@/state.js";
 import {
   baseInputs,
   cleanupRepos,
@@ -49,6 +50,26 @@ function repeated(skip: string[] = [], blockerOn?: string): ScriptedFinding[] {
       category: CATEGORY,
       text: TEXT,
     }));
+}
+
+/**
+ * `path:line` of the representative round 2 must promote to, derived independently:
+ * with the round-1 exemplar fixed, none of the surviving members carries the pinned
+ * fp, so `clusterFindings` pins the LOWEST member fp (lexicographic). Computed from
+ * the same real `fingerprint()` the pipeline stamps with — an assertion on identity,
+ * not on the promotion sentence's wording.
+ */
+function promotedLocation(fixedPath: string): string {
+  const byFp = new Map<string, string>();
+  for (let i = 0; i < MEMBERS; i++) {
+    const p = path(i);
+    if (p === fixedPath) continue;
+    byFp.set(fingerprint({ path: p, category: CATEGORY, text: TEXT }), p);
+  }
+  const lowest = [...byFp.keys()].sort()[0];
+  const promotedPath = lowest === undefined ? undefined : byFp.get(lowest);
+  if (promotedPath === undefined) throw new Error("fixture: no surviving member to promote");
+  return `${promotedPath}:1`; // every scripted finding is on line 1
 }
 
 /** GitHub's view of the thread round 1 opened, built from the REAL posted comment. */
@@ -110,7 +131,14 @@ describe("scenario 7 — cluster lifecycle (AC-15.7)", () => {
     expect(inlineComments(rec).length).toBe(1);
     const promotion = rec.replies.at(-1)?.body ?? "";
     expect(promotion).toContain(`**Exemplar fixed; ${MEMBERS - 1} member(s) remain.**`);
-    expect(promotion).toContain("representative promoted to");
+    // WHICH finding was promoted, by path:line identity — not just that the wording
+    // appeared. The round-1 exemplar is gone and no prior pin survives among the
+    // members, so review/cluster.ts falls to the lowest member fp; that rule is
+    // re-derived here from the real `fingerprint()` rather than read back out of
+    // the product, so a silent change of representative fails this test.
+    expect(promotion).toContain(
+      `representative promoted to \`${promotedLocation(exemplarPath)}\`.`,
+    );
     // GitHub would now show that reply on the thread; so does the next round.
     threads[0]?.replies?.push({ author: "toolu-bot", body: promotion });
 

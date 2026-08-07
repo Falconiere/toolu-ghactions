@@ -47,6 +47,14 @@ export interface ParsedFile {
   binary: boolean;
   preLines: string[];
   postLines: string[];
+  /** True when the pre-image's LAST line has no trailing newline in the real
+   *  file (git's `\ No newline at end of file` marker on the removed/context
+   *  side). Keeps replay byte-for-byte VERBATIM instead of adding a `\n` the
+   *  real file never had. */
+  preNoNewline: boolean;
+  /** Same as {@link preNoNewline}, for the post-image's last line (marker on
+   *  the added/context side). */
+  postNoNewline: boolean;
   /** GitHub's own per-file patch text, reused verbatim as the recording
    *  octokit's `listFiles` patch (possibly ""). */
   patch: string;
@@ -74,22 +82,52 @@ function replayStatus(file: PrFile): FileStatus {
   }
 }
 
-/** Parse one file's `patch` into pre/post line lists (`\ No newline...`
- *  markers dropped — they carry no content). `patch` is already hunk-only
- *  (GitHub never includes `diff --git`/`---`/`+++` headers in this field). */
-function parseHunks(patch: string): { preLines: string[]; postLines: string[] } {
+/** {@link parseHunks}'s result: the reconstructed lines plus whether either
+ *  side's LAST line lacks a trailing newline. */
+interface ParsedHunks {
+  preLines: string[];
+  postLines: string[];
+  preNoNewline: boolean;
+  postNoNewline: boolean;
+}
+
+/** Parse one file's `patch` into pre/post line lists. A `\ No newline at end
+ *  of file` marker is not content — it describes whichever line (removed,
+ *  added, or context) immediately precedes it in the patch text — so it is
+ *  folded into `preNoNewline`/`postNoNewline` rather than dropped outright:
+ *  dropping it would make {@link joinLines} append a `\n` the real file never
+ *  had, contradicting this module's VERBATIM-replay claim (see module doc).
+ *  `patch` is already hunk-only (GitHub never includes `diff --git`/`---`/
+ *  `+++` headers in this field). */
+function parseHunks(patch: string): ParsedHunks {
   const preLines: string[] = [];
   const postLines: string[] = [];
+  let preNoNewline = false;
+  let postNoNewline = false;
+  let lastSide: "pre" | "post" | "both" | null = null;
   for (const line of patch.split("\n")) {
-    if (line.startsWith("@@") || line.startsWith("\\")) continue;
-    if (line.startsWith("+")) postLines.push(line.slice(1));
-    else if (line.startsWith("-")) preLines.push(line.slice(1));
-    else if (line.startsWith(" ")) {
+    if (line.startsWith("@@")) {
+      lastSide = null;
+      continue;
+    }
+    if (line.startsWith("\\")) {
+      if (lastSide === "pre" || lastSide === "both") preNoNewline = true;
+      if (lastSide === "post" || lastSide === "both") postNoNewline = true;
+      continue;
+    }
+    if (line.startsWith("+")) {
+      postLines.push(line.slice(1));
+      lastSide = "post";
+    } else if (line.startsWith("-")) {
+      preLines.push(line.slice(1));
+      lastSide = "pre";
+    } else if (line.startsWith(" ")) {
       preLines.push(line.slice(1));
       postLines.push(line.slice(1));
+      lastSide = "both";
     }
   }
-  return { preLines, postLines };
+  return { preLines, postLines, preNoNewline, postNoNewline };
 }
 
 /** Parse one {@link PrFile} into a {@link ParsedFile}. Never throws: every
@@ -105,8 +143,18 @@ function parseFile(file: PrFile): ParsedFile {
       : null;
   const patch = file.patch ?? "";
   const binary = file.patch === undefined && status !== "renamed";
-  const { preLines, postLines } = parseHunks(patch);
-  return { path: file.filename, oldPath, status, binary, preLines, postLines, patch };
+  const { preLines, postLines, preNoNewline, postNoNewline } = parseHunks(patch);
+  return {
+    path: file.filename,
+    oldPath,
+    status,
+    binary,
+    preLines,
+    postLines,
+    preNoNewline,
+    postNoNewline,
+    patch,
+  };
 }
 
 /** Parse every fetched file into a {@link ParsedFile}. */
@@ -114,16 +162,20 @@ export function parseFiles(files: readonly PrFile[]): ParsedFile[] {
   return files.map(parseFile);
 }
 
-function joinLines(lines: readonly string[]): string {
-  return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
+/** `noTrailingNewline` honors the patch's `\ No newline at end of file`
+ *  marker — VERBATIM replay means never adding a `\n` the real file lacked. */
+function joinLines(lines: readonly string[], noTrailingNewline: boolean): string {
+  if (lines.length === 0) return "";
+  const joined = lines.join("\n");
+  return noTrailingNewline ? joined : `${joined}\n`;
 }
 
 function preContent(f: ParsedFile): string {
-  return f.binary ? BINARY_PLACEHOLDER : joinLines(f.preLines);
+  return f.binary ? BINARY_PLACEHOLDER : joinLines(f.preLines, f.preNoNewline);
 }
 
 function postContent(f: ParsedFile): string {
-  return f.binary ? `${BINARY_PLACEHOLDER}\0post\0` : joinLines(f.postLines);
+  return f.binary ? `${BINARY_PLACEHOLDER}\0post\0` : joinLines(f.postLines, f.postNoNewline);
 }
 
 /** A scratch repo built from replayed files: its dir, both commits' shas, and
