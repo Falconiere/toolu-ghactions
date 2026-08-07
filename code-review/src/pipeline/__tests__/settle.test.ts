@@ -17,7 +17,7 @@ import type { GithubContext, PipelineOctokit } from "@/pipeline/types.js";
 import type { StampedFinding } from "@/pipeline/reviewCall.js";
 import type { ActionInputs } from "@/inputs.js";
 import type { BlockableVerdict } from "@/review/gate.js";
-import type { ReviewState, HistoryEntry } from "@/state.js";
+import type { ReviewState, HistoryEntry, Finding as StoredFinding } from "@/state.js";
 import { fingerprint } from "@/state.js";
 
 /** ActionInputs with the review-memory knobs this suite drives, overridable. */
@@ -117,9 +117,9 @@ function history(n: number): HistoryEntry[] {
   }));
 }
 
-/** A round ledger over `reviewed` ∪ `unreviewed` paths, built the real way. */
-function ledgerOf(reviewed: string[], unreviewed: string[]) {
-  const paths = [...reviewed, ...unreviewed];
+/** A round ledger over `reviewed` ∪ `unreviewed` ∪ `carried` paths, built the real way. */
+function ledgerOf(reviewed: string[], unreviewed: string[], carried: string[] = []) {
+  const paths = [...reviewed, ...unreviewed, ...carried];
   return buildRoundLedger({
     changedFiles: paths,
     binaryFiles: [],
@@ -130,7 +130,7 @@ function ledgerOf(reviewed: string[], unreviewed: string[]) {
       ...reviewed.map((p): [string, CoverageEntry] => [p, { status: "reviewed" }]),
       ...unreviewed.map((p): [string, CoverageEntry] => [p, { status: "unreviewed" }]),
     ]),
-    carried: [],
+    carried,
   });
 }
 
@@ -144,12 +144,16 @@ function settle(opts: {
   reviewMemory?: boolean;
   /** The model's own verdict before settling (default "changes"). */
   resultVerdict?: "approved" | "changes";
+  /** Paths this round did NOT re-review — their prior findings carry forward. */
+  carried?: string[];
+  /** Marker findings, loosely typed exactly as a decoded marker delivers them. */
+  priorFindings?: StoredFinding[];
 }) {
-  const ledger = ledgerOf(opts.reviewed, opts.unreviewed);
+  const ledger = ledgerOf(opts.reviewed, opts.unreviewed, opts.carried ?? []);
   const prior: ReviewState = {
     schema: "toolu-review-state",
     version: 1,
-    findings: [],
+    findings: opts.priorFindings ?? [],
     history: history(opts.priorRounds),
   };
   const reduction = reduceFindings({ modelFindings: opts.findings, prior, ledger });
@@ -164,12 +168,12 @@ function settle(opts: {
     diff: {
       diff: "",
       files: [],
-      changed_files: [...opts.reviewed, ...opts.unreviewed],
+      changed_files: [...opts.reviewed, ...opts.unreviewed, ...(opts.carried ?? [])],
       binary_files: [],
       dropped_files: [],
       renames: [],
       total_lines: 0,
-      total_files: opts.reviewed.length + opts.unreviewed.length,
+      total_files: opts.reviewed.length + opts.unreviewed.length + (opts.carried?.length ?? 0),
       truncated: false,
       base_sha: "base123",
     },
@@ -318,6 +322,33 @@ describe("settleVerdict — the coverage degrade on its own", () => {
     });
     expect(settled.verdict).toBe("changes");
     expect(settled.validated.error).toBeUndefined();
+  });
+
+  it("a carried finding holds the prior round's `changes`, and validated.verdict agrees", () => {
+    // The rule that has no paired write left in settle.ts: every verdict rule moves
+    // the local only and `validated.verdict` is synced once before the return, so
+    // this pins that the ProviderResult the comment renders from cannot say
+    // "approved" while the returned verdict says "changes".
+    const priorFindings: StoredFinding[] = JSON.parse(
+      '[{"path":"src/carried.ts","line":4,"severity":"high","category":"correctness",' +
+        '"text":"the handle is never closed","fp":"fp-carried"}]',
+    );
+    const settled = settle({
+      findings: [],
+      reviewed: ["src/a.ts"],
+      unreviewed: [],
+      carried: ["src/carried.ts"],
+      priorFindings,
+      maxRounds: 0,
+      priorRounds: 1, // one completed round, and history() records it as "changes"
+      resultVerdict: "approved",
+    });
+
+    expect(settled.verdict).toBe("changes");
+    expect(settled.validated.verdict).toBe("changes");
+    // Coverage is COMPLETE (carried is not unreviewed/pending), so no degrade fired.
+    expect(settled.validated.error).toBeUndefined();
+    expect(settled.findings.map((f) => f.fp)).toEqual(["fp-carried"]);
   });
 
   it("never overwrites a provider's own error message with the synthesized one", () => {

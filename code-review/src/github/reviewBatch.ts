@@ -39,8 +39,11 @@ export interface PendingComment {
   comment: ReviewComment;
 }
 
+/** `typeof [] === "object"`, so arrays are excluded explicitly — an array thrown
+ *  as an error must fall through to the message check, never be probed for a
+ *  `.status` field it cannot meaningfully carry. */
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** True for the 422 the Reviews API returns on a comment it cannot resolve —

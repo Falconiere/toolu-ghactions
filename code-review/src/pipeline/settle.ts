@@ -86,6 +86,10 @@ export function settleVerdict(
     );
   }
   const validated: ProviderResult = { ...input.result, findings };
+  // `verdict` is the ONLY thing the rules below move; `validated.verdict` is written
+  // from it once, just before the return. Deliberately not paired per rule: a rule
+  // that updates one half and forgets the other is how the returned verdict and the
+  // ProviderResult the comment renders from come to disagree.
   let verdict = resolveVerdict(validated.verdict, findings.length);
   const removed = suppressed.length + scoped.dropped.length;
   if (verdict === "changes" && findings.length === 0 && removed > 0) {
@@ -94,7 +98,6 @@ export function settleVerdict(
     // model's request-changes would re-block on code that was already reviewed
     // or decisions a human already made.
     verdict = "approved";
-    validated.verdict = "approved";
   }
   // A CARRIED finding was not re-examined this round (its path was out of the tree
   // scope, collapsed, or unreviewable), so this round's approval speaks only for the
@@ -107,7 +110,6 @@ export function settleVerdict(
     hasCarried(findings, reduction)
   ) {
     verdict = "changes";
-    validated.verdict = "changes";
   }
 
   // MAX_ROUNDS surrender: on round N with only sub-blocker findings left, a
@@ -122,7 +124,6 @@ export function settleVerdict(
   let capNote = "";
   if (cap.capped) {
     verdict = "approved";
-    validated.verdict = "approved";
     capNote =
       `Round cap reached (MAX_ROUNDS=${input.inputs.maxRounds}): no blocker findings after ` +
       `${input.inputs.maxRounds} review rounds — verdict auto-approved; the findings below are advisory.`;
@@ -135,6 +136,10 @@ export function settleVerdict(
       `last review were not re-raised — comment \`@toolu review\` for a full re-review.`;
     capNote = capNote === "" ? note : `${capNote}\n\n${note}`;
   }
+  // The one place the settled verdict reaches the ProviderResult the comment body
+  // and the toolu.sh report are rendered from (pipeline/publish.ts:138). Every rule
+  // above moves `verdict` only, so no rule can leave the two disagreeing.
+  validated.verdict = verdict;
   return { validated, findings, suppressed, verdict, capNote, capped: cap.capped };
 }
 
@@ -160,7 +165,9 @@ function hasCarried(findings: StampedFinding[], reduction: Reduction): boolean {
  * would-be `approved` becomes `error` — the same observable behavior (label, badge,
  * FAIL_ON) as `mergeResults`'s failed-chunk rule, which stays untouched underneath.
  * The detail line is only synthesized when the result carries no error of its own,
- * so a real provider message is never overwritten.
+ * so a real provider message is never overwritten — that synthesis is this
+ * function's ONLY write to `validated`; the degraded verdict travels back as the
+ * return value, which `settleVerdict` alone commits to `validated.verdict`.
  */
 function degradeOnCoverage(
   validated: ProviderResult,
@@ -169,7 +176,6 @@ function degradeOnCoverage(
 ): ProviderResult["verdict"] {
   if (exceptions.complete || verdict !== "approved") return verdict;
   const count = exceptions.unreviewed.length + exceptions.pending.length;
-  validated.verdict = "error";
   if (validated.error === undefined || validated.error === "") {
     validated.error =
       `${count} file(s) were not reviewed this run (see Coverage below) — an approval ` +

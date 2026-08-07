@@ -82,7 +82,7 @@ inputs:
     required: false
     default: '1500'
   MAX_CHUNKS:
-    description: 'Maximum number of chunks (= model calls) per review, bounding cost on very large PRs. 0 (default) = unlimited. When set, files beyond the cap are recorded per-file as unreviewed in the coverage ledger (and the comment says so) instead of being reviewed.'
+    description: 'Maximum number of chunks (= model calls) per review, bounding cost on very large PRs. 0 (default, changed from 20 prior to @v7) = unlimited — pin MAX_CHUNKS: 20 to keep the old cap. When set, files beyond the cap are recorded per-file as unreviewed in the coverage ledger (and the comment says so) instead of being reviewed.'
     required: false
     default: '0'
   MAX_WALL_MS:
