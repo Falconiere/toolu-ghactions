@@ -14,9 +14,11 @@
 # shape is covered separately: the mirror bats test asserts the $/ hoist rewrite,
 # plus a one-off dispatch against the mirror repo before a Marketplace release.
 #
-# Runs on PRs touching the composite (dispatch is only possible once the file
-# is on the default branch, so the PR trigger is what makes it a PRE-merge gate)
-# and manually via: gh workflow run nested-uses-proof.yml
+# The PR trigger is a POST-merge regression guard on main's resolvability (the
+# job consumes @main, so it cannot exercise a PR branch's wiring); the PRE-merge
+# proof for a release branch requires the temporary ref edit documented above,
+# whose run URL goes in the PR. Also runs manually:
+#   gh workflow run nested-uses-proof.yml
 name: Nested uses proof (OQ-2)
 
 on:

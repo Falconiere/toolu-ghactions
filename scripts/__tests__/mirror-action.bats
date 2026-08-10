@@ -26,7 +26,7 @@ teardown() { common_teardown; }
     # breaks every Marketplace consumer at resolution time.
     grep -qF 'uses: $/run' "$out/action.yml"
     grep -qF 'uses: $/sanitize-sarif' "$out/action.yml"
-    ! grep -qE '^[[:space:]]*uses:[[:space:]]*\$/code-review/' "$out/action.yml"
+    ! grep -qE 'uses:[[:space:]]*\$/code-review/' "$out/action.yml"
 }
 
 @test "cloudflare-tunnel: root action.yml resolves scripts (../src dropped); subdirs kept" {
