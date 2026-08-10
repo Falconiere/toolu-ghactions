@@ -6,17 +6,17 @@
 # the review step is expected to no-op/skip on workflow_dispatch — that part is
 # runtime, not resolution, and is not what this gate measures.
 #
-# Run manually per release branch: gh workflow run nested-uses-proof.yml
-#   -f ref=<branch-or-sha>
+# The consumed ref is HARDCODED in the `uses:` line below (`uses:` cannot take
+# expressions) — edit it per release branch before dispatching, and verify the
+# run's log shows the composite fetched at the ref you expect. The hoisted-mirror
+# shape is covered separately: the mirror bats test asserts the $/ hoist rewrite,
+# plus a one-off dispatch against the mirror repo before a Marketplace release.
+#
+# Run manually: gh workflow run nested-uses-proof.yml
 name: Nested uses proof (OQ-2)
 
 on:
   workflow_dispatch:
-    inputs:
-      ref:
-        description: 'Branch or SHA of this repo to consume the composite at'
-        required: true
-        default: 'feat/code-review-reliability'
 
 permissions:
   contents: read

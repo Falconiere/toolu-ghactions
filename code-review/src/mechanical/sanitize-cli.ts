@@ -1,7 +1,9 @@
 // mechanical/sanitize-cli.ts — nested node24 action entry, bundled to
 // sanitize-sarif/index.cjs (S8). Node-type actions receive NO positional argv
 // (`runs.args` is docker-only), so inputs ride as env: INPUT_SRC_DIR / INPUT_DEST_DIR
-// (GitHub's INPUT_<NAME> mapping of the action's declared `src-dir`/`dest-dir` inputs).
+// (GitHub's INPUT_<NAME> mapping of the action's declared `SRC_DIR`/`DEST_DIR` inputs —
+// underscores are REQUIRED in the input names: the runner only replaces spaces, so a
+// kebab-case `src-dir` would arrive as INPUT_SRC-DIR and this CLI would read nothing).
 // Copies every `*.sarif` from src to dest, fixing regions in the COPIES via
 // sanitizeSarif — originals are left untouched for mechanical/gather.ts's LLM-triage
 // read. No @actions/core: plain workflow-command writes keep the future bundle lean,

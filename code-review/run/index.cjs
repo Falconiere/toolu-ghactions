@@ -32720,12 +32720,16 @@ var LOADING_GIF_URL = "https://raw.githubusercontent.com/falconiere/toolu-ghacti
 function resolveChecklistPath() {
   const fallback = "/action/prompts/review-checklist.txt";
   const here = typeof __dirname !== "undefined" ? __dirname : "";
+  const actionPath = process.env["GITHUB_ACTION_PATH"] ?? "";
   const candidates = [
-    (0, import_node_path.join)(process.env["GITHUB_ACTION_PATH"] ?? "", "prompts/review-checklist.txt"),
+    ...here === "" ? [] : [(0, import_node_path.join)(here, "../prompts/review-checklist.txt")],
+    ...actionPath === "" ? [] : [
+      (0, import_node_path.join)(actionPath, "../prompts/review-checklist.txt"),
+      (0, import_node_path.join)(actionPath, "prompts/review-checklist.txt")
+    ],
     fallback,
     "prompts/review-checklist.txt",
-    "code-review/prompts/review-checklist.txt",
-    (0, import_node_path.join)(here, "../prompts/review-checklist.txt")
+    "code-review/prompts/review-checklist.txt"
   ];
   return candidates.find((p) => (0, import_node_fs.existsSync)(p)) ?? fallback;
 }

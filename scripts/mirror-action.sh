@@ -46,6 +46,16 @@ layout_code_review() {
   cp -R "$REPO_ROOT/code-review/." "$dest/"
   sed 's#uses: \$/code-review/#uses: $/#g' \
     "$REPO_ROOT/code-review/action.yml" >"$dest/action.yml"
+  # sed exits 0 whether or not it matched — assert the rewrite actually landed,
+  # because a mirror published with an unrewritten `$/code-review/` reference
+  # resolves to nothing at the mirror root and breaks every consumer.
+  grep -qF 'uses: $/run' "$dest/action.yml" \
+    || die "code-review hoist rewrite failed: no 'uses: \$/run' in mirror action.yml"
+  grep -qF 'uses: $/sanitize-sarif' "$dest/action.yml" \
+    || die "code-review hoist rewrite failed: no 'uses: \$/sanitize-sarif' in mirror action.yml"
+  grep -qF '$/code-review/' "$dest/action.yml" \
+    && die "code-review hoist rewrite incomplete: '\$/code-review/' still present in mirror action.yml"
+  return 0
 }
 
 # Copy the cloudflare-tunnel composite sub-actions and synthesize a root

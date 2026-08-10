@@ -7,7 +7,7 @@ load helpers
 setup() { common_setup; }
 teardown() { common_teardown; }
 
-@test "code-review: mirror root has the node24 action tree + dist bundle + LICENSE" {
+@test "code-review: mirror root has the nested node24 actions + hoisted \$/ rewrite + LICENSE" {
     ACTION=code-review run bash "$SCRIPT" "$WORK"
     [ "$status" -eq 0 ]
     out=$(checkout_mirror)
@@ -15,11 +15,18 @@ teardown() { common_teardown; }
     [ -d "$out/src" ]
     [ -d "$out/prompts" ]
     [ -f "$out/LICENSE" ]
-    # Composite action: action.yml orchestrates SAST steps + the committed dist/index.cjs
-    # node review, which the mirror copies verbatim (no image rewrite).
-    [ -f "$out/dist/index.cjs" ]
+    # Nested node24 actions ride along with their colocated bundles.
+    [ -f "$out/run/index.cjs" ]
+    [ -f "$out/run/action.yml" ]
+    [ -f "$out/sanitize-sarif/index.cjs" ]
+    [ -f "$out/sanitize-sarif/action.yml" ]
     grep -qF "using: 'composite'" "$out/action.yml"
-    grep -qF 'dist/index.cjs' "$out/action.yml"
+    # Hoisted root: the composite's $/code-review/ prefixes must be rewritten to
+    # $/ — an unrewritten reference resolves to nothing at the mirror root and
+    # breaks every Marketplace consumer at resolution time.
+    grep -qF 'uses: $/run' "$out/action.yml"
+    grep -qF 'uses: $/sanitize-sarif' "$out/action.yml"
+    ! grep -qF '$/code-review/' "$out/action.yml"
 }
 
 @test "cloudflare-tunnel: root action.yml resolves scripts (../src dropped); subdirs kept" {
