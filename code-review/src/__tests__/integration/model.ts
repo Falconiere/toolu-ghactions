@@ -1,8 +1,12 @@
 // model.ts — the scripted model provider the integration scenarios inject as
-// `ReviewDeps.fetch`. It answers real OpenRouter chat-completions JSON on the wire
+// `ReviewDeps.fetch`. It answers real OpenRouter chat-completions traffic on the wire
 // (no module is mocked), records every outgoing envelope for assertions, and also
 // sinks the toolu.sh review-run POST — the pipeline hands the SAME `fetch` to
 // report/post.ts, so the two are routed apart by URL.
+//
+// Two wire shapes, routed on `body.stream` (see sse.ts): the review call streams, so it
+// gets complete chat-completion chunk frames; the cartographer's generateObject call
+// does not, so it gets the plain JSON body. Scripted CONTENT is identical either way.
 //
 // Four answers are scriptable per package call, because the pipeline treats them
 // very differently (spec §Layer 2): a verdict payload, a `schema` failure
@@ -10,6 +14,8 @@
 // failure (a non-retryable HTTP status → APICallError → never bisects), and a
 // `timeout` (the request never answers until reviewWithModel's own per-attempt
 // AbortController fires → never bisects, but resumable).
+
+import { contentFrames, sseResponse, wantsStream } from "./sse.js";
 
 const JSON_HEADERS = { "content-type": "application/json" };
 
@@ -74,15 +80,25 @@ export interface ModelServer {
   reports: string[];
 }
 
-/** An OpenRouter chat-completions response carrying `value` as JSON content. */
-function chatResponse(content: string): Response {
+/**
+ * An OpenRouter chat-completions response carrying `content`, in the shape the request
+ * asked for: SSE chunk frames when it streamed (the review call), one JSON body
+ * otherwise (the cartographer). `finishReason` is the model's stop reason — "stop"
+ * everywhere except a scripted truncation.
+ */
+function chatResponse(
+  content: string,
+  init: RequestInit | undefined,
+  finishReason = "stop",
+): Response {
+  if (wantsStream(init)) return sseResponse(contentFrames(content, finishReason));
   return new Response(
     JSON.stringify({
       id: "gen-integration",
       object: "chat.completion",
       created: 1_781_827_528,
       model: "deepseek/deepseek-v4-flash",
-      choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content } }],
+      choices: [{ index: 0, finish_reason: finishReason, message: { role: "assistant", content } }],
       usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
     }),
     { status: 200, headers: JSON_HEADERS },
@@ -153,7 +169,9 @@ export function modelServer(script: ModelScript = {}): ModelServer {
       user: messages.find((m) => m.role === "user")?.content ?? "",
     };
     calls.push(call);
-    if (isCartographer(call)) return chatResponse(JSON.stringify(script.brief ?? { no: "brief" }));
+    if (isCartographer(call)) {
+      return chatResponse(JSON.stringify(script.brief ?? { no: "brief" }), init);
+    }
 
     const id = diffPaths(call)[0] ?? `call-${index}`;
     script.events?.push(`start ${id}`);
@@ -166,13 +184,13 @@ export function modelServer(script: ModelScript = {}): ModelServer {
       // bisects); a timeout is no answer at all until the caller's own deadline aborts.
       if (reply.fail === "timeout") return hangUntilAborted(signalOf(url, init));
       return reply.fail === "schema"
-        ? chatResponse("this is not JSON at all")
+        ? chatResponse("this is not JSON at all", init)
         : new Response('{"error":{"message":"upstream refused"}}', {
             status: 400,
             headers: JSON_HEADERS,
           });
     }
-    return chatResponse(JSON.stringify(reply.ok));
+    return chatResponse(JSON.stringify(reply.ok), init);
   };
   return { fetch: impl, calls, reports };
 }

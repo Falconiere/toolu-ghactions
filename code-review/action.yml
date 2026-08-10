@@ -24,7 +24,7 @@ inputs:
     description: 'API key for the chosen provider (Authorization: Bearer). Required. Prefer passing via a step-level env: block for better secret hygiene.'
     required: true
   MAX_TOKENS:
-    description: 'Max completion tokens per request. Always sent — omitting it makes the provider reserve the model''s full output capacity against your credit budget. A truncated (finish_reason "length") chunk is retried with a doubled budget up to 32768.'
+    description: 'Max completion tokens per request. Always sent — omitting it makes the provider reserve the model''s full output capacity against your credit budget. A truncated (finish_reason "length") chunk is retried with a DOUBLED budget, up to 4 times and never past the 131072 ceiling (8192 -> 16384 -> 32768 -> 65536 -> 131072); those escalations are counted separately from the hang/timeout retries, so neither eats the other. When the budget still runs out, the findings completed before the cut are kept (a partial review) instead of the chunk being lost, and the comment says whether raising this value or lowering MAX_CHUNK_LINES is the fix.'
     required: false
     default: '8192'
   MIN_CONFIDENCE:
@@ -78,7 +78,7 @@ inputs:
     required: false
     default: '0'
   MAX_CHUNK_LINES:
-    description: 'Per-chunk diff-line budget. When the diff exceeds this, it is split into chunks of whole files (≤ this many primed lines each) reviewed in separate model calls and merged — so large PRs no longer overwhelm one call. 0 = never chunk (single call). Default 1500.'
+    description: 'Per-chunk diff-line budget. When the diff exceeds this, it is split into chunks of whole files (≤ this many primed lines each) reviewed in separate model calls and merged — so large PRs no longer overwhelm one call. 0 = never chunk (single call). Default 1500. LOWER THIS when a review reports its output budget at the ceiling (MAX_TOKENS cannot go past 131072): smaller chunks need less output per call, which is the only remaining fix once the budget escalation has run out of room.'
     required: false
     default: '1500'
   MAX_CHUNKS:
@@ -209,22 +209,46 @@ runs:
       shell: bash
       run: |
         # Exclude build output / deps — they are generated, not reviewed (mirrors the
-        # review's own noise filter), and a bundled dist would otherwise dominate the scan.
+        # review's own noise filter), and bundled output must not dominate the scan.
         command -v opengrep >/dev/null \
           && opengrep scan --sarif --output "$RUNNER_TEMP/opengrep.sarif" \
                --config "${{ inputs.SAST_RULES }}" \
-               --exclude dist --exclude build --exclude node_modules . \
+               --exclude run --exclude sanitize-sarif --exclude build --exclude node_modules . \
           || true
+    # Copies *.sarif into an upload-only directory, clamping the sub-1 region
+    # values gitleaks emits for path-anchored findings (Code Scanning rejects the
+    # whole file otherwise). Copies, not in-place: the AI-review step's triage
+    # reads the ORIGINALS from $RUNNER_TEMP and deliberately drops line-0 results
+    # — sanitizing in place would push them into the LLM's context instead.
+    #
+    # `$/` is the self-repository syntax (GA 2026-07-30): it resolves against
+    # THIS action's repository at the consumer's pinned ref — a relative `./`
+    # would resolve against the CONSUMER's workspace and break every consumer.
+    # Requires Actions runner >= 2.336.0. The Marketplace mirror hoists this
+    # directory to the mirror root, so mirror-action.sh rewrites `$/code-review/`
+    # to `$/` when publishing.
+    - name: Sanitize SARIF (clamp sub-1 regions)
+      if: ${{ always() }}
+      continue-on-error: true   # best-effort like the scanners — never break the review
+      uses: $/code-review/sanitize-sarif
+      with:
+        SRC_DIR: ${{ runner.temp }}
+        DEST_DIR: ${{ runner.temp }}/toolu-sarif-upload
     - name: Upload SARIF to Code Scanning
       if: ${{ always() }}
       continue-on-error: true   # fork PRs / missing `security-events: write` → skip; the review still runs
       uses: github/codeql-action/upload-sarif@v4
       with:
-        sarif_file: ${{ runner.temp }}
+        # The sanitized COPIES only. Never point this back at runner.temp: the
+        # upload scans directories recursively and would re-find the unsanitized
+        # originals, resurrecting the exact rejection the sanitizer exists to fix.
+        sarif_file: ${{ runner.temp }}/toolu-sarif-upload
+    # node-type nested action (`using: node24`): the runner supplies its bundled
+    # Node, so this works on self-hosted runners with no node on PATH. Same `$/`
+    # resolution + runner-version note as the sanitize step above.
     - name: AI review (LLM judgment — triages the deterministic findings)
       id: review
-      shell: bash
-      run: node "$GITHUB_ACTION_PATH/dist/index.cjs"
+      uses: $/code-review/run
       env:
         # The node action reads inputs via @actions/core.getInput (process.env.INPUT_*).
         # Composite run-steps do NOT auto-expose inputs, so map each one explicitly.

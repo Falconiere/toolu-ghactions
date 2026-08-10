@@ -14,6 +14,7 @@ import type { DismissedFinding, PartitionedFindings, ReportedFinding } from "@/r
 import { buildPayload } from "@/report/payload.js";
 import type { BuildPayloadInput, ReviewRunPayload } from "@/report/payload.js";
 import type { ReportCategory } from "@/report/categories.js";
+import { replayCompletion } from "@/__tests__/integration/sse.js";
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = join(TEST_DIR, "fixtures", "review-run.payload.json");
@@ -28,13 +29,11 @@ const DEEPSEEK_SUCCESS_PATH = join(
 );
 const DEEPSEEK_SUCCESS: unknown = JSON.parse(readFileSync(DEEPSEEK_SUCCESS_PATH, "utf8"));
 
-/** A fetch that always replays one recorded response — no network, no code mocks. */
+/** A fetch that always replays one recorded response — no network, no code mocks. The
+ *  review call streams, so the recorded body is re-served as SSE chunk frames; the
+ *  content, and therefore the payload built from it, is unchanged. */
 function replayFetch(body: unknown): typeof fetch {
-  return async () =>
-    new Response(JSON.stringify(body), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
+  return async (_url, init) => replayCompletion(body, init);
 }
 
 /** Reproduces exactly what `fixtures/README.md` documents: parse the recorded
@@ -58,7 +57,7 @@ async function buildFixturePayload(): Promise<ReviewRunPayload> {
     },
   );
   const changedLinesByPath = new Map<string, number[]>([["src/math.ts", [1]]]);
-  const anchored = validateFindings(result.findings, changedLinesByPath, "medium");
+  const { findings: anchored } = validateFindings(result.findings, changedLinesByPath, "medium");
   const stamped = anchored.map((f) => ({ ...f, fp: fingerprint(f) }));
 
   const partitioned = partitionFindings({

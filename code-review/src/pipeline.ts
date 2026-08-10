@@ -148,6 +148,7 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     baseBranch,
     result: reviewed.result,
     stamped: reviewed.stamped,
+    selfNegating: reviewed.selfNegating,
     mechanical: reviewed.mechanical,
     ledger: reviewed.ledger,
     exceptionPaths: treeScope?.exceptions ?? new Set<string>(),

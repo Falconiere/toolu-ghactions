@@ -92,6 +92,10 @@ export interface ReviewCallInput {
 export interface ReviewCallOutput {
   result: ProviderResult;
   stamped: StampedFinding[];
+  /** Count of findings `validateFindings` dropped as self-negating ("No issue"
+   *  chatter) — carried to `PublishInput` and on into `settleVerdict`'s `removed`
+   *  (pipeline/settle.ts), so an all-junk review still flips to "approved". */
+  selfNegating: number;
   mechanical: MechanicalFinding[];
   ledger: CoverageLedger;
   brief: Brief | null;
@@ -164,6 +168,7 @@ export async function reviewAndValidate(input: ReviewCallInput): Promise<ReviewC
     return {
       result: { verdict: "approved", findings: [] },
       stamped: [],
+      selfNegating: 0,
       mechanical,
       ledger: roundLedger(input, distillation, new Map()),
       brief: null,
@@ -214,8 +219,15 @@ export async function reviewAndValidate(input: ReviewCallInput): Promise<ReviewC
   // Findings are validated against the SHRUNK diff: a finding on a path the model
   // never saw (a collapsed pattern member, a dropped stratum) is a hallucination
   // by construction — pattern findings are reported once, on the exemplar.
-  const stamped = validate(result, distillation.review_diff, inputs);
-  return { result, stamped, mechanical, ledger: roundLedger(input, distillation, coverage), brief };
+  const { stamped, selfNegating } = validate(result, distillation.review_diff, inputs);
+  return {
+    result,
+    stamped,
+    selfNegating,
+    mechanical,
+    ledger: roundLedger(input, distillation, coverage),
+    brief,
+  };
 }
 
 /** This round's coverage ledger: Layer 0's strata, overridden by Layer 2's per-path
@@ -255,8 +267,14 @@ function rulesPathGlobs(inputs: ActionInputs): string[] {
   return [...RULES_PATH_GLOBS, ...splitGlobs(inputs.rulesGlob)];
 }
 
-/** Validate findings against the diff's changed lines and stamp fingerprints. */
-function validate(result: ProviderResult, diff: DiffData, inputs: ActionInputs): StampedFinding[] {
+/** Validate findings against the diff's changed lines and stamp fingerprints;
+ *  also surfaces the self-negation drop count for {@link reviewAndValidate} to
+ *  carry forward (settleVerdict's `removed` — see {@link ReviewCallOutput}). */
+function validate(
+  result: ProviderResult,
+  diff: DiffData,
+  inputs: ActionInputs,
+): { stamped: StampedFinding[]; selfNegating: number } {
   const changedLinesByPath = new Map<string, number[]>(
     diff.files.map((f) => [f.path, f.changed_lines]),
   );
@@ -272,5 +290,8 @@ function validate(result: ProviderResult, diff: DiffData, inputs: ActionInputs):
     inputs.minConfidence,
     lineTextByPath,
   );
-  return anchored.map((f) => ({ ...f, fp: fingerprint(f) }));
+  return {
+    stamped: anchored.findings.map((f) => ({ ...f, fp: fingerprint(f) })),
+    selfNegating: anchored.selfNegating,
+  };
 }

@@ -148,6 +148,8 @@ function settle(opts: {
   carried?: string[];
   /** Marker findings, loosely typed exactly as a decoded marker delivers them. */
   priorFindings?: StoredFinding[];
+  /** Count `validateFindings` dropped as self-negating (default 0). */
+  selfNegating?: number;
 }) {
   const ledger = ledgerOf(opts.reviewed, opts.unreviewed, opts.carried ?? []);
   const prior: ReviewState = {
@@ -179,6 +181,7 @@ function settle(opts: {
     },
     result: { verdict: opts.resultVerdict ?? "changes", findings: opts.findings },
     stamped: opts.findings,
+    selfNegating: opts.selfNegating ?? 0,
     priorThreads: [],
     prior,
     stickyId: undefined,
@@ -379,6 +382,7 @@ describe("settleVerdict — the coverage degrade on its own", () => {
       },
       result: { verdict: "approved", findings: [], error: "1/2 chunks failed — upstream refused" },
       stamped: [],
+      selfNegating: 0,
       priorThreads: [],
       prior,
       stickyId: undefined,
@@ -397,5 +401,44 @@ describe("settleVerdict — the coverage degrade on its own", () => {
     const settled = settleVerdict(input, reduction, ledgerExceptions(ledger));
     expect(settled.verdict).toBe("error");
     expect(settled.validated.error).toBe("1/2 chunks failed — upstream refused");
+  });
+});
+
+describe("settleVerdict — the self-negation flip (AC-8)", () => {
+  it("an all-junk review (every finding dropped as self-negating) settles approved", () => {
+    // validateFindings already dropped every finding as self-negating before this
+    // round ever reaches settleVerdict — `findings` here is empty and `selfNegating`
+    // carries the count, exactly like reviewCall.ts → PublishInput plumbs it.
+    const settled = settle({
+      findings: [],
+      reviewed: ["src/a.ts"],
+      unreviewed: [],
+      maxRounds: 0,
+      priorRounds: 0,
+      resultVerdict: "changes",
+      selfNegating: 3,
+    });
+
+    expect(settled.verdict).toBe("approved");
+    expect(settled.validated.verdict).toBe("approved");
+    expect(settled.validated.error).toBeUndefined();
+  });
+
+  it("the self-negation flip's approval still degrades to error over incomplete coverage", () => {
+    // The flip (this rule) and the AC-13 degrade are independent: flipping to
+    // "approved" over self-negating noise does not exempt the round from having
+    // to have actually READ every changed file.
+    const settled = settle({
+      findings: [],
+      reviewed: ["src/a.ts"],
+      unreviewed: ["src/b.ts"],
+      maxRounds: 0,
+      priorRounds: 0,
+      resultVerdict: "changes",
+      selfNegating: 2,
+    });
+
+    expect(settled.verdict).toBe("error");
+    expect(settled.validated.error).toContain("1 file(s) were not reviewed this run");
   });
 });

@@ -135,6 +135,7 @@ function basePublishInput(
     },
     result: { verdict: "approved", findings: [] },
     stamped: [],
+    selfNegating: 0,
     priorThreads: [thread({ fp: "fp-dropped", threadId: "T_live" })],
     prior: null,
     stickyId: undefined,

@@ -65,11 +65,16 @@ The available review dimensions are:
 ## Noise control (follow exactly)
 
 - Report ONLY findings you are HIGH-confidence are real problems in THIS diff. If
-  in doubt, omit it — precision over recall.
+  you are not certain an issue is real, do not flag it — precision over recall;
+  false positives erode trust.
 - No style, formatting, or naming preferences.
 - No general advice ("consider adding error handling"). A finding must name a
   specific failure at a specific line.
 - No findings on code outside this diff.
+- Findings are DEFECTS ONLY. NEVER emit a finding whose conclusion is that there
+  is no problem ("No issue", "No violation", "This is acceptable") — a passed
+  check emits NOTHING, not a finding announcing it.
+- Never walk a file line-by-line; report only lines with a real defect.
 - The diff is line-primed. `Lnnn:` marks an added or unchanged line that EXISTS in
   the resulting code at line nnn — cite those exact numbers. `L---:` marks a
   REMOVED line: it is deleted and is NOT present in the result. Never raise a

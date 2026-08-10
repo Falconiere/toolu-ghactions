@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { validateFindings } from "@/review/validate.js";
 import type { Finding } from "@/llm/schema.js";
 
@@ -14,7 +14,7 @@ describe("validateFindings", () => {
       { path: "src/a.ts", line: 99, severity: "high", text: "phantom line", confidence: "high" },
       { path: "src/a.ts", line: 10, severity: "high", text: "real line", confidence: "high" },
     ];
-    const kept = validateFindings(findings, changed, "high");
+    const { findings: kept } = validateFindings(findings, changed, "high");
     expect(kept).toHaveLength(1);
     expect(kept[0]?.text).toBe("real line");
   });
@@ -24,7 +24,7 @@ describe("validateFindings", () => {
       { path: "src/a.ts", line: 10, severity: "blocker", text: "blocker no conf" },
       { path: "src/a.ts", line: 11, severity: "high", text: "high low conf", confidence: "medium" },
     ];
-    const kept = validateFindings(findings, changed, "high");
+    const { findings: kept } = validateFindings(findings, changed, "high");
     expect(kept.map((f) => f.text)).toEqual(["blocker no conf", "high low conf"]);
   });
 
@@ -38,9 +38,9 @@ describe("validateFindings", () => {
         confidence: "medium",
       },
     ];
-    expect(validateFindings(findings, changed, "high")).toHaveLength(0);
+    expect(validateFindings(findings, changed, "high").findings).toHaveLength(0);
     // ...but kept when the floor is lowered to medium.
-    expect(validateFindings(findings, changed, "medium")).toHaveLength(1);
+    expect(validateFindings(findings, changed, "medium").findings).toHaveLength(1);
   });
 
   it("strips a suggestion whose span runs outside the diff, keeping the finding", () => {
@@ -56,7 +56,7 @@ describe("validateFindings", () => {
         suggestion: "do not apply me",
       },
     ];
-    const kept = validateFindings(findings, changed, "high");
+    const { findings: kept } = validateFindings(findings, changed, "high");
     expect(kept).toHaveLength(1);
     expect(kept[0]?.suggestion).toBeUndefined();
     expect(kept[0]?.text).toBe("spans out of diff");
@@ -74,7 +74,7 @@ describe("validateFindings", () => {
         suggestion: "safe patch",
       },
     ];
-    const kept = validateFindings(findings, changed, "high");
+    const { findings: kept } = validateFindings(findings, changed, "high");
     expect(kept[0]?.suggestion).toBe("safe patch");
   });
 
@@ -84,7 +84,7 @@ describe("validateFindings", () => {
       // Same path/line/normalized-text → duplicate; higher severity must win.
       { path: "src/b.ts", line: 5, severity: "blocker", text: "same bug here", confidence: "high" },
     ];
-    const kept = validateFindings(findings, changed, "high");
+    const { findings: kept } = validateFindings(findings, changed, "high");
     expect(kept).toHaveLength(1);
     expect(kept[0]?.severity).toBe("blocker");
   });
@@ -114,7 +114,7 @@ describe("validateFindings", () => {
         text: "MERGE_STRATEGY still has a default value defined.",
       },
     ];
-    expect(validateFindings(findings, changed, "high", lineText)).toHaveLength(0);
+    expect(validateFindings(findings, changed, "high", lineText).findings).toHaveLength(0);
   });
 
   it("keeps an LLM finding whose quoted_line matches the cited line (substring tolerated)", () => {
@@ -128,7 +128,7 @@ describe("validateFindings", () => {
         text: "Real issue on the actual new line.",
       },
     ];
-    expect(validateFindings(findings, changed, "high", lineText)).toHaveLength(1);
+    expect(validateFindings(findings, changed, "high", lineText).findings).toHaveLength(1);
   });
 
   it("skips the quote check when no line text is supplied (backward compatible)", () => {
@@ -142,7 +142,7 @@ describe("validateFindings", () => {
         text: "No line text → cannot verify, keep.",
       },
     ];
-    expect(validateFindings(findings, changed, "high")).toHaveLength(1);
+    expect(validateFindings(findings, changed, "high").findings).toHaveLength(1);
   });
 
   it("drops an LLM finding that quotes non-empty text on a blank cited line", () => {
@@ -157,7 +157,7 @@ describe("validateFindings", () => {
         text: "Hallucinated quote on an empty line.",
       },
     ];
-    expect(validateFindings(findings, changed, "high", blank)).toHaveLength(0);
+    expect(validateFindings(findings, changed, "high", blank).findings).toHaveLength(0);
   });
 
   it("exempts mechanical-scanner findings from the quote check", () => {
@@ -172,6 +172,67 @@ describe("validateFindings", () => {
         text: "Secret detected.",
       },
     ];
-    expect(validateFindings(findings, changed, "high", lineText)).toHaveLength(1);
+    expect(validateFindings(findings, changed, "high", lineText).findings).toHaveLength(1);
+  });
+
+  // ── Self-negation (AC-2, rev-5 rule) ──────────────────────────────────────
+  // The verbatim actacanvas PR #6 junk texts, plus a negation-first variant, must
+  // be dropped; adversarial near-misses and concede-then-accuse findings survive.
+  // Every case is anchored to src/a.ts:10 (a real changed line) and high
+  // confidence/severity, so ONLY the self-negation filter can be what drops it.
+  function junkFinding(text: string): Finding {
+    return { path: "src/a.ts", line: 10, severity: "high", confidence: "high", text };
+  }
+
+  const DROP_TEXTS = [
+    "The comment is accurate. No issue.",
+    "No issue.",
+    "This is acceptable. No violation.",
+    "Not a real issue.",
+    // Negation-first: the any-sentence rule must catch it even before the excuse.
+    "No issue. The comment is accurate.",
+  ];
+
+  it.each(DROP_TEXTS)("drops the verbatim PR #6 junk finding: %j", (text) => {
+    const { findings: kept, selfNegating } = validateFindings([junkFinding(text)], changed, "high");
+    expect(kept).toHaveLength(0);
+    expect(selfNegating).toBe(1);
+  });
+
+  it("keeps a real finding whose sentence merely CONTAINS a negation phrase, not IS one", () => {
+    const findings: Finding[] = [
+      junkFinding("The retry never fires, so the timeout does not work as intended."),
+      junkFinding("Clamping to 0 here is not acceptable for negative counts."),
+    ];
+    const { findings: kept, selfNegating } = validateFindings(findings, changed, "high");
+    expect(kept.map((f) => f.text)).toEqual(findings.map((f) => f.text));
+    expect(selfNegating).toBe(0);
+  });
+
+  it("keeps a concede-then-accuse finding: 'fine'/'acceptable' only self-negate in FINAL position", () => {
+    const findings: Finding[] = [
+      junkFinding("This is fine. The real bug is the missing await on line 12."),
+    ];
+    const { findings: kept, selfNegating } = validateFindings(findings, changed, "high");
+    expect(kept).toHaveLength(1);
+    expect(selfNegating).toBe(0);
+  });
+
+  it("still drops when the negation-phrase sentence is not the first one", () => {
+    // Any-sentence matching: the excuse can lead OR follow the negation.
+    const { findings: kept, selfNegating } = validateFindings(
+      [junkFinding("Looked at this closely. No violation.")],
+      changed,
+      "high",
+    );
+    expect(kept).toHaveLength(0);
+    expect(selfNegating).toBe(1);
+  });
+
+  it("logs the drop count once, matching the pipeline's 'Dropped N …' convention", () => {
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    validateFindings([junkFinding("No issue."), junkFinding("No violation.")], changed, "high");
+    expect(write).toHaveBeenCalledWith("  Dropped 2 self-negating finding(s)\n");
+    write.mockRestore();
   });
 });

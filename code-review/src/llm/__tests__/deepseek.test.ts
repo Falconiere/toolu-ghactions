@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { reviewWithModel } from "@/llm/reviewWithModel.js";
 import type { Envelope } from "@/prompt.js";
+import { replayCompletion } from "@/__tests__/integration/sse.js";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 const DEEPSEEK_SUCCESS = JSON.parse(readFileSync(join(FIXTURES, "deepseek-success.json"), "utf8"));
@@ -28,17 +29,13 @@ interface Captured {
 }
 
 /** A fetch that records the outgoing request URL + body, then replays the recorded
- *  native DeepSeek response fixture. */
+ *  native DeepSeek response fixture — as SSE chunk frames, since the review call
+ *  streams; the recorded content is unchanged. */
 function capturingFetch(captured: Captured): typeof fetch {
   const impl: typeof fetch = (input, init) => {
     captured.url = input instanceof Request ? input.url : String(input);
     captured.body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
-    return Promise.resolve(
-      new Response(JSON.stringify(DEEPSEEK_SUCCESS), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    return Promise.resolve(replayCompletion(DEEPSEEK_SUCCESS, init));
   };
   return impl;
 }

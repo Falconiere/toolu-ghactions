@@ -35263,6 +35263,39 @@ function formatDataStreamPart(type, value) {
 `;
 }
 var NEWLINE = "\n".charCodeAt(0);
+function isDeepEqualData(obj1, obj2) {
+  if (obj1 === obj2)
+    return true;
+  if (obj1 == null || obj2 == null)
+    return false;
+  if (typeof obj1 !== "object" && typeof obj2 !== "object")
+    return obj1 === obj2;
+  if (obj1.constructor !== obj2.constructor)
+    return false;
+  if (obj1 instanceof Date && obj2 instanceof Date) {
+    return obj1.getTime() === obj2.getTime();
+  }
+  if (Array.isArray(obj1)) {
+    if (obj1.length !== obj2.length)
+      return false;
+    for (let i = 0; i < obj1.length; i++) {
+      if (!isDeepEqualData(obj1[i], obj2[i]))
+        return false;
+    }
+    return true;
+  }
+  const keys1 = Object.keys(obj1);
+  const keys2 = Object.keys(obj2);
+  if (keys1.length !== keys2.length)
+    return false;
+  for (const key of keys1) {
+    if (!keys2.includes(key))
+      return false;
+    if (!isDeepEqualData(obj1[key], obj2[key]))
+      return false;
+  }
+  return true;
+}
 var NEWLINE2 = "\n".charCodeAt(0);
 function zodSchema(zodSchema2, options) {
   var _a17;
@@ -36070,6 +36103,49 @@ function prepareResponseHeaders(headers, {
     responseHeaders.set("X-Vercel-AI-Data-Stream", dataStreamVersion);
   }
   return responseHeaders;
+}
+function prepareOutgoingHttpHeaders(headers, {
+  contentType,
+  dataStreamVersion
+}) {
+  const outgoingHeaders = {};
+  if (headers != null) {
+    for (const [key, value] of Object.entries(headers)) {
+      outgoingHeaders[key] = value;
+    }
+  }
+  if (outgoingHeaders["Content-Type"] == null) {
+    outgoingHeaders["Content-Type"] = contentType;
+  }
+  if (dataStreamVersion !== void 0) {
+    outgoingHeaders["X-Vercel-AI-Data-Stream"] = dataStreamVersion;
+  }
+  return outgoingHeaders;
+}
+function writeToServerResponse({
+  response,
+  status,
+  statusText,
+  headers,
+  stream
+}) {
+  response.writeHead(status != null ? status : 200, statusText, headers);
+  const reader = stream.getReader();
+  const read = async () => {
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done)
+          break;
+        response.write(value);
+      }
+    } catch (error) {
+      throw error;
+    } finally {
+      response.end();
+    }
+  };
+  read();
 }
 var UnsupportedModelVersionError = class extends AISDKError {
   constructor() {
@@ -38379,7 +38455,714 @@ var DefaultGenerateObjectResult = class {
     });
   }
 };
+var DelayedPromise = class {
+  constructor() {
+    this.status = { type: "pending" };
+    this._resolve = void 0;
+    this._reject = void 0;
+  }
+  get value() {
+    if (this.promise) {
+      return this.promise;
+    }
+    this.promise = new Promise((resolve, reject) => {
+      if (this.status.type === "resolved") {
+        resolve(this.status.value);
+      } else if (this.status.type === "rejected") {
+        reject(this.status.error);
+      }
+      this._resolve = resolve;
+      this._reject = reject;
+    });
+    return this.promise;
+  }
+  resolve(value) {
+    var _a17;
+    this.status = { type: "resolved", value };
+    if (this.promise) {
+      (_a17 = this._resolve) == null ? void 0 : _a17.call(this, value);
+    }
+  }
+  reject(error) {
+    var _a17;
+    this.status = { type: "rejected", error };
+    if (this.promise) {
+      (_a17 = this._reject) == null ? void 0 : _a17.call(this, error);
+    }
+  }
+};
+function createResolvablePromise() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return {
+    promise,
+    resolve,
+    reject
+  };
+}
+function createStitchableStream() {
+  let innerStreamReaders = [];
+  let controller = null;
+  let isClosed = false;
+  let waitForNewStream = createResolvablePromise();
+  const processPull = async () => {
+    if (isClosed && innerStreamReaders.length === 0) {
+      controller == null ? void 0 : controller.close();
+      return;
+    }
+    if (innerStreamReaders.length === 0) {
+      waitForNewStream = createResolvablePromise();
+      await waitForNewStream.promise;
+      return processPull();
+    }
+    try {
+      const { value, done } = await innerStreamReaders[0].read();
+      if (done) {
+        innerStreamReaders.shift();
+        if (innerStreamReaders.length > 0) {
+          await processPull();
+        } else if (isClosed) {
+          controller == null ? void 0 : controller.close();
+        }
+      } else {
+        controller == null ? void 0 : controller.enqueue(value);
+      }
+    } catch (error) {
+      controller == null ? void 0 : controller.error(error);
+      innerStreamReaders.shift();
+      if (isClosed && innerStreamReaders.length === 0) {
+        controller == null ? void 0 : controller.close();
+      }
+    }
+  };
+  return {
+    stream: new ReadableStream({
+      start(controllerParam) {
+        controller = controllerParam;
+      },
+      pull: processPull,
+      async cancel() {
+        for (const reader of innerStreamReaders) {
+          await reader.cancel();
+        }
+        innerStreamReaders = [];
+        isClosed = true;
+      }
+    }),
+    addStream: (innerStream) => {
+      if (isClosed) {
+        throw new Error("Cannot add inner stream: outer stream is closed");
+      }
+      innerStreamReaders.push(innerStream.getReader());
+      waitForNewStream.resolve();
+    },
+    /**
+     * Gracefully close the outer stream. This will let the inner streams
+     * finish processing and then close the outer stream.
+     */
+    close: () => {
+      isClosed = true;
+      waitForNewStream.resolve();
+      if (innerStreamReaders.length === 0) {
+        controller == null ? void 0 : controller.close();
+      }
+    },
+    /**
+     * Immediately close the outer stream. This will cancel all inner streams
+     * and close the outer stream.
+     */
+    terminate: () => {
+      isClosed = true;
+      waitForNewStream.resolve();
+      innerStreamReaders.forEach((reader) => reader.cancel());
+      innerStreamReaders = [];
+      controller == null ? void 0 : controller.close();
+    }
+  };
+}
+function now() {
+  var _a17, _b;
+  return (_b = (_a17 = globalThis == null ? void 0 : globalThis.performance) == null ? void 0 : _a17.now()) != null ? _b : Date.now();
+}
 var originalGenerateId2 = createIdGenerator({ prefix: "aiobj", size: 24 });
+function streamObject({
+  model,
+  schema: inputSchema,
+  schemaName,
+  schemaDescription,
+  mode,
+  output = "object",
+  system,
+  prompt,
+  messages,
+  maxRetries,
+  abortSignal,
+  headers,
+  experimental_telemetry: telemetry,
+  experimental_providerMetadata,
+  providerOptions = experimental_providerMetadata,
+  onError,
+  onFinish,
+  _internal: {
+    generateId: generateId3 = originalGenerateId2,
+    currentDate = () => /* @__PURE__ */ new Date(),
+    now: now2 = now
+  } = {},
+  ...settings
+}) {
+  if (typeof model === "string" || model.specificationVersion !== "v1") {
+    throw new UnsupportedModelVersionError();
+  }
+  validateObjectGenerationInput({
+    output,
+    mode,
+    schema: inputSchema,
+    schemaName,
+    schemaDescription
+  });
+  const outputStrategy = getOutputStrategy({ output, schema: inputSchema });
+  if (outputStrategy.type === "no-schema" && mode === void 0) {
+    mode = "json";
+  }
+  return new DefaultStreamObjectResult({
+    model,
+    telemetry,
+    headers,
+    settings,
+    maxRetries,
+    abortSignal,
+    outputStrategy,
+    system,
+    prompt,
+    messages,
+    schemaName,
+    schemaDescription,
+    providerOptions,
+    mode,
+    onError,
+    onFinish,
+    generateId: generateId3,
+    currentDate,
+    now: now2
+  });
+}
+var DefaultStreamObjectResult = class {
+  constructor({
+    model,
+    headers,
+    telemetry,
+    settings,
+    maxRetries: maxRetriesArg,
+    abortSignal,
+    outputStrategy,
+    system,
+    prompt,
+    messages,
+    schemaName,
+    schemaDescription,
+    providerOptions,
+    mode,
+    onError,
+    onFinish,
+    generateId: generateId3,
+    currentDate,
+    now: now2
+  }) {
+    this.objectPromise = new DelayedPromise();
+    this.usagePromise = new DelayedPromise();
+    this.providerMetadataPromise = new DelayedPromise();
+    this.warningsPromise = new DelayedPromise();
+    this.requestPromise = new DelayedPromise();
+    this.responsePromise = new DelayedPromise();
+    const { maxRetries, retry } = prepareRetries({
+      maxRetries: maxRetriesArg
+    });
+    const baseTelemetryAttributes = getBaseTelemetryAttributes({
+      model,
+      telemetry,
+      headers,
+      settings: { ...settings, maxRetries }
+    });
+    const tracer = getTracer(telemetry);
+    const self = this;
+    const stitchableStream = createStitchableStream();
+    const eventProcessor = new TransformStream({
+      transform(chunk2, controller) {
+        controller.enqueue(chunk2);
+        if (chunk2.type === "error") {
+          onError == null ? void 0 : onError({ error: chunk2.error });
+        }
+      }
+    });
+    this.baseStream = stitchableStream.stream.pipeThrough(eventProcessor);
+    recordSpan({
+      name: "ai.streamObject",
+      attributes: selectTelemetryAttributes({
+        telemetry,
+        attributes: {
+          ...assembleOperationName({
+            operationId: "ai.streamObject",
+            telemetry
+          }),
+          ...baseTelemetryAttributes,
+          // specific settings that only make sense on the outer level:
+          "ai.prompt": {
+            input: () => JSON.stringify({ system, prompt, messages })
+          },
+          "ai.schema": outputStrategy.jsonSchema != null ? { input: () => JSON.stringify(outputStrategy.jsonSchema) } : void 0,
+          "ai.schema.name": schemaName,
+          "ai.schema.description": schemaDescription,
+          "ai.settings.output": outputStrategy.type,
+          "ai.settings.mode": mode
+        }
+      }),
+      tracer,
+      endWhenDone: false,
+      fn: async (rootSpan) => {
+        var _a17, _b;
+        if (mode === "auto" || mode == null) {
+          mode = model.defaultObjectGenerationMode;
+        }
+        let callOptions;
+        let transformer;
+        switch (mode) {
+          case "json": {
+            const standardizedPrompt = standardizePrompt({
+              prompt: {
+                system: outputStrategy.jsonSchema == null ? injectJsonInstruction({ prompt: system }) : model.supportsStructuredOutputs ? system : injectJsonInstruction({
+                  prompt: system,
+                  schema: outputStrategy.jsonSchema
+                }),
+                prompt,
+                messages
+              },
+              tools: void 0
+            });
+            callOptions = {
+              mode: {
+                type: "object-json",
+                schema: outputStrategy.jsonSchema,
+                name: schemaName,
+                description: schemaDescription
+              },
+              ...prepareCallSettings(settings),
+              inputFormat: standardizedPrompt.type,
+              prompt: await convertToLanguageModelPrompt({
+                prompt: standardizedPrompt,
+                modelSupportsImageUrls: model.supportsImageUrls,
+                modelSupportsUrl: (_a17 = model.supportsUrl) == null ? void 0 : _a17.bind(model)
+                // support 'this' context
+              }),
+              providerMetadata: providerOptions,
+              abortSignal,
+              headers
+            };
+            transformer = {
+              transform: (chunk2, controller) => {
+                switch (chunk2.type) {
+                  case "text-delta":
+                    controller.enqueue(chunk2.textDelta);
+                    break;
+                  case "response-metadata":
+                  case "finish":
+                  case "error":
+                    controller.enqueue(chunk2);
+                    break;
+                }
+              }
+            };
+            break;
+          }
+          case "tool": {
+            const standardizedPrompt = standardizePrompt({
+              prompt: { system, prompt, messages },
+              tools: void 0
+            });
+            callOptions = {
+              mode: {
+                type: "object-tool",
+                tool: {
+                  type: "function",
+                  name: schemaName != null ? schemaName : "json",
+                  description: schemaDescription != null ? schemaDescription : "Respond with a JSON object.",
+                  parameters: outputStrategy.jsonSchema
+                }
+              },
+              ...prepareCallSettings(settings),
+              inputFormat: standardizedPrompt.type,
+              prompt: await convertToLanguageModelPrompt({
+                prompt: standardizedPrompt,
+                modelSupportsImageUrls: model.supportsImageUrls,
+                modelSupportsUrl: (_b = model.supportsUrl) == null ? void 0 : _b.bind(model)
+                // support 'this' context,
+              }),
+              providerMetadata: providerOptions,
+              abortSignal,
+              headers
+            };
+            transformer = {
+              transform(chunk2, controller) {
+                switch (chunk2.type) {
+                  case "tool-call-delta":
+                    controller.enqueue(chunk2.argsTextDelta);
+                    break;
+                  case "response-metadata":
+                  case "finish":
+                  case "error":
+                    controller.enqueue(chunk2);
+                    break;
+                }
+              }
+            };
+            break;
+          }
+          case void 0: {
+            throw new Error(
+              "Model does not have a default object generation mode."
+            );
+          }
+          default: {
+            const _exhaustiveCheck = mode;
+            throw new Error(`Unsupported mode: ${_exhaustiveCheck}`);
+          }
+        }
+        const {
+          result: { stream, warnings, rawResponse, request: request6 },
+          doStreamSpan,
+          startTimestampMs
+        } = await retry(
+          () => recordSpan({
+            name: "ai.streamObject.doStream",
+            attributes: selectTelemetryAttributes({
+              telemetry,
+              attributes: {
+                ...assembleOperationName({
+                  operationId: "ai.streamObject.doStream",
+                  telemetry
+                }),
+                ...baseTelemetryAttributes,
+                "ai.prompt.format": {
+                  input: () => callOptions.inputFormat
+                },
+                "ai.prompt.messages": {
+                  input: () => stringifyForTelemetry(callOptions.prompt)
+                },
+                "ai.settings.mode": mode,
+                // standardized gen-ai llm span attributes:
+                "gen_ai.system": model.provider,
+                "gen_ai.request.model": model.modelId,
+                "gen_ai.request.frequency_penalty": settings.frequencyPenalty,
+                "gen_ai.request.max_tokens": settings.maxTokens,
+                "gen_ai.request.presence_penalty": settings.presencePenalty,
+                "gen_ai.request.temperature": settings.temperature,
+                "gen_ai.request.top_k": settings.topK,
+                "gen_ai.request.top_p": settings.topP
+              }
+            }),
+            tracer,
+            endWhenDone: false,
+            fn: async (doStreamSpan2) => ({
+              startTimestampMs: now2(),
+              doStreamSpan: doStreamSpan2,
+              result: await model.doStream(callOptions)
+            })
+          })
+        );
+        self.requestPromise.resolve(request6 != null ? request6 : {});
+        let usage;
+        let finishReason;
+        let providerMetadata;
+        let object2;
+        let error;
+        let accumulatedText = "";
+        let textDelta = "";
+        let response = {
+          id: generateId3(),
+          timestamp: currentDate(),
+          modelId: model.modelId
+        };
+        let latestObjectJson = void 0;
+        let latestObject = void 0;
+        let isFirstChunk = true;
+        let isFirstDelta = true;
+        const transformedStream = stream.pipeThrough(new TransformStream(transformer)).pipeThrough(
+          new TransformStream({
+            async transform(chunk2, controller) {
+              var _a18, _b2, _c;
+              if (isFirstChunk) {
+                const msToFirstChunk = now2() - startTimestampMs;
+                isFirstChunk = false;
+                doStreamSpan.addEvent("ai.stream.firstChunk", {
+                  "ai.stream.msToFirstChunk": msToFirstChunk
+                });
+                doStreamSpan.setAttributes({
+                  "ai.stream.msToFirstChunk": msToFirstChunk
+                });
+              }
+              if (typeof chunk2 === "string") {
+                accumulatedText += chunk2;
+                textDelta += chunk2;
+                const { value: currentObjectJson, state: parseState } = parsePartialJson(accumulatedText);
+                if (currentObjectJson !== void 0 && !isDeepEqualData(latestObjectJson, currentObjectJson)) {
+                  const validationResult = outputStrategy.validatePartialResult({
+                    value: currentObjectJson,
+                    textDelta,
+                    latestObject,
+                    isFirstDelta,
+                    isFinalDelta: parseState === "successful-parse"
+                  });
+                  if (validationResult.success && !isDeepEqualData(
+                    latestObject,
+                    validationResult.value.partial
+                  )) {
+                    latestObjectJson = currentObjectJson;
+                    latestObject = validationResult.value.partial;
+                    controller.enqueue({
+                      type: "object",
+                      object: latestObject
+                    });
+                    controller.enqueue({
+                      type: "text-delta",
+                      textDelta: validationResult.value.textDelta
+                    });
+                    textDelta = "";
+                    isFirstDelta = false;
+                  }
+                }
+                return;
+              }
+              switch (chunk2.type) {
+                case "response-metadata": {
+                  response = {
+                    id: (_a18 = chunk2.id) != null ? _a18 : response.id,
+                    timestamp: (_b2 = chunk2.timestamp) != null ? _b2 : response.timestamp,
+                    modelId: (_c = chunk2.modelId) != null ? _c : response.modelId
+                  };
+                  break;
+                }
+                case "finish": {
+                  if (textDelta !== "") {
+                    controller.enqueue({ type: "text-delta", textDelta });
+                  }
+                  finishReason = chunk2.finishReason;
+                  usage = calculateLanguageModelUsage(chunk2.usage);
+                  providerMetadata = chunk2.providerMetadata;
+                  controller.enqueue({ ...chunk2, usage, response });
+                  self.usagePromise.resolve(usage);
+                  self.providerMetadataPromise.resolve(providerMetadata);
+                  self.responsePromise.resolve({
+                    ...response,
+                    headers: rawResponse == null ? void 0 : rawResponse.headers
+                  });
+                  const validationResult = outputStrategy.validateFinalResult(
+                    latestObjectJson,
+                    {
+                      text: accumulatedText,
+                      response,
+                      usage
+                    }
+                  );
+                  if (validationResult.success) {
+                    object2 = validationResult.value;
+                    self.objectPromise.resolve(object2);
+                  } else {
+                    error = new NoObjectGeneratedError({
+                      message: "No object generated: response did not match schema.",
+                      cause: validationResult.error,
+                      text: accumulatedText,
+                      response,
+                      usage,
+                      finishReason
+                    });
+                    self.objectPromise.reject(error);
+                  }
+                  break;
+                }
+                default: {
+                  controller.enqueue(chunk2);
+                  break;
+                }
+              }
+            },
+            // invoke onFinish callback and resolve toolResults promise when the stream is about to close:
+            async flush(controller) {
+              try {
+                const finalUsage = usage != null ? usage : {
+                  promptTokens: NaN,
+                  completionTokens: NaN,
+                  totalTokens: NaN
+                };
+                doStreamSpan.setAttributes(
+                  selectTelemetryAttributes({
+                    telemetry,
+                    attributes: {
+                      "ai.response.finishReason": finishReason,
+                      "ai.response.object": {
+                        output: () => JSON.stringify(object2)
+                      },
+                      "ai.response.id": response.id,
+                      "ai.response.model": response.modelId,
+                      "ai.response.timestamp": response.timestamp.toISOString(),
+                      "ai.response.providerMetadata": JSON.stringify(providerMetadata),
+                      "ai.usage.promptTokens": finalUsage.promptTokens,
+                      "ai.usage.completionTokens": finalUsage.completionTokens,
+                      // standardized gen-ai llm span attributes:
+                      "gen_ai.response.finish_reasons": [finishReason],
+                      "gen_ai.response.id": response.id,
+                      "gen_ai.response.model": response.modelId,
+                      "gen_ai.usage.input_tokens": finalUsage.promptTokens,
+                      "gen_ai.usage.output_tokens": finalUsage.completionTokens
+                    }
+                  })
+                );
+                doStreamSpan.end();
+                rootSpan.setAttributes(
+                  selectTelemetryAttributes({
+                    telemetry,
+                    attributes: {
+                      "ai.usage.promptTokens": finalUsage.promptTokens,
+                      "ai.usage.completionTokens": finalUsage.completionTokens,
+                      "ai.response.object": {
+                        output: () => JSON.stringify(object2)
+                      },
+                      "ai.response.providerMetadata": JSON.stringify(providerMetadata)
+                    }
+                  })
+                );
+                await (onFinish == null ? void 0 : onFinish({
+                  usage: finalUsage,
+                  object: object2,
+                  error,
+                  response: {
+                    ...response,
+                    headers: rawResponse == null ? void 0 : rawResponse.headers
+                  },
+                  warnings,
+                  providerMetadata,
+                  experimental_providerMetadata: providerMetadata
+                }));
+              } catch (error2) {
+                controller.enqueue({ type: "error", error: error2 });
+              } finally {
+                rootSpan.end();
+              }
+            }
+          })
+        );
+        stitchableStream.addStream(transformedStream);
+      }
+    }).catch((error) => {
+      stitchableStream.addStream(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: "error", error });
+            controller.close();
+          }
+        })
+      );
+    }).finally(() => {
+      stitchableStream.close();
+    });
+    this.outputStrategy = outputStrategy;
+  }
+  get object() {
+    return this.objectPromise.value;
+  }
+  get usage() {
+    return this.usagePromise.value;
+  }
+  get experimental_providerMetadata() {
+    return this.providerMetadataPromise.value;
+  }
+  get providerMetadata() {
+    return this.providerMetadataPromise.value;
+  }
+  get warnings() {
+    return this.warningsPromise.value;
+  }
+  get request() {
+    return this.requestPromise.value;
+  }
+  get response() {
+    return this.responsePromise.value;
+  }
+  get partialObjectStream() {
+    return createAsyncIterableStream(
+      this.baseStream.pipeThrough(
+        new TransformStream({
+          transform(chunk2, controller) {
+            switch (chunk2.type) {
+              case "object":
+                controller.enqueue(chunk2.object);
+                break;
+              case "text-delta":
+              case "finish":
+              case "error":
+                break;
+              default: {
+                const _exhaustiveCheck = chunk2;
+                throw new Error(`Unsupported chunk type: ${_exhaustiveCheck}`);
+              }
+            }
+          }
+        })
+      )
+    );
+  }
+  get elementStream() {
+    return this.outputStrategy.createElementStream(this.baseStream);
+  }
+  get textStream() {
+    return createAsyncIterableStream(
+      this.baseStream.pipeThrough(
+        new TransformStream({
+          transform(chunk2, controller) {
+            switch (chunk2.type) {
+              case "text-delta":
+                controller.enqueue(chunk2.textDelta);
+                break;
+              case "object":
+              case "finish":
+              case "error":
+                break;
+              default: {
+                const _exhaustiveCheck = chunk2;
+                throw new Error(`Unsupported chunk type: ${_exhaustiveCheck}`);
+              }
+            }
+          }
+        })
+      )
+    );
+  }
+  get fullStream() {
+    return createAsyncIterableStream(this.baseStream);
+  }
+  pipeTextStreamToResponse(response, init) {
+    writeToServerResponse({
+      response,
+      status: init == null ? void 0 : init.status,
+      statusText: init == null ? void 0 : init.statusText,
+      headers: prepareOutgoingHttpHeaders(init == null ? void 0 : init.headers, {
+        contentType: "text/plain; charset=utf-8"
+      }),
+      stream: this.textStream.pipeThrough(new TextEncoderStream())
+    });
+  }
+  toTextStreamResponse(init) {
+    var _a17;
+    return new Response(this.textStream.pipeThrough(new TextEncoderStream()), {
+      status: (_a17 = init == null ? void 0 : init.status) != null ? _a17 : 200,
+      headers: prepareResponseHeaders(init == null ? void 0 : init.headers, {
+        contentType: "text/plain; charset=utf-8"
+      })
+    });
+  }
+};
 var name92 = "AI_NoOutputSpecifiedError";
 var marker92 = `vercel.ai.error.${name92}`;
 var symbol92 = Symbol.for(marker92);
@@ -38886,136 +39669,6 @@ function trimStartOfStream() {
   };
 }
 var HANGING_STREAM_WARNING_TIME_MS = 15 * 1e3;
-
-// src/llm/schema.ts
-var Finding = external_exports.object({
-  path: external_exports.string(),
-  line: external_exports.number().int(),
-  end_line: external_exports.number().int().optional(),
-  severity: external_exports.enum(["blocker", "high", "medium", "low", "nit"]),
-  category: external_exports.string().optional(),
-  confidence: external_exports.enum(["high", "medium"]).optional(),
-  quoted_line: external_exports.string().optional(),
-  suggestion: external_exports.string().optional().describe(
-    "Replacement CODE ONLY \u2014 the exact source text to substitute for lines [line..end_line]. GitHub renders it as a committable 'Suggested change', so it must be literal, directly-applicable code, never prose, commentary, or an instruction like 'remove this line'. Explanations go in `text`. Omit this field entirely when there is no clean code replacement."
-  ),
-  // Provenance: which layer surfaced this finding. Absent → an LLM-discovered finding
-  // (rendered as "llm"); set to a tool name when the model confirms a deterministic
-  // (gitleaks/opengrep) finding it was asked to triage.
-  source: external_exports.enum(["llm", "gitleaks", "opengrep", "eslint"]).optional(),
-  text: external_exports.string()
-});
-var Verdict = external_exports.object({
-  // Bounded: review_plan is emitted FIRST, so an unbounded plan eats the output
-  // budget before findings and starves them under truncation. The prompt asks for
-  // ≤ 2 short sentences (≤ 280 chars) and the JSON-schema maxLength nudges the model,
-  // but in JSON mode the provider only receives response_format:{type:"json_object"} —
-  // the schema (hence maxLength) is NOT enforced during decoding. So the cap is a soft
-  // backstop: an over-length plan is TRUNCATED via .catch rather than failing
-  // validation, which would otherwise throw the whole (complete, valid) review away as
-  // an abstention.
-  review_plan: external_exports.string().max(280).catch(({ input }) => typeof input === "string" ? input.slice(0, 280) : ""),
-  verdict: external_exports.enum(["approved", "changes"]),
-  findings: external_exports.array(Finding),
-  // Soft-capped like review_plan: other_checks is emitted AFTER findings, so in JSON
-  // mode its maxLength is a prompt nudge only, never enforced during decoding. The
-  // .catch TRUNCATES an over-length blurb to 600 rather than rejecting the whole (valid)
-  // review, and ALSO handles the absent-key case (a length-truncated response cut before
-  // this field) → "", preserving the prior .default("") truncation-resilience semantics.
-  other_checks: external_exports.string().max(600).catch(({ input }) => typeof input === "string" ? input.slice(0, 600) : ""),
-  top_must_fix: external_exports.array(external_exports.string()).default([])
-});
-var PartialVerdict = external_exports.object({
-  // Decorative fields: `.catch` drops a wrong-typed value (models routinely emit null
-  // here) instead of failing the parse, which would sink a recovery over prose.
-  review_plan: external_exports.string().optional().catch(void 0),
-  // `unknown` with NO `.catch`, deliberately — do not "fix" this to match its neighbours.
-  // The whole point of recovery is to rescue an off-enum verdict ("request_changes"),
-  // so the value must reach {@link normalizeVerdict} intact; it accepts any type and
-  // returns null when unmappable. A `.catch` here would silently discard exactly the
-  // strings recovery exists to map.
-  verdict: external_exports.unknown().optional(),
-  // NOT caught, deliberately: findings is load-bearing. A `findings` that is not an
-  // array must fail the whole recovery, because silently reading it as "no findings"
-  // would turn defects the model DID raise into a clean review.
-  findings: external_exports.array(external_exports.unknown()).optional(),
-  other_checks: external_exports.string().optional().catch(void 0),
-  top_must_fix: external_exports.array(external_exports.unknown()).optional().catch(void 0)
-});
-var VERDICT_ALIASES = {
-  approved: "approved",
-  approve: "approved",
-  approval: "approved",
-  accept: "approved",
-  accepted: "approved",
-  lgtm: "approved",
-  pass: "approved",
-  changes: "changes",
-  change: "changes",
-  requestchanges: "changes",
-  changesrequested: "changes",
-  requestedchanges: "changes",
-  reject: "changes",
-  rejected: "changes",
-  block: "changes",
-  blocked: "changes"
-};
-var SEVERITY_ALIASES = {
-  blocker: "blocker",
-  blocking: "blocker",
-  critical: "blocker",
-  fatal: "blocker",
-  high: "high",
-  major: "high",
-  error: "high",
-  medium: "medium",
-  moderate: "medium",
-  warning: "medium",
-  warn: "medium",
-  low: "low",
-  minor: "low",
-  info: "low",
-  informational: "low",
-  nit: "nit",
-  nitpick: "nit",
-  style: "nit"
-};
-function aliasKey(value) {
-  if (typeof value !== "string") return null;
-  const key = value.toLowerCase().replace(/[^a-z]/g, "");
-  return key === "" ? null : key;
-}
-function normalizeVerdict(value) {
-  const key = aliasKey(value);
-  return key === null ? null : VERDICT_ALIASES[key] ?? null;
-}
-function normalizeLine(value) {
-  if (typeof value === "number") return Number.isFinite(value) ? Math.trunc(value) : null;
-  if (typeof value !== "string") return null;
-  const match = /^\s*(-?\d+)/.exec(value);
-  return match?.[1] === void 0 ? null : Number.parseInt(match[1], 10);
-}
-function normalizeFinding(raw) {
-  const asObject = external_exports.record(external_exports.unknown()).safeParse(raw);
-  if (!asObject.success) return raw;
-  const out = { ...asObject.data };
-  const line = normalizeLine(out["line"]);
-  if (line === null) delete out["line"];
-  else out["line"] = line;
-  const endLine = normalizeLine(out["end_line"]);
-  if (endLine === null) delete out["end_line"];
-  else out["end_line"] = endLine;
-  const severity = aliasKey(out["severity"]);
-  if (severity !== null && SEVERITY_ALIASES[severity] !== void 0) {
-    out["severity"] = SEVERITY_ALIASES[severity];
-  }
-  if (out["confidence"] !== "high" && out["confidence"] !== "medium") delete out["confidence"];
-  const source = out["source"];
-  if (source !== "llm" && source !== "gitleaks" && source !== "opengrep" && source !== "eslint") {
-    delete out["source"];
-  }
-  return out;
-}
 
 // node_modules/jsonrepair/lib/esm/utils/JSONRepairError.js
 var JSONRepairError = class extends Error {
@@ -39683,6 +40336,161 @@ function atEndOfBlockComment(text2, i) {
   return text2[i] === "*" && text2[i + 1] === "/";
 }
 
+// src/llm/schema.ts
+var Finding = external_exports.object({
+  path: external_exports.string(),
+  line: external_exports.number().int(),
+  end_line: external_exports.number().int().optional(),
+  severity: external_exports.enum(["blocker", "high", "medium", "low", "nit"]),
+  category: external_exports.string().optional(),
+  confidence: external_exports.enum(["high", "medium"]).optional(),
+  quoted_line: external_exports.string().optional(),
+  suggestion: external_exports.string().optional().describe(
+    "Replacement CODE ONLY \u2014 the exact source text to substitute for lines [line..end_line]. GitHub renders it as a committable 'Suggested change', so it must be literal, directly-applicable code, never prose, commentary, or an instruction like 'remove this line'. Explanations go in `text`. Omit this field entirely when there is no clean code replacement."
+  ),
+  // Provenance: which layer surfaced this finding. Absent → an LLM-discovered finding
+  // (rendered as "llm"); set to a tool name when the model confirms a deterministic
+  // (gitleaks/opengrep) finding it was asked to triage.
+  source: external_exports.enum(["llm", "gitleaks", "opengrep", "eslint"]).optional(),
+  text: external_exports.string()
+});
+var Verdict = external_exports.object({
+  // Bounded: review_plan is emitted FIRST, so an unbounded plan eats the output
+  // budget before findings and starves them under truncation. The prompt asks for
+  // ≤ 2 short sentences (≤ 280 chars) and the JSON-schema maxLength nudges the model,
+  // but in JSON mode the provider only receives response_format:{type:"json_object"} —
+  // the schema (hence maxLength) is NOT enforced during decoding. So the cap is a soft
+  // backstop: an over-length plan is TRUNCATED via .catch rather than failing
+  // validation, which would otherwise throw the whole (complete, valid) review away as
+  // an abstention.
+  review_plan: external_exports.string().max(280).catch(({ input }) => typeof input === "string" ? input.slice(0, 280) : ""),
+  verdict: external_exports.enum(["approved", "changes"]),
+  findings: external_exports.array(Finding),
+  // Soft-capped like review_plan: other_checks is emitted AFTER findings, so in JSON
+  // mode its maxLength is a prompt nudge only, never enforced during decoding. The
+  // .catch TRUNCATES an over-length blurb to 600 rather than rejecting the whole (valid)
+  // review, and ALSO handles the absent-key case (a length-truncated response cut before
+  // this field) → "", preserving the prior .default("") truncation-resilience semantics.
+  other_checks: external_exports.string().max(600).catch(({ input }) => typeof input === "string" ? input.slice(0, 600) : ""),
+  top_must_fix: external_exports.array(external_exports.string()).default([])
+});
+var PartialVerdict = external_exports.object({
+  // Decorative fields: `.catch` drops a wrong-typed value (models routinely emit null
+  // here) instead of failing the parse, which would sink a recovery over prose.
+  review_plan: external_exports.string().optional().catch(void 0),
+  // `unknown` with NO `.catch`, deliberately — do not "fix" this to match its neighbours.
+  // The whole point of recovery is to rescue an off-enum verdict ("request_changes"),
+  // so the value must reach {@link normalizeVerdict} intact; it accepts any type and
+  // returns null when unmappable. A `.catch` here would silently discard exactly the
+  // strings recovery exists to map.
+  verdict: external_exports.unknown().optional(),
+  // NOT caught, deliberately: findings is load-bearing. A `findings` that is not an
+  // array must fail the whole recovery, because silently reading it as "no findings"
+  // would turn defects the model DID raise into a clean review.
+  findings: external_exports.array(external_exports.unknown()).optional(),
+  other_checks: external_exports.string().optional().catch(void 0),
+  top_must_fix: external_exports.array(external_exports.unknown()).optional().catch(void 0)
+});
+var VERDICT_ALIASES = {
+  approved: "approved",
+  approve: "approved",
+  approval: "approved",
+  accept: "approved",
+  accepted: "approved",
+  lgtm: "approved",
+  pass: "approved",
+  changes: "changes",
+  change: "changes",
+  requestchanges: "changes",
+  changesrequested: "changes",
+  requestedchanges: "changes",
+  reject: "changes",
+  rejected: "changes",
+  block: "changes",
+  blocked: "changes"
+};
+var SEVERITY_ALIASES = {
+  blocker: "blocker",
+  blocking: "blocker",
+  critical: "blocker",
+  fatal: "blocker",
+  high: "high",
+  major: "high",
+  error: "high",
+  medium: "medium",
+  moderate: "medium",
+  warning: "medium",
+  warn: "medium",
+  low: "low",
+  minor: "low",
+  info: "low",
+  informational: "low",
+  nit: "nit",
+  nitpick: "nit",
+  style: "nit"
+};
+function aliasKey(value) {
+  if (typeof value !== "string") return null;
+  const key = value.toLowerCase().replace(/[^a-z]/g, "");
+  return key === "" ? null : key;
+}
+function normalizeVerdict(value) {
+  const key = aliasKey(value);
+  return key === null ? null : VERDICT_ALIASES[key] ?? null;
+}
+function normalizeLine(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? Math.trunc(value) : null;
+  if (typeof value !== "string") return null;
+  const match = /^\s*(-?\d+)/.exec(value);
+  return match?.[1] === void 0 ? null : Number.parseInt(match[1], 10);
+}
+function normalizeFinding(raw) {
+  const asObject = external_exports.record(external_exports.unknown()).safeParse(raw);
+  if (!asObject.success) return raw;
+  const out = { ...asObject.data };
+  const line = normalizeLine(out["line"]);
+  if (line === null) delete out["line"];
+  else out["line"] = line;
+  const endLine = normalizeLine(out["end_line"]);
+  if (endLine === null) delete out["end_line"];
+  else out["end_line"] = endLine;
+  const severity = aliasKey(out["severity"]);
+  if (severity !== null && SEVERITY_ALIASES[severity] !== void 0) {
+    out["severity"] = SEVERITY_ALIASES[severity];
+  }
+  if (out["confidence"] !== "high" && out["confidence"] !== "medium") delete out["confidence"];
+  const source = out["source"];
+  if (source !== "llm" && source !== "gitleaks" && source !== "opengrep" && source !== "eslint") {
+    delete out["source"];
+  }
+  return out;
+}
+
+// src/llm/budget.ts
+var MAX_TOKEN_CEILING = 131072;
+var MAX_ESCALATIONS = 4;
+function nextBudget(budget, escalations) {
+  if (escalations >= MAX_ESCALATIONS || budget >= MAX_TOKEN_CEILING) return null;
+  return Math.min(budget * 2, MAX_TOKEN_CEILING);
+}
+function budgetExhausted(budget) {
+  return budget >= MAX_TOKEN_CEILING;
+}
+function isProviderCap(err) {
+  if (!APICallError.isInstance(err)) return false;
+  return err.statusCode === 400 && ((err.message ?? "").includes("max_tokens") || (err.responseBody ?? "").includes("max_tokens"));
+}
+function truncationSalvageMessage(recovered, exhausted) {
+  const head = `output truncated at the token limit \u2014 recovered ${recovered} finding(s) completed before the cut; later findings may be missing.`;
+  return exhausted ? `${head} The output budget is at its ceiling (${MAX_TOKEN_CEILING}) \u2014 lower MAX_CHUNK_LINES so each chunk needs less output.` : `${head} Raise MAX_TOKENS (ceiling ${MAX_TOKEN_CEILING}) to avoid.`;
+}
+function deadlineSalvageMessage(recovered) {
+  return `the model did not answer within the per-attempt deadline \u2014 recovered ${recovered} finding(s) received before the cut; later findings may be missing. Raise REQUEST_TIMEOUT_MS, or lower MAX_CHUNK_LINES so each chunk answers faster.`;
+}
+function droppedFindingsMessage(dropped, recovered) {
+  return `${dropped} finding(s) did not match the required shape and were dropped; ${recovered} recovered.`;
+}
+
 // src/llm/recover.ts
 function isLengthTruncation(err) {
   return NoObjectGeneratedError.isInstance(err) && err.finishReason === "length";
@@ -39690,7 +40498,24 @@ function isLengthTruncation(err) {
 function hasPartialOutput(err) {
   return NoObjectGeneratedError.isInstance(err) && typeof err.text === "string" && err.text.trim() !== "";
 }
-function recover(err) {
+function bestPrefix(current, candidate) {
+  if (current === void 0) return candidate;
+  return candidate.findings.length > current.findings.length ? candidate : current;
+}
+function salvageResult(salvaged, cut) {
+  const n = salvaged.findings.length;
+  const result = {
+    verdict: "changes",
+    findings: salvaged.findings,
+    review_plan: salvaged.review_plan ?? "",
+    partial: true,
+    error: cut.reason === "deadline" ? deadlineSalvageMessage(n) : truncationSalvageMessage(n, cut.exhausted === true)
+  };
+  if (cut.reason === "length") result.finishReason = "length";
+  if (cut.exhausted === true) result.budgetExhausted = true;
+  return result;
+}
+function recover(err, exhausted = false) {
   if (!NoObjectGeneratedError.isInstance(err) || typeof err.text !== "string") return null;
   if (err.text.trim() === "") return null;
   let repaired;
@@ -39726,78 +40551,10 @@ function recover(err) {
   if (truncated) result.finishReason = "length";
   if (truncated || dropped > 0) {
     result.partial = true;
-    result.error = truncated ? `output truncated at the token limit \u2014 recovered ${findings.length} finding(s) completed before the cut; later findings may be missing. Raise MAX_TOKENS to avoid.` : `${dropped} finding(s) did not match the required shape and were dropped; ${findings.length} recovered.`;
+    result.error = truncated ? truncationSalvageMessage(findings.length, exhausted) : droppedFindingsMessage(dropped, findings.length);
+    if (truncated && exhausted) result.budgetExhausted = true;
   }
   return result;
-}
-
-// src/llm/reviewWithModel.ts
-var REQUEST_TIMEOUT_MS = 18e4;
-var MAX_ATTEMPTS = 3;
-var MAX_TOKEN_CEILING = 32768;
-async function reviewWithModel(envelope, opts) {
-  const provider = opts.provider ?? "openrouter";
-  const model = resolveModel({
-    provider,
-    model: opts.model,
-    apiKey: opts.apiKey,
-    ...opts.fetch ? { fetch: opts.fetch } : {}
-  });
-  const providerOptions = providerOptionsFor(provider);
-  const perAttemptMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
-  const maxAttempts = opts.maxAttempts ?? MAX_ATTEMPTS;
-  let budget = envelope.max_tokens;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), perAttemptMs);
-    timeout.unref?.();
-    try {
-      const call = {
-        model,
-        // JSON mode (not the SDK default "tool" mode): the bash reads the verdict
-        // from .choices[0].message.content via response_format, NOT from a tool
-        // call. "json" sends response_format and parses message.content, matching
-        // the deployed wire contract and the recorded fixtures.
-        mode: "json",
-        system: envelope.system,
-        prompt: envelope.user,
-        temperature: 0,
-        maxTokens: budget,
-        maxRetries: opts.maxRetries ?? 2,
-        abortSignal: controller.signal,
-        providerOptions
-      };
-      if (opts.rawJson === true) {
-        const { object: object3 } = await generateObject({ ...call, output: "no-schema" });
-        return { verdict: "approved", findings: [], other_checks: JSON.stringify(object3) };
-      }
-      const { object: object2 } = await generateObject({ ...call, schema: Verdict });
-      return {
-        verdict: object2.verdict,
-        findings: object2.findings,
-        review_plan: object2.review_plan,
-        other_checks: object2.other_checks,
-        top_must_fix: object2.top_must_fix
-      };
-    } catch (err) {
-      if (controller.signal.aborted && attempt < maxAttempts) {
-        await new Promise((resolve) => {
-          setTimeout(resolve, 300 * attempt);
-        });
-        continue;
-      }
-      if (isLengthTruncation(err) && hasPartialOutput(err) && budget < MAX_TOKEN_CEILING && attempt < maxAttempts) {
-        budget = Math.min(budget * 2, MAX_TOKEN_CEILING);
-        continue;
-      }
-      const recovered = opts.rawJson === true ? null : recover(err);
-      if (recovered !== null) return recovered;
-      return abstain(err, controller.signal.aborted);
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
-  return abstain(new Error("OpenRouter request failed"), false);
 }
 function classifyFailure(err, aborted) {
   if (aborted) return "timeout";
@@ -39815,6 +40572,164 @@ function abstain(err, aborted) {
     result.finishReason = err.finishReason;
   }
   return result;
+}
+
+// src/llm/streamVerdict.ts
+var PLAN_CAP = 280;
+async function streamVerdict(args) {
+  const result = streamObject({
+    model: args.model,
+    // JSON mode, not the SDK default "tool" mode: the deployed wire contract reads the
+    // verdict from message.content via response_format, and the recorded fixtures match.
+    mode: "json",
+    schema: Verdict,
+    system: args.system,
+    prompt: args.prompt,
+    temperature: 0,
+    maxTokens: args.maxTokens,
+    maxRetries: args.maxRetries,
+    abortSignal: args.abortSignal,
+    providerOptions: args.providerOptions
+  });
+  let snapshot;
+  let text2 = "";
+  let finish;
+  try {
+    for await (const part of result.fullStream) {
+      if (part.type === "object") snapshot = part.object;
+      else if (part.type === "text-delta") text2 += part.textDelta;
+      else if (part.type === "finish") finish = part;
+      else if (part.type === "error") return salvageAbortOrThrow(part.error, args, snapshot);
+    }
+  } catch (err) {
+    return salvageAbortOrThrow(err, args, snapshot);
+  }
+  if (finish === void 0) {
+    throw new Error("model stream ended without a finish or error part");
+  }
+  const { finishReason } = finish;
+  if (finishReason !== "length") {
+    return { outcome: "complete", object: await result.object, finishReason };
+  }
+  const prefix = salvagePrefix(snapshot);
+  if (prefix.findings.length > 0) return { outcome: "truncated", ...prefix, finishReason };
+  await result.object;
+  throw new NoObjectGeneratedError({
+    message: "No object generated: response was cut before the first finding completed.",
+    text: text2,
+    response: finish.response,
+    usage: finish.usage,
+    finishReason
+  });
+}
+function salvageAbortOrThrow(err, args, snapshot) {
+  if (args.abortSignal.aborted) {
+    const prefix = salvagePrefix(snapshot);
+    if (prefix.findings.length > 0) return { outcome: "aborted-with-prefix", ...prefix };
+  }
+  throw err;
+}
+function salvagePrefix(snapshot) {
+  const loose = PartialVerdict.safeParse(snapshot);
+  if (!loose.success) return { findings: [] };
+  const findings = [];
+  for (const raw of loose.data.findings ?? []) {
+    const parsed = Finding.safeParse(normalizeFinding(raw));
+    if (parsed.success) findings.push(parsed.data);
+  }
+  const plan = loose.data.review_plan;
+  return plan === void 0 ? { findings } : { findings, review_plan: plan.slice(0, PLAN_CAP) };
+}
+
+// src/llm/reviewWithModel.ts
+var REQUEST_TIMEOUT_MS = 18e4;
+var MAX_ATTEMPTS = 3;
+async function reviewWithModel(envelope, opts) {
+  const provider = opts.provider ?? "openrouter";
+  const model = resolveModel({
+    provider,
+    model: opts.model,
+    apiKey: opts.apiKey,
+    ...opts.fetch ? { fetch: opts.fetch } : {}
+  });
+  const providerOptions = providerOptionsFor(provider);
+  const perAttemptMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const maxAttempts = opts.maxAttempts ?? MAX_ATTEMPTS;
+  let budget = envelope.max_tokens;
+  let attempt = 1;
+  let escalations = 0;
+  let best;
+  while (attempt <= maxAttempts) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), perAttemptMs);
+    timeout.unref?.();
+    const lastAttempt = attempt >= maxAttempts;
+    try {
+      const call = {
+        model,
+        system: envelope.system,
+        prompt: envelope.user,
+        maxTokens: budget,
+        maxRetries: opts.maxRetries ?? 2,
+        abortSignal: controller.signal,
+        providerOptions
+      };
+      if (opts.rawJson === true) {
+        const json = { mode: "json", temperature: 0, output: "no-schema" };
+        const { object: object2 } = await generateObject({ ...call, ...json });
+        return { verdict: "approved", findings: [], other_checks: JSON.stringify(object2) };
+      }
+      const streamed = await streamVerdict(call);
+      if (streamed.outcome === "complete") return { ...streamed.object };
+      best = bestPrefix(best, streamed);
+      if (streamed.outcome === "truncated") {
+        const next = nextBudget(budget, escalations);
+        if (next !== null) {
+          budget = next;
+          escalations++;
+          continue;
+        }
+        return salvageResult(best, { reason: "length", exhausted: budgetExhausted(budget) });
+      }
+      if (!lastAttempt) {
+        await hangBackoff(attempt);
+        attempt++;
+        continue;
+      }
+      return salvageResult(best, { reason: "deadline" });
+    } catch (err) {
+      if (isProviderCap(err) && best !== void 0) {
+        return salvageResult(best, { reason: "length", exhausted: true });
+      }
+      if (controller.signal.aborted) {
+        if (!lastAttempt) {
+          await hangBackoff(attempt);
+          attempt++;
+          continue;
+        }
+        if (best !== void 0) return salvageResult(best, { reason: "deadline" });
+      }
+      if (isLengthTruncation(err) && hasPartialOutput(err)) {
+        const next = nextBudget(budget, escalations);
+        if (next !== null) {
+          budget = next;
+          escalations++;
+          continue;
+        }
+      }
+      const recovered = opts.rawJson === true ? null : recover(err, budgetExhausted(budget));
+      if (recovered !== null) return recovered;
+      return abstain(err, controller.signal.aborted);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  return abstain(new Error("OpenRouter request failed"), false);
+}
+function hangBackoff(attempt) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 300 * attempt);
+  });
 }
 
 // src/git/relate.ts
@@ -39958,7 +40873,8 @@ function mergeResults(chunks) {
   const failed = covered.filter((chunk2) => chunk2.some((r) => r.verdict === "error"));
   const errored = results.filter((r) => r.verdict === "error");
   const succeeded = results.filter((r) => r.verdict !== "error");
-  const partials = covered.filter((chunk2) => chunk2.some((r) => r.partial));
+  const partials = covered.filter((chunk2) => chunk2.some((r) => r.partial === true));
+  const firstPartial = results.find((r) => r.partial === true);
   const verdict = succeeded.length === 0 ? "error" : succeeded.some((r) => r.verdict === "changes") ? "changes" : failed.length > 0 ? "error" : "approved";
   const merged = {
     verdict,
@@ -39975,9 +40891,13 @@ function mergeResults(chunks) {
   if (failed.length > 0 && first !== void 0) {
     merged.error = `${failed.length}/${covered.length} chunks failed (after a retry) \u2014 the files in those chunks were NOT reviewed: ${first.error ?? "unknown error"}`;
     if (first.finishReason !== void 0) merged.finishReason = first.finishReason;
-  } else if (partials.length > 0) {
-    merged.error = `${partials.length}/${covered.length} chunks truncated at the output-token limit \u2014 recovered the findings completed before the cut; later findings may be missing. Raise MAX_TOKENS to avoid.`;
-    merged.finishReason = "length";
+  } else if (partials.length > 0 && firstPartial !== void 0) {
+    const detail = firstPartial.error ?? "recovered the findings completed before the cut";
+    merged.error = `${partials.length}/${covered.length} chunks were cut short \u2014 ${detail}`;
+    if (firstPartial.finishReason !== void 0) merged.finishReason = firstPartial.finishReason;
+    if (partials.some((chunk2) => chunk2.some((r) => r.budgetExhausted === true))) {
+      merged.budgetExhausted = true;
+    }
   }
   return merged;
 }
@@ -40385,6 +41305,46 @@ function buildSeveritySummary(findings) {
   return parts.join(" ");
 }
 
+// src/review/selfNegating.ts
+var SENTENCE_SPLIT = /(?<=[.!?])\s+/;
+var LEADING_PREFIX = /^(?:this is|that is|it is)\s+/i;
+var TRAILING_PUNCTUATION = /[.!?]+$/;
+var NEGATION_PATTERNS = [
+  /^no issues?( here| found)?$/i,
+  /^no violations?$/i,
+  /^no (?:real )?(?:problem|bug|concern)$/i,
+  /^not a (?:real )?issue$/i,
+  /^no action needed$/i,
+  /^no changes? needed$/i
+];
+var FINAL_ONLY_PATTERNS = [/^acceptable$/i, /^fine$/i];
+function normalizeText(text2) {
+  let s = text2.trim();
+  s = s.replace(/^[-*+]\s+/, "");
+  s = s.replace(/^#{1,6}\s+/, "");
+  const wrappers = ["***", "**", "__", "`"];
+  for (const w of wrappers) {
+    if (s.startsWith(w) && s.endsWith(w) && s.length > w.length * 2) {
+      s = s.slice(w.length, -w.length).trim();
+      break;
+    }
+  }
+  return s;
+}
+function stripSentence(sentence) {
+  return sentence.trim().replace(LEADING_PREFIX, "").replace(TRAILING_PUNCTUATION, "").trim();
+}
+function isSelfNegating(text2) {
+  const sentences = normalizeText(text2).split(SENTENCE_SPLIT).map((s) => s.trim()).filter((s) => s !== "");
+  if (sentences.length === 0) return false;
+  const lastIndex = sentences.length - 1;
+  return sentences.some((sentence, i) => {
+    const stripped = stripSentence(sentence);
+    if (NEGATION_PATTERNS.some((p) => p.test(stripped))) return true;
+    return i === lastIndex && FINAL_ONLY_PATTERNS.some((p) => p.test(stripped));
+  });
+}
+
 // src/review/validate.ts
 function validateFindings(findings, changedLinesByPath, minConfidence, lineTextByPath) {
   const changedSetByPath = /* @__PURE__ */ new Map();
@@ -40393,6 +41353,7 @@ function validateFindings(findings, changedLinesByPath, minConfidence, lineTextB
   }
   const EMPTY_CHANGED = /* @__PURE__ */ new Set();
   const kept = [];
+  let selfNegating = 0;
   for (const f of findings) {
     const changedSet = changedSetByPath.get(f.path) ?? EMPTY_CHANGED;
     if (!changedSet.has(f.line)) continue;
@@ -40400,6 +41361,10 @@ function validateFindings(findings, changedLinesByPath, minConfidence, lineTextB
     if (isLlm && f.quoted_line !== void 0 && lineTextByPath !== void 0) {
       const actual = lineTextByPath.get(f.path)?.get(f.line);
       if (actual !== void 0 && !quotesMatch(actual, f.quoted_line)) continue;
+    }
+    if (isSelfNegating(f.text)) {
+      selfNegating++;
+      continue;
     }
     const c = f.confidence ?? "low";
     const keep = f.severity === "blocker" || f.severity === "high" || minConfidence === "high" && c === "high" || minConfidence === "medium" && (c === "high" || c === "medium");
@@ -40412,7 +41377,11 @@ function validateFindings(findings, changedLinesByPath, minConfidence, lineTextB
       kept.push(f);
     }
   }
-  return dedup(kept);
+  if (selfNegating > 0) {
+    process.stdout.write(`  Dropped ${selfNegating} self-negating finding(s)
+`);
+  }
+  return { findings: dedup(kept), selfNegating };
 }
 function quotesMatch(actual, quoted) {
   const norm = (s) => s.replace(/\s+/g, " ").trim();
@@ -41033,6 +42002,7 @@ async function reviewAndValidate(input) {
     return {
       result: { verdict: "approved", findings: [] },
       stamped: [],
+      selfNegating: 0,
       mechanical,
       ledger: roundLedger(input, distillation, /* @__PURE__ */ new Map()),
       brief: null
@@ -41074,8 +42044,15 @@ async function reviewAndValidate(input) {
     review: (envelope) => reviewWithModel(envelope, modelOptions(input)),
     readFile: readFileAt(reviewHead, cwd)
   });
-  const stamped = validate(result, distillation.review_diff, inputs);
-  return { result, stamped, mechanical, ledger: roundLedger(input, distillation, coverage), brief };
+  const { stamped, selfNegating } = validate(result, distillation.review_diff, inputs);
+  return {
+    result,
+    stamped,
+    selfNegating,
+    mechanical,
+    ledger: roundLedger(input, distillation, coverage),
+    brief
+  };
 }
 function roundLedger(input, distillation, coverage) {
   return buildRoundLedger({
@@ -41117,7 +42094,10 @@ function validate(result, diff, inputs) {
     inputs.minConfidence,
     lineTextByPath
   );
-  return anchored.map((f) => ({ ...f, fp: fingerprint(f) }));
+  return {
+    stamped: anchored.findings.map((f) => ({ ...f, fp: fingerprint(f) })),
+    selfNegating: anchored.selfNegating
+  };
 }
 
 // src/review/verdict.ts
@@ -41843,7 +42823,7 @@ function settleVerdict(input, reduction, exceptions) {
   }
   const validated = { ...input.result, findings };
   let verdict = resolveVerdict(validated.verdict, findings.length);
-  const removed = suppressed.length + scoped.dropped.length;
+  const removed = suppressed.length + scoped.dropped.length + input.selfNegating;
   if (verdict === "changes" && findings.length === 0 && removed > 0) {
     verdict = "approved";
   }
@@ -42384,8 +43364,8 @@ function resolveNote(thread) {
 async function runReview(deps) {
   const { inputs, octokit, context: context2 } = deps;
   const cwd = deps.cwd ?? process.cwd();
-  const now = deps.now ?? Date.now;
-  const startMs = now();
+  const now2 = deps.now ?? Date.now;
+  const startMs = now2();
   const wallDeadline = inputs.maxWallMs > 0 ? startMs + inputs.maxWallMs : void 0;
   const event = await resolveTrigger(deps);
   if (!event || event.pr_number === void 0) {
@@ -42452,6 +43432,7 @@ async function runReview(deps) {
     baseBranch,
     result: reviewed.result,
     stamped: reviewed.stamped,
+    selfNegating: reviewed.selfNegating,
     mechanical: reviewed.mechanical,
     ledger: reviewed.ledger,
     exceptionPaths: treeScope?.exceptions ?? /* @__PURE__ */ new Set(),
@@ -42463,7 +43444,7 @@ async function runReview(deps) {
     stickyId,
     fullReview: event.full_review,
     startMs,
-    now,
+    now: now2,
     fetch: deps.fetch
   });
 }
@@ -45897,10 +46878,10 @@ async function getToken({ privateKey, payload }) {
 async function githubAppJwt({
   id,
   privateKey,
-  now = Math.floor(Date.now() / 1e3)
+  now: now2 = Math.floor(Date.now() / 1e3)
 }) {
   const privateKeyWithNewlines = privateKey.replace(/\\n/g, "\n");
-  const nowWithSafetyMargin = now - 30;
+  const nowWithSafetyMargin = now2 - 30;
   const expiration = nowWithSafetyMargin + 60 * 10;
   const payload = {
     iat: nowWithSafetyMargin,

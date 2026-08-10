@@ -3,13 +3,18 @@
 // coordinate-findings.sh (the single-model path never coordinates multiple
 // providers, so the dedup that used to live there runs here instead).
 //
-// Three drops, in order, matching the bash jq pipeline:
+// Four drops, in order, matching the bash jq pipeline plus the rev-5 noise gate:
 //   1. Anchored — the cited `line` must be a real changed line in the diff for
 //      that path (anti-hallucination). Unanchored findings are dropped.
-//   2. Confidence gate — keep blocker/high severity regardless; otherwise the
+//   2. Self-negation (review/selfNegating.ts) — the finding's own text concludes
+//      there is no defect ("No issue.", "This is acceptable. No violation.").
+//      Purely structural gates never catch this: the finding is anchored and can
+//      carry high confidence, it just says nothing is wrong. Runs BEFORE the
+//      confidence gate so a high-confidence "No issue." cannot survive it.
+//   3. Confidence gate — keep blocker/high severity regardless; otherwise the
 //      finding's confidence must meet MIN_CONFIDENCE (high floor keeps high
 //      only; medium floor keeps high or medium). Missing confidence is "low".
-//   3. Suggestion strip — keep `suggestion` only when confidence is high AND the
+//   4. Suggestion strip — keep `suggestion` only when confidence is high AND the
 //      whole [line..end_line] span is inside the diff; else strip it (the
 //      finding survives, only the unsafe-to-apply patch is removed).
 // Then dedup by (path|line|end_line|normalized-text) fingerprint, keeping the
@@ -18,9 +23,19 @@ import type { Finding } from "@/llm/schema.js";
 // SEVERITY_RANK is owned by render.ts (single source of truth) — imported here so
 // the dedup's max-severity comparison can never drift from the render ordering.
 import { SEVERITY_RANK } from "./render.js";
+import { isSelfNegating } from "./selfNegating.js";
 
 /** Confidence floor: "high" keeps high only; "medium" keeps high or medium. */
 export type MinConfidence = "high" | "medium";
+
+/** {@link validateFindings}'s output: the surviving findings plus the count
+ *  dropped as self-negating — the caller plumbs that count into
+ *  `settleVerdict`'s `removed` (pipeline/settle.ts) so an all-junk review still
+ *  flips a findingless "changes" to "approved" instead of blocking on noise. */
+export interface ValidateFindingsResult {
+  findings: Finding[];
+  selfNegating: number;
+}
 
 /**
  * Filter and dedup model findings against the diff's changed lines.
@@ -30,15 +45,16 @@ export type MinConfidence = "high" | "medium";
  *   the diff for that path (from ShapedFile.changed_lines). A path with no entry
  *   has no anchorable lines, so all its findings are unanchored and dropped.
  * @param minConfidence - the MIN_CONFIDENCE floor (high|medium).
- * @returns the kept findings, deduped, in input order (dedup keeps the first
- *   occurrence of each fingerprint, upgraded to the group's max severity).
+ * @returns the kept findings (deduped, in input order — dedup keeps the first
+ *   occurrence of each fingerprint, upgraded to the group's max severity) and the
+ *   self-negating drop count.
  */
 export function validateFindings(
   findings: Finding[],
   changedLinesByPath: Map<string, number[]>,
   minConfidence: MinConfidence,
   lineTextByPath?: Map<string, Map<number, string>>,
-): Finding[] {
+): ValidateFindingsResult {
   // Build each path's changed-line Set once, not once per finding: the Set depends
   // only on f.path, and N findings can span far fewer files than N.
   const changedSetByPath = new Map<string, Set<number>>();
@@ -48,6 +64,7 @@ export function validateFindings(
   const EMPTY_CHANGED = new Set<number>();
 
   const kept: Finding[] = [];
+  let selfNegating = 0;
   for (const f of findings) {
     const changedSet = changedSetByPath.get(f.path) ?? EMPTY_CHANGED;
 
@@ -69,7 +86,16 @@ export function validateFindings(
       if (actual !== undefined && !quotesMatch(actual, f.quoted_line)) continue;
     }
 
-    // 2. Confidence gate. Missing confidence is treated as below medium ("low").
+    // 2. Self-negation: the finding's own text concludes there is no defect
+    // ("No issue.", "This is acceptable. No violation."). Runs before the
+    // confidence gate — a "No issue." emitted at high confidence must not survive
+    // it just because the model was confident there was nothing to say.
+    if (isSelfNegating(f.text)) {
+      selfNegating++;
+      continue;
+    }
+
+    // 3. Confidence gate. Missing confidence is treated as below medium ("low").
     const c = f.confidence ?? "low";
     const keep =
       f.severity === "blocker" ||
@@ -78,7 +104,7 @@ export function validateFindings(
       (minConfidence === "medium" && (c === "high" || c === "medium"));
     if (!keep) continue;
 
-    // 3. Suggestion strip: keep it only when high-confidence AND the whole span
+    // 4. Suggestion strip: keep it only when high-confidence AND the whole span
     // is in the diff; otherwise drop just the suggestion, keep the finding.
     const spanInDiff = spanIsInDiff(f, changedSet);
     if (f.suggestion !== undefined && !(f.confidence === "high" && spanInDiff)) {
@@ -89,7 +115,10 @@ export function validateFindings(
     }
   }
 
-  return dedup(kept);
+  if (selfNegating > 0) {
+    process.stdout.write(`  Dropped ${selfNegating} self-negating finding(s)\n`);
+  }
+  return { findings: dedup(kept), selfNegating };
 }
 
 /**
