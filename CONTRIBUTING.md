@@ -32,7 +32,7 @@ bun run test           # vitest run
 bun run build          # esbuild → run/index.cjs and sanitize-sarif/index.cjs (commit both; CI fails if they drift from src)
 ```
 
-[lefthook](https://lefthook.dev) git hooks (installed by `bun install`): **pre-commit** runs `oxlint --fix` + `oxfmt` on staged `.ts`; **pre-push** runs the full type-aware lint, typecheck, and a dist-sync build check.
+[lefthook](https://lefthook.dev) git hooks (installed by `bun install`): **pre-commit** runs `oxlint --fix` + `oxfmt` on staged `.ts`; **pre-push** runs the full type-aware lint, typecheck, and a bundle-sync build check.
 
 The bash actions (`cloudflare-tunnel/`, `scripts/`) keep their shell toolchain:
 
@@ -43,7 +43,7 @@ shellcheck --severity=warning cloudflare-tunnel/src/*.sh scripts/*.sh
 
 `code-review/` is a **composite** action: `action.yml` orchestrates pinned `gitleaks`
 (secrets) + `opengrep` (SAST) binaries → SARIF, then runs the node24 LLM reviewer
-(`dist/index.cjs`) which reads that SARIF (`TOOLU_SARIF_DIR`) and triages it. To exercise
+(the nested `run/` action, `run/index.cjs`) which reads that SARIF (`TOOLU_SARIF_DIR`) and triages it. To exercise
 the deterministic layer locally, run the scanners and point the reviewer at their output:
 
 ```bash

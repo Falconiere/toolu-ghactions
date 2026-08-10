@@ -257,6 +257,9 @@ describe("streamVerdict — transport failures (AC-5)", () => {
       (e: unknown) => e,
     );
     expect(err).toBeInstanceOf(Error);
-    expect(String(err)).toContain("without a finish");
+    if (!(err instanceof Error)) throw new Error("expected an Error");
+    // Transport-classified per AC-5: NOT the SDK's schema-failure class.
+    expect(NoObjectGeneratedError.isInstance(err)).toBe(false);
+    expect(err.message).toBe("model stream ended without a finish or error part");
   });
 });
