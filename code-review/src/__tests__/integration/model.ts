@@ -83,8 +83,10 @@ export interface ModelServer {
 /**
  * An OpenRouter chat-completions response carrying `content`, in the shape the request
  * asked for: SSE chunk frames when it streamed (the review call), one JSON body
- * otherwise (the cartographer). `finishReason` is the model's stop reason — "stop"
- * everywhere except a scripted truncation.
+ * otherwise (the cartographer). CONTRACT: the cartographer path never streams —
+ * it rides generateObject (rawJson), which never sets `stream: true`, so routing on
+ * the request body is exact, not heuristic. `finishReason` is the model's stop
+ * reason — "stop" everywhere except a scripted truncation.
  */
 function chatResponse(
   content: string,

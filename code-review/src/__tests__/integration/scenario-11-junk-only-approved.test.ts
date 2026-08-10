@@ -56,6 +56,36 @@ function junkFindingsFor(paths: string[]): ScriptedFinding[] {
 }
 
 describe("scenario 11 — an all-junk review settles approved (AC-8)", () => {
+  it("junk under an APPROVED verdict is also dropped, and the approval stands", async () => {
+    // The other settle path: the model approves but still emits self-negating
+    // noise — the filter must strip it without flipping the verdict.
+    const { dir, headSha } = junkRepo();
+    const { octokit, rec } = fakeOctokit();
+    const server = modelServer({
+      reply: (call) => ({
+        ok: {
+          review_plan: "Reviewed the package.",
+          verdict: "approved",
+          findings: junkFindingsFor(diffPaths(call)),
+        },
+      }),
+    });
+
+    const result = await runReview({
+      inputs: baseInputs(),
+      octokit,
+      context: prContext(headSha),
+      fetch: server.fetch,
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    expect(result.verdict).toBe("approved");
+    const body = lastBody(rec);
+    for (const text of JUNK_TEXTS) expect(body).not.toContain(text);
+    expect(inlineComments(rec)).toHaveLength(0);
+  });
+
   it("every finding is self-negating noise: validateFindings drops all of them and the findingless changes flips to approved", async () => {
     const { dir, headSha } = junkRepo();
     const { octokit, rec } = fakeOctokit();

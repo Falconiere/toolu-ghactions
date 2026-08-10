@@ -15,8 +15,10 @@ import { APICallError } from "ai";
  * output overruns max_tokens is retried with a DOUBLED budget; this bounds that ladder so
  * a pathological chunk never asks for a budget the provider would refuse outright.
  *
- * 131072 is the largest budget the shipped models accept for a single completion, and it
- * is exactly {@link MAX_ESCALATIONS} doublings above the action's default 8192.
+ * 131072 is the largest budget the shipped models accept for a single completion. Each
+ * escalation doubles the CURRENT budget, so only the action's default 8192 lands on the
+ * ceiling in exactly {@link MAX_ESCALATIONS} doublings — any other starting budget just
+ * climbs its own ladder until this ceiling caps it (a 4096 start tops out at 65536).
  */
 export const MAX_TOKEN_CEILING = 131_072;
 

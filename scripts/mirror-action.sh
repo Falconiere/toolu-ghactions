@@ -44,7 +44,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 layout_code_review() {
   local dest="$1"
   cp -R "$REPO_ROOT/code-review/." "$dest/"
-  sed 's#uses: \$/code-review/#uses: $/#g' \
+  sed 's#^\([[:space:]]*uses:[[:space:]]*\)\$/code-review/#\1$/#' \
     "$REPO_ROOT/code-review/action.yml" >"$dest/action.yml"
   # sed exits 0 whether or not it matched — assert the rewrite actually landed,
   # because a mirror published with an unrewritten `$/code-review/` reference

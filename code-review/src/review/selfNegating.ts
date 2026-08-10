@@ -39,6 +39,7 @@ const NEGATION_PATTERNS: readonly RegExp[] = [
   /^no issues?( here| found)?$/i,
   /^no violations?$/i,
   /^no (?:real )?(?:problem|bug|concern)$/i,
+  /^no defects?( here| found)?$/i,
   /^not a (?:real )?issue$/i,
   /^no action needed$/i,
   /^no changes? needed$/i,
@@ -60,7 +61,9 @@ function normalizeText(text: string): string {
   s = s.replace(/^#{1,6}\s+/, ""); // leading markdown heading marker
   const wrappers = ["***", "**", "__", "`"];
   for (const w of wrappers) {
-    if (s.startsWith(w) && s.endsWith(w) && s.length > w.length * 2) {
+    // >=: the degenerate empty body ("****") unwraps to "" instead of surviving
+    // as literal asterisks; any real 1+-char body already exceeded the bound.
+    if (s.startsWith(w) && s.endsWith(w) && s.length >= w.length * 2) {
       s = s.slice(w.length, -w.length).trim();
       break;
     }

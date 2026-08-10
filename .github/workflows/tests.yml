@@ -115,7 +115,9 @@ jobs:
         # build — consumers run the checked-in bundles, not the TS sources. Fail if
         # `bun run build` produced any change.
         if: ${{ env.RUN == 'true' }}
-        run: git diff --quiet -- run/index.cjs sanitize-sarif/index.cjs
+        # Full-tree on purpose: a future bundle added to build.mjs is covered
+        # without remembering to extend a pathspec.
+        run: git diff --quiet
       - name: Install action-validator
         if: ${{ env.RUN == 'true' }}
         run: npm i -g @action-validator/cli
