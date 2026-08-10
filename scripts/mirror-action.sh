@@ -44,7 +44,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 layout_code_review() {
   local dest="$1"
   cp -R "$REPO_ROOT/code-review/." "$dest/"
-  sed 's#^\([[:space:]]*uses:[[:space:]]*\)\$/code-review/#\1$/#' \
+  # Deliberately broad (matches `- uses:` too); the guard below must stay AT
+  # LEAST as broad as this sed or a shape change slips through both silently.
+  sed 's#uses: \$/code-review/#uses: $/#g' \
     "$REPO_ROOT/code-review/action.yml" >"$dest/action.yml"
   # sed exits 0 whether or not it matched — assert the rewrite actually landed,
   # because a mirror published with an unrewritten `$/code-review/` reference
@@ -53,9 +55,10 @@ layout_code_review() {
     || die "code-review hoist rewrite failed: no 'uses: \$/run' in mirror action.yml"
   grep -qF 'uses: $/sanitize-sarif' "$dest/action.yml" \
     || die "code-review hoist rewrite failed: no 'uses: \$/sanitize-sarif' in mirror action.yml"
-  # Scoped to `uses:` lines — the composite's own comments legitimately mention
-  # the literal when explaining this very rewrite.
-  grep -qE '^[[:space:]]*uses:[[:space:]]*\$/code-review/' "$dest/action.yml" \
+  # Unanchored `uses:` predicate: broader than the sed (catches `- uses:` shapes
+  # the sed might miss), still blind to comments — those mention the literal
+  # without a `uses:` prefix when explaining this very rewrite.
+  grep -qE 'uses:[[:space:]]*\$/code-review/' "$dest/action.yml" \
     && die "code-review hoist rewrite incomplete: an unrewritten 'uses: \$/code-review/…' remains in mirror action.yml"
   return 0
 }
