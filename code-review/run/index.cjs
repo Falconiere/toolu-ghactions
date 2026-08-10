@@ -40684,7 +40684,8 @@ async function reviewWithModel(envelope, opts) {
         return { verdict: "approved", findings: [], other_checks: JSON.stringify(object2) };
       }
       const streamed = await streamVerdict(call);
-      if (streamed.outcome === "complete") return { ...streamed.object };
+      if (streamed.outcome === "complete")
+        return { ...streamed.object, finishReason: streamed.finishReason };
       best = bestPrefix(best, streamed);
       if (streamed.outcome === "truncated") {
         const next = nextBudget(budget, escalations);
@@ -41317,6 +41318,7 @@ var NEGATION_PATTERNS = [
   /^no issues?( here| found)?$/i,
   /^no violations?$/i,
   /^no (?:real )?(?:problem|bug|concern)$/i,
+  /^no defects?( here| found)?$/i,
   /^not a (?:real )?issue$/i,
   /^no action needed$/i,
   /^no changes? needed$/i
@@ -41328,7 +41330,7 @@ function normalizeText(text2) {
   s = s.replace(/^#{1,6}\s+/, "");
   const wrappers = ["***", "**", "__", "`"];
   for (const w of wrappers) {
-    if (s.startsWith(w) && s.endsWith(w) && s.length > w.length * 2) {
+    if (s.startsWith(w) && s.endsWith(w) && s.length >= w.length * 2) {
       s = s.slice(w.length, -w.length).trim();
       break;
     }

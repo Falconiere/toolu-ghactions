@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { APICallError, NoObjectGeneratedError } from "ai";
+import { MockLanguageModelV1 } from "ai/test";
 import { z } from "zod";
 import { streamVerdict, type StreamVerdictResult } from "@/llm/streamVerdict.js";
 import { resolveModel } from "@/llm/providers.js";
@@ -232,7 +233,6 @@ describe("streamVerdict — transport failures (AC-5)", () => {
     // synthesize a finish part on flush, so only a future/misbehaving provider can end
     // a stream finishless. The SDK's own test model is the one way to exercise the
     // branch directly — everything else in this file rides the real provider stack.
-    const { MockLanguageModelV1 } = await import("ai/test");
     const { content } = fixture("findings-two");
     const finishless = new MockLanguageModelV1({
       doStream: async () => ({

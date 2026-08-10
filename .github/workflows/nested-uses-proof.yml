@@ -7,8 +7,10 @@
 # runtime, not resolution, and is not what this gate measures.
 #
 # The consumed ref is HARDCODED in the `uses:` line below (`uses:` cannot take
-# expressions) — edit it per release branch before dispatching, and verify the
-# run's log shows the composite fetched at the ref you expect. The hoisted-mirror
+# expressions). It points at `main` so the committed workflow stays valid after
+# release branches are deleted; for a PRE-merge proof of a release branch, edit
+# the ref in that branch (the proof run URL goes in the PR, the ref flips back
+# to main before merge) and verify the run's log shows the expected ref. The hoisted-mirror
 # shape is covered separately: the mirror bats test asserts the $/ hoist rewrite,
 # plus a one-off dispatch against the mirror repo before a Marketplace release.
 #
@@ -41,7 +43,7 @@ jobs:
       - name: Consume composite at the requested ref
         id: probe
         continue-on-error: true # runtime failures are fine; resolution failures are what we read from the log
-        uses: falconiere/toolu-ghactions/code-review@feat/code-review-reliability
+        uses: falconiere/toolu-ghactions/code-review@main
         with:
           PROVIDER: deepseek
           API_KEY: proof-run-no-key

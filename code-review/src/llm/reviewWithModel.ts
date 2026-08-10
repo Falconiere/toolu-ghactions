@@ -205,8 +205,9 @@ export async function reviewWithModel(
 
       const streamed = await streamVerdict(call);
       // A validated Verdict carries exactly this result's success fields (its two-value
-      // verdict widening into the three-value one), so it rides through whole.
-      if (streamed.outcome === "complete") return { ...streamed.object };
+      // verdict widening into the three-value one) plus the model's stop reason.
+      if (streamed.outcome === "complete")
+        return { ...streamed.object, finishReason: streamed.finishReason };
       best = bestPrefix(best, streamed);
       if (streamed.outcome === "truncated") {
         // Headroom left → one more call at a doubled budget, preferring a COMPLETE review
