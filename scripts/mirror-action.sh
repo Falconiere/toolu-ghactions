@@ -53,8 +53,10 @@ layout_code_review() {
     || die "code-review hoist rewrite failed: no 'uses: \$/run' in mirror action.yml"
   grep -qF 'uses: $/sanitize-sarif' "$dest/action.yml" \
     || die "code-review hoist rewrite failed: no 'uses: \$/sanitize-sarif' in mirror action.yml"
-  grep -qF '$/code-review/' "$dest/action.yml" \
-    && die "code-review hoist rewrite incomplete: '\$/code-review/' still present in mirror action.yml"
+  # Scoped to `uses:` lines — the composite's own comments legitimately mention
+  # the literal when explaining this very rewrite.
+  grep -qE '^[[:space:]]*uses:[[:space:]]*\$/code-review/' "$dest/action.yml" \
+    && die "code-review hoist rewrite incomplete: an unrewritten 'uses: \$/code-review/…' remains in mirror action.yml"
   return 0
 }
 

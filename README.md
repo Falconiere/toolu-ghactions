@@ -122,15 +122,16 @@ flowchart LR
 
 ## Marketplace
 
-Each action is listed on the GitHub Marketplace from its own mirror repo — [`toolu-code-review`](https://github.com/Falconiere/toolu-code-review) and [`toolu-cloudflare-tunnel`](https://github.com/Falconiere/toolu-cloudflare-tunnel) — because the Marketplace lists one root-`action.yml` action per repository and never a subdirectory. The mirrors are **generated from this monorepo on each release** by the `mirror` job in [`release.yml`](.github/workflows/release.yml) — for `code-review` that copies the action source **including the bundled `dist/`**, so the mirror runs as the same node24 JS action with identical inputs/outputs. Edit here, not there. This repo stays canonical: the `falconiere/toolu-ghactions/<action>@v2` paths above are the recommended way to consume the actions.
+Each action is listed on the GitHub Marketplace from its own mirror repo — [`toolu-code-review`](https://github.com/Falconiere/toolu-code-review) and [`toolu-cloudflare-tunnel`](https://github.com/Falconiere/toolu-cloudflare-tunnel) — because the Marketplace lists one root-`action.yml` action per repository and never a subdirectory. The mirrors are **generated from this monorepo on each release** by the `mirror` job in [`release.yml`](.github/workflows/release.yml) — for `code-review` that copies the action source **including the nested `run/` and `sanitize-sarif/` node24 actions and their committed bundles**, rewriting the composite's `$/code-review/` self-references to `$/` for the hoisted root — the mirror runs as the same composite with identical inputs/outputs. Edit here, not there. This repo stays canonical: the `falconiere/toolu-ghactions/<action>@v2` paths above are the recommended way to consume the actions.
 
 ## Repository structure
 
 ```
 .
-├── code-review/            # AI code review action (TypeScript, node24 JS action)
-│   ├── action.yml          # runs: node24 · main: dist/index.cjs
-│   ├── dist/index.cjs       # Bundled entrypoint (committed; built by build.mjs)
+├── code-review/            # AI code review action (TypeScript, composite + nested node24 actions)
+│   ├── action.yml          # composite: scanners → sanitize → upload → review
+│   ├── run/index.cjs        # LLM reviewer bundle (committed; built by build.mjs)
+│   ├── sanitize-sarif/      # SARIF sanitizer nested action + bundle
 │   ├── src/                # main → inputs → git/ → rules → prompt → llm/ → review/ → github/
 │   ├── prompts/            # Default review checklist
 │   └── __tests__/          # vitest suite (real recorded fixtures, no mocks)
@@ -157,7 +158,7 @@ cd code-review
 npm ci
 npx tsc --noEmit        # type-check
 npx vitest run          # tests (real recorded fixtures, no mocks)
-node build.mjs          # bundle src/ → dist/index.cjs (commit the result)
+node build.mjs          # bundle src/ → run/index.cjs + sanitize-sarif/index.cjs (commit the result)
 ```
 
 `cloudflare-tunnel` (and the shared `scripts/`) is still bash — test and lint it with bats + shellcheck:
@@ -173,7 +174,7 @@ shellcheck --severity=warning cloudflare-tunnel/src/*.sh scripts/*.sh expo-build
 npx @action-validator/cli code-review/action.yml cloudflare-tunnel/*/action.yml expo-builder/*/action.yml
 ```
 
-`code-review` tests use **real recorded fixtures** (OpenRouter + native DeepSeek responses, GitHub API payloads, real git repos) — no mocks, no API key needed. A CI check rebuilds `dist/` and fails if the committed bundle has drifted. See **[CONTRIBUTING.md](./CONTRIBUTING.md)**.
+`code-review` tests use **real recorded fixtures** (OpenRouter + native DeepSeek responses, GitHub API payloads, real git repos) — no mocks, no API key needed. A CI check rebuilds `run/index.cjs` + `sanitize-sarif/index.cjs` and fails if the committed bundles have drifted. See **[CONTRIBUTING.md](./CONTRIBUTING.md)**.
 
 ## Releases
 
@@ -187,7 +188,7 @@ Pin `@v2` for the floating major (**recommended**), or `@v2.0.0` for exact semve
 
 > **v2 — `code-review` is now a TypeScript JS action.** The reviewer was rewritten
 > from a Dockerized bash action into a bundled node24 JavaScript action
-> (`runs: node24`, `main: dist/index.cjs`). This is a **breaking packaging change**
+> (today: a composite invoking nested node24 actions in `run/` and `sanitize-sarif/`). This is a **breaking packaging change**
 > with **no contract change** — every `action.yml` input and output name and
 > default is preserved, so existing `@v2` workflows keep working untouched. The
 > practical win: because consumers run the checked-out ref directly (no Docker
