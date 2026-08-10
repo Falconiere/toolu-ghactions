@@ -1,5 +1,20 @@
 # Changelog
 
+## [7.1.0](https://github.com/Falconiere/toolu-ghactions/compare/v7.0.0...v7.1.0) (2026-08-10)
+
+
+### Features
+
+* **code-review:** stream reviews, gate junk findings, honest budget, SARIF sanitizer, nested node24 actions ([3a45ab3](https://github.com/Falconiere/toolu-ghactions/commit/3a45ab3e110dfe9cd2b1d523a52ef76ba7e3e308))
+
+
+### Bug Fixes
+
+* **code-review:** address dogfood-review round 1 — filter pattern, finishReason, evergreen proof ref, direct salvage tests ([e1b173d](https://github.com/Falconiere/toolu-ghactions/commit/e1b173d14b0fabca7abfad985f7258c9a9913b7c))
+* **code-review:** close pre-push review findings — CI contract, mirror rewrite guard, prompt-resolution trust order, consumer scan excludes ([1ba5ad8](https://github.com/Falconiere/toolu-ghactions/commit/1ba5ad820bc6347da635da873602410a9e222c47))
+* **code-review:** keep the mirror guard broader than its sed, correct the proof-gate claim ([1962df5](https://github.com/Falconiere/toolu-ghactions/commit/1962df5f57de50d358508946f6c662dd2b7eb9e9))
+* **code-review:** scope the mirror hoist guard to uses: lines, finish dist doc re-targeting, tighten the no-finish assertion ([008fb8b](https://github.com/Falconiere/toolu-ghactions/commit/008fb8bb502aad562b5c611525344ca55bb893ae))
+
 ## [7.0.0](https://github.com/Falconiere/toolu-ghactions/compare/v6.6.0...v7.0.0) (2026-08-07)
 
 
