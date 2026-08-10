@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { reviewWithModel } from "@/llm/reviewWithModel.js";
 import type { Envelope } from "@/prompt.js";
+import { replayCompletion } from "@/__tests__/integration/sse.js";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -14,17 +15,16 @@ interface CapturedBody {
   provider?: { require_parameters?: boolean };
   temperature?: number;
   max_tokens?: number;
+  stream?: boolean;
 }
 
-/** A fetch that records the outgoing request body, then replays the success fixture. */
+/** A fetch that records the outgoing request body, then replays the success fixture
+ *  (as SSE — the review call streams). */
 function capturingFetch(captured: { body: CapturedBody | null }): typeof fetch {
   const success = JSON.parse(readFileSync(join(FIXTURES, "success.json"), "utf8"));
   return async (_url, init) => {
     captured.body = JSON.parse(typeof init?.body === "string" ? init.body : "{}");
-    return new Response(JSON.stringify(success), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
+    return replayCompletion(success, init);
   };
 }
 
@@ -58,5 +58,8 @@ describe("outgoing request shape (reasoning-off proof)", () => {
     // temperature 0: greedy decoding for the most reproducible review output achievable.
     expect(body.temperature).toBe(0);
     expect(body.max_tokens).toBe(4096);
+    // Review calls STREAM (llm/streamVerdict.ts) — that is what makes a response cut at
+    // max_tokens salvageable instead of an unparseable throw.
+    expect(body.stream).toBe(true);
   });
 });

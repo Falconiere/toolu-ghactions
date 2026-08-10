@@ -37,6 +37,7 @@ const FIXTURE = join(HERE, "fixtures", "success.json");
 const HARNESS = `
 import { readFileSync } from "node:fs";
 import { reviewWithModel } from "@/llm/reviewWithModel.js";
+import { replayCompletion } from "@/__tests__/integration/sse.js";
 
 void (async () => {
   const success = JSON.parse(readFileSync(process.argv[2], "utf8"));
@@ -58,12 +59,7 @@ void (async () => {
         else init?.signal?.addEventListener("abort", onAbort, { once: true });
       });
     }
-    return Promise.resolve(
-      new Response(JSON.stringify(success), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    return Promise.resolve(replayCompletion(success, init));
   };
 
   const result = await reviewWithModel(

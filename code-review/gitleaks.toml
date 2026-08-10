@@ -1,10 +1,15 @@
 # gitleaks config for the code-review action's secret scan. Extends the default
-# rules but allowlists build output + deps: bundled dependency test keys (e.g. in a
-# committed dist bundle) are not real secrets, and scanning them only produces noise —
-# mirroring how the review's noise filter already drops dist/build output.
+# rules but allowlists build output + deps: bundled dependency test keys (e.g. in
+# committed bundles) are not real secrets, and scanning them only produces noise —
+# mirroring how the review's noise filter already drops build output.
 [extend]
 useDefault = true
 
 [allowlist]
 description = "Ignore build output, bundles, and dependencies"
-paths = ['''(^|/)dist/''', '''(^|/)build/''', '''(^|/)node_modules/''']
+paths = [
+  '''(^|/)run/index\.cjs''',
+  '''(^|/)sanitize-sarif/index\.cjs''',
+  '''(^|/)build/''',
+  '''(^|/)node_modules/''',
+]

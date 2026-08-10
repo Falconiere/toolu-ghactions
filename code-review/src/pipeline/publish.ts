@@ -66,6 +66,10 @@ export interface PublishInput {
   diff: DiffData;
   result: ProviderResult;
   stamped: StampedFinding[];
+  /** Count `validateFindings` dropped as self-negating ("No issue." chatter) —
+   *  feeds `settleVerdict`'s `removed`, flipping an all-junk "changes" to
+   *  "approved" instead of blocking on noise (AC-8). */
+  selfNegating: number;
   priorThreads: PriorThread[];
   prior: ReviewState | null;
   stickyId: number | undefined;

@@ -21,6 +21,7 @@ import type { ActionInputs } from "@/inputs.js";
 import type { EventResolution } from "@/github/event.js";
 import type { BlockableVerdict } from "@/review/gate.js";
 import { git, setupGitRepo, writeFile, removeRepo } from "@/git/__tests__/helpers.js";
+import { contentFrames, sseResponse, wantsStream } from "@/__tests__/integration/sse.js";
 
 /** One recorded outgoing model request. */
 interface CapturedCall {
@@ -33,21 +34,19 @@ interface RequestBody {
   messages?: { role: string; content: string }[];
 }
 
-/** A chat-completions response carrying `value` as the JSON message content. */
-function chatResponse(value: unknown): Response {
+/** A chat-completions response carrying `value` as the JSON message content, in the
+ *  shape the request asked for: SSE chunk frames for the streamed package calls, one
+ *  JSON body for the cartographer's non-streaming call (see integration/sse.ts). */
+function chatResponse(value: unknown, init: RequestInit | undefined): Response {
+  const content = JSON.stringify(value);
+  if (wantsStream(init)) return sseResponse(contentFrames(content, "stop"));
   return new Response(
     JSON.stringify({
       id: "gen-review-call-test",
       object: "chat.completion",
       created: 1_781_827_528,
       model: "deepseek/deepseek-v4-flash",
-      choices: [
-        {
-          index: 0,
-          finish_reason: "stop",
-          message: { role: "assistant", content: JSON.stringify(value) },
-        },
-      ],
+      choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content } }],
       usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
     }),
     { status: 200, headers: { "content-type": "application/json" } },
@@ -75,14 +74,17 @@ function modelServer(
       user: messages.find((m) => m.role === "user")?.content ?? "",
     };
     calls.push(call);
-    if (isCartographer(call)) return chatResponse(brief);
-    return chatResponse({
-      review_plan: "Reviewed the package.",
-      verdict: "approved",
-      findings: [],
-      other_checks: "",
-      top_must_fix: [],
-    });
+    if (isCartographer(call)) return chatResponse(brief, init);
+    return chatResponse(
+      {
+        review_plan: "Reviewed the package.",
+        verdict: "approved",
+        findings: [],
+        other_checks: "",
+        top_must_fix: [],
+      },
+      init,
+    );
   };
   return { fetch: fetchImpl, calls };
 }

@@ -21,6 +21,7 @@ import {
 } from "@/state.js";
 import { appendFpMarker } from "@/review/fpmarker.js";
 import { git, setupGitRepo, writeFile, removeRepo } from "@/git/__tests__/helpers.js";
+import { replayCompletion } from "./integration/sse.js";
 
 const FIXTURES = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -30,14 +31,12 @@ const FIXTURES = join(
   "fixtures",
 );
 
-/** A fetch that replays one recorded OpenRouter chat-completions response — no network. */
+/** A fetch that replays one recorded OpenRouter chat-completions response — no network.
+ *  Review calls stream, so the recorded body is re-served as SSE chunk frames; its
+ *  content is untouched (see integration/sse.ts). */
 function replayFetch(name: string): typeof fetch {
-  const body = JSON.parse(readFileSync(join(FIXTURES, `${name}.json`), "utf8"));
-  return async () =>
-    new Response(JSON.stringify(body), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
+  const body: unknown = JSON.parse(readFileSync(join(FIXTURES, `${name}.json`), "utf8"));
+  return async (_url, init) => replayCompletion(body, init);
 }
 
 /** The captured outgoing request body the prompt-routing assertions read. */
@@ -50,13 +49,10 @@ function capturingReplayFetch(
   name: string,
   captured: { body: CapturedRequestBody | null },
 ): typeof fetch {
-  const body = JSON.parse(readFileSync(join(FIXTURES, `${name}.json`), "utf8"));
+  const body: unknown = JSON.parse(readFileSync(join(FIXTURES, `${name}.json`), "utf8"));
   return async (_url, init) => {
     captured.body = JSON.parse(typeof init?.body === "string" ? init.body : "{}");
-    return new Response(JSON.stringify(body), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
+    return replayCompletion(body, init);
   };
 }
 
@@ -611,11 +607,8 @@ function routingFetch(routes: Array<[match: string, fixture: string]>): typeof f
     const raw = typeof init?.body === "string" ? init.body : "";
     const hit = routes.find(([m]) => raw.includes(m));
     const fixture = hit ? hit[1] : "approved";
-    const body = JSON.parse(readFileSync(join(FIXTURES, `${fixture}.json`), "utf8"));
-    return new Response(JSON.stringify(body), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
+    const body: unknown = JSON.parse(readFileSync(join(FIXTURES, `${fixture}.json`), "utf8"));
+    return replayCompletion(body, init);
   };
 }
 
@@ -1376,11 +1369,10 @@ function recordingRoutingFetch(
     });
     const hit = routes.find(([m]) => raw.includes(m));
     const fixture = hit ? hit[1] : "approved";
-    const fixtureBody = JSON.parse(readFileSync(join(FIXTURES, `${fixture}.json`), "utf8"));
-    return new Response(JSON.stringify(fixtureBody), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
+    const fixtureBody: unknown = JSON.parse(
+      readFileSync(join(FIXTURES, `${fixture}.json`), "utf8"),
+    );
+    return replayCompletion(fixtureBody, init);
   };
 }
 

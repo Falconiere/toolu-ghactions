@@ -106,6 +106,15 @@ describe("buildPrompt — security", () => {
   });
 });
 
+describe("buildPrompt — noise control signal bar (AC-3)", () => {
+  it("carries the defects-only, never-no-issue, and no-line-walking directives in the built system prompt", () => {
+    const env = buildPrompt({ diff: sampleDiff(), checklistPath: CHECKLIST_PATH });
+    expect(env.system).toContain("Findings are DEFECTS ONLY");
+    expect(env.system).toContain("NEVER emit a finding whose conclusion is that there");
+    expect(env.system).toContain("Never walk a file line-by-line");
+  });
+});
+
 describe("buildPrompt — envelope and inputs", () => {
   it("carries max_tokens and enforce_json_schema, defaulting to 8192/true", () => {
     const def = buildPrompt({ diff: sampleDiff(), checklistPath: CHECKLIST_PATH });

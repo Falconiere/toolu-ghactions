@@ -31,6 +31,6 @@ pre-push:
     - name: typecheck
       root: "code-review/"
       run: "bun run typecheck"
-    - name: dist-sync
+    - name: bundle-sync
       root: "code-review/"
-      run: "bun run build && git diff --quiet -- dist || { echo 'dist out of sync — run: cd code-review && bun run build, then commit dist'; exit 1; }"
+      run: "bun run build && git diff --quiet -- run/index.cjs sanitize-sarif/index.cjs || { echo 'bundles out of sync — run: cd code-review && bun run build, then commit run/index.cjs and sanitize-sarif/index.cjs'; exit 1; }"

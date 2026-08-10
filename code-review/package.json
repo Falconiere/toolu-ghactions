@@ -10,8 +10,8 @@
     "test": "vitest run",
     "lint": "oxlint --type-aware --deny-warnings --ignore-pattern=evals",
     "lint:fix": "oxlint --fix --ignore-pattern=evals",
-    "fmt": "oxfmt '!evals/**'",
-    "fmt:check": "oxfmt --check '!evals/**'",
+    "fmt": "oxfmt '!evals/**' '!run/index.cjs' '!sanitize-sarif/index.cjs'",
+    "fmt:check": "oxfmt --check '!evals/**' '!run/index.cjs' '!sanitize-sarif/index.cjs'",
     "prepare": "cd \"$(git rev-parse --show-toplevel)\" && lefthook install",
     "check": "bun run typecheck && bun run lint && bun run fmt:check && bun run test",
     "eval": "bun evals/run.ts"

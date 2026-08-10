@@ -596,7 +596,7 @@ resolution without posting the note again.
 | `PROVIDER` | no | `openrouter` | Backend to call: `openrouter` (any OpenAI-compatible model via OpenRouter) or `deepseek` (native `api.deepseek.com`, lower cost). Any other value fails the action with an error suggesting `PROVIDER: "openrouter"` + `MODEL_ID: "<vendor>/<model>"`. See [Native DeepSeek API](#native-deepseek-api). |
 | `MODEL_ID` | no | per-provider | Model id. Defaults to `deepseek/deepseek-v4-pro` for `openrouter` (1M-token context, 384k max output, so large diffs and verbose reviews rarely truncate) and `deepseek-v4-flash` for `deepseek`. Use `<vendor>/<model>` ids for OpenRouter; bare ids for native DeepSeek. Pick one with reliable JSON-schema structured output. |
 | `API_KEY` | **yes** | — | API key for the selected `PROVIDER` (OpenRouter or DeepSeek). **Required** — an empty value fails the action. Pass via a step-level `env:`/`secrets` reference for secret hygiene. |
-| `MAX_TOKENS` | no | `8192` | Max completion-token budget per request (always sent — omitting it makes OpenRouter reserve the model's full output window against your credits and can 402-reject). A response truncated at this limit (`finish_reason: length`) is retried with a doubled budget up to 32768; if it still truncates, the findings completed before the cut are salvaged. |
+| `MAX_TOKENS` | no | `8192` | Max completion-token budget per request (always sent — omitting it makes OpenRouter reserve the model's full output window against your credits and can 402-reject). A response truncated at this limit (`finish_reason: length`) is retried with a doubled budget up to the 131072 ceiling (escalations don't consume hang retries); whatever the outcome, the findings completed before a cut are salvaged. |
 | `MIN_CONFIDENCE` | no | `high` | Drop findings below this confidence unless severity is blocker/high (`high` or `medium`) |
 | `INLINE_COMMENTS` | no | `true` | Post per-line review comments with committable code suggestions (Reviews API), in addition to the summary comment |
 | `MANAGE_LABELS` | no | `true` | Set a real PR label chip matching the verdict (`merge-approved` / `request-changes`) and remove the opposite one. Requires `issues: write`. |
@@ -699,17 +699,23 @@ The gate governs the verdict only; a thrown infra error fails the job regardless
 
 No workflow YAML changes are required to adopt `@v7` — bump the pinned ref (`falconiere/toolu-ghactions/code-review@v7`) and the new behavior applies on the next run. If any downstream tooling parses the sticky comment's markdown directly (rather than the machine-readable verdict label `pr-babysit` uses), re-check it against the new section shapes above; the verdict label, checklist line, and `### Findings` block are unchanged.
 
-## Packaging (v2)
+## Packaging
 
-v2 is a **TypeScript node24 JavaScript action** — `runs: node24`, `main: dist/index.cjs`,
-a `dist/` bundle committed to the repo. It was rewritten from the previous
-Dockerized bash action; there is **no Docker image** anymore.
+The action is a **composite** whose two node steps are nested **node24 actions**, each with its bundle colocated and committed:
+- `run/` — the main LLM review (`run/index.cjs`)
+- `sanitize-sarif/` — the SARIF region sanitizer (`sanitize-sarif/index.cjs`)
+
+The composite invokes them with the `$/` self-repository syntax (GA 2026-07-30), which resolves against this action's repository at your pinned ref — so the nested steps always match the version you pinned.
+
+**Self-hosted runners:** because the node steps are node-type actions, the Actions runner supplies its own bundled Node — **no node on the runner's PATH is required**. The `$/` syntax requires **Actions runner ≥ 2.336.0** (GitHub-hosted and auto-updating self-hosted runners are already there; a version-pinned older runner must update).
+
+It was rewritten from the previous Dockerized bash action; there is **no Docker image** anymore.
 
 - **Breaking packaging change, no contract change.** Every `action.yml` input and
   output name and default is preserved, so an existing `@v2` workflow keeps
   working untouched — only the way the action runs changed.
 - **Fixes land on merge.** Because consumers run the checked-out ref directly
-  (no image to rebuild and re-push to a registry), a fix reaches `@v2` the moment
+  (no image to rebuild and re-push to a registry), a fix reaches the action the moment
   it merges — no release required.
 - **Single model, two backends.** The 6-vendor parallel ensemble was dropped in
   favor of one model — via OpenRouter or the native DeepSeek API, selected with
@@ -718,15 +724,36 @@ Dockerized bash action; there is **no Docker image** anymore.
   split key/model inputs (`OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `MODEL`) were
   [removed in v4](#removed-in-v4-migration).
 
+## SARIF sanitizer
+
+Runs automatically inside the composite — nothing to wire. gitleaks emits `region` values of `0` for findings it cannot anchor to a line (path-based rules like private-key files), and GitHub Code Scanning rejects the **entire** SARIF file for it (`startLine must be greater than or equal to 1`).
+
+Between the scanner steps and the upload, the sanitizer **copies** each `*.sarif` into an upload-only directory, fixing regions only in the copies: `startLine < 1` is clamped to `1`; sub-1 `startColumn`/`endLine`/`endColumn` are **deleted** (their SARIF defaults are sane, and a clamped empty region would trade one rejection for another). The upload step reads only the sanitized copies.
+
+The originals in `$RUNNER_TEMP` are untouched on purpose: the LLM triage reads those and deliberately **drops** unanchorable line-0 results instead of rewriting them — a finding that cannot be cited in the diff should not reach the review, but a real secret in a key file should still reach the Code Scanning tab (anchored at line 1).
+
+Best-effort like the scanner steps: an unparseable file is skipped with a workflow warning, and the step never fails the review.
+
+Only use it if your scanners produce noise that wastes review time. The action itself handles SARIF cleanup (for both scanner outputs) as part of its triage logic.
+
+## Streaming salvage & budget ceiling
+
+Large PRs can exceed the per-request `MAX_TOKENS` budget. When this happens:
+- **Streaming salvage** — findings completed *before* the truncation cut are kept (partial review), instead of the whole chunk being lost.
+- **Budget escalation** — a truncated response is retried with double the budget (`8192 → 16384 → 32768 → 65536 → 131072`), up to the 131072-token ceiling.
+- **Honest partial verdict** — when the budget still runs out, the comment notes **exactly** what to fix (raise `MAX_TOKENS`, lower `MAX_CHUNK_LINES`, or split the PR).
+
+A partial review always degrades a would-be `approved` verdict to an `error` (a partial pass is not an honest approval), so the gateway never auto-merges incomplete coverage.
+
 ## Development
 
-TypeScript bundled to `dist/index.cjs`; the dev loop runs on [bun](https://bun.sh). See [CONTRIBUTING](../CONTRIBUTING.md) for the full guide.
+TypeScript bundled to `run/index.cjs` and `sanitize-sarif/index.cjs`; the dev loop runs on [bun](https://bun.sh). See [CONTRIBUTING](../CONTRIBUTING.md) for the full guide.
 
 ```bash
 cd code-review
 bun install        # deps + git hooks (lefthook)
 bun run check      # typecheck + lint (oxlint, type-aware) + fmt:check (oxfmt) + test (vitest)
-bun run build      # esbuild → dist/index.cjs (commit it; CI fails if it drifts from src)
+bun run build      # esbuild → run/index.cjs and sanitize-sarif/index.cjs (commit both; CI fails if they drift from src)
 ```
 
 ## Eval harness

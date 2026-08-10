@@ -36,12 +36,16 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # --- layout transforms ------------------------------------------------------
 
-# Copy the code-review action to the mirror root. It is a node24 JS action whose
-# action.yml points at the committed dist/index.cjs bundle; `cp -R` copies dist/
-# along with everything else, so the mirror is self-contained with no rewrite.
+# Copy the code-review action to the mirror root. `cp -R` copies the run/ and
+# sanitize-sarif/ nested node24 actions along with everything else. One rewrite:
+# the composite references its nested actions with the `$/` self-repository
+# syntax rooted at the ACTION repo — `$/code-review/run` in the monorepo — and
+# the mirror hoists code-review/ to the repo root, so the prefix drops to `$/run`.
 layout_code_review() {
   local dest="$1"
   cp -R "$REPO_ROOT/code-review/." "$dest/"
+  sed 's#uses: \$/code-review/#uses: $/#g' \
+    "$REPO_ROOT/code-review/action.yml" >"$dest/action.yml"
 }
 
 # Copy the cloudflare-tunnel composite sub-actions and synthesize a root

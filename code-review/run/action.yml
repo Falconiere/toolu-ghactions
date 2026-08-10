@@ -1,0 +1,21 @@
+# run/ — the node-type entry for the AI review step. Internal: invoked by the
+# parent composite (../action.yml) via the `$/` self-repository syntax; not for
+# direct consumer use. node24 here is what makes the composite work on
+# self-hosted runners with no node on PATH — the Actions runner supplies its
+# bundled Node runtime for node-type actions.
+#
+# Inputs arrive as INPUT_* environment variables set on the invoking step (the
+# composite maps them explicitly), so none are declared here; the three outputs
+# ARE declared so the composite's `steps.review.outputs.*` mapping resolves.
+name: 'Toolu Code Review — run (internal)'
+description: 'Internal node entry for the Toolu code-review composite. Use the parent action, not this one.'
+outputs:
+  verdict:
+    description: 'Review verdict: approved, changes, skip, or error'
+  findings-count:
+    description: 'Number of findings reported'
+  comment-url:
+    description: 'URL of the posted verdict comment'
+runs:
+  using: 'node24'
+  main: 'index.cjs'

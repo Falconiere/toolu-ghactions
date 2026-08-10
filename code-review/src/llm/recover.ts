@@ -10,9 +10,19 @@
 // model clearly meant onto the schema, or drops it. When too little survives to be
 // honest about, recover() returns null and the caller abstains — a false clean is worse
 // than no review.
+//
+// The ABSTENTION itself lives here too ({@link abstain}), because it is the other half of
+// the same decision: recover-then-abstain is one policy, and keeping the two together is
+// what stops a caller from inventing a third answer. reviewWithModel keeps only the loop.
 import { NoObjectGeneratedError } from "ai";
 import { jsonrepair } from "jsonrepair";
+import { errorMessage } from "@/errors.js";
 import { Finding, PartialVerdict, normalizeFinding, normalizeVerdict } from "./schema.js";
+import {
+  deadlineSalvageMessage,
+  droppedFindingsMessage,
+  truncationSalvageMessage,
+} from "./budget.js";
 import type { ProviderResult } from "./reviewWithModel.js";
 
 /**
@@ -40,6 +50,60 @@ export function hasPartialOutput(err: unknown): boolean {
   );
 }
 
+/** A salvaged findings prefix — what a cut stream (length or deadline) did deliver
+ *  before it stopped. The plan is emitted first, so it usually survives the cut. */
+export interface Prefix {
+  findings: Finding[];
+  review_plan?: string;
+}
+
+/** The better of two salvaged prefixes: more completed findings wins, and a tie keeps the
+ *  one already retained (the earlier attempt), so a retry never loses ground. The caller
+ *  carries the winner across ALL its attempts and budget escalations. */
+export function bestPrefix(current: Prefix | undefined, candidate: Prefix): Prefix {
+  if (current === undefined) return candidate;
+  return candidate.findings.length > current.findings.length ? candidate : current;
+}
+
+/** Why a salvaged review is only a prefix, and (for a length cut) whether the output
+ *  budget still had room — the two facts that pick the salvage wording in budget.ts. */
+export interface Cut {
+  /** "length" — the model hit max_tokens; "deadline" — OUR per-attempt timer cut it. */
+  reason: "length" | "deadline";
+  /** Length cuts only: the budget was already at the output-token ceiling (or the
+   *  provider refused it), so raising MAX_TOKENS is no longer the reader's move. */
+  exhausted?: boolean;
+}
+
+/**
+ * Compose the {@link ProviderResult} for a findings prefix salvaged from a STREAM — the
+ * streaming counterpart of {@link recover}'s truncation branch, and deliberately shaped
+ * identically to it: verdict "changes" (a cut review never approves — the model never saw
+ * the findings it had not written yet), `partial` set, and the budget.ts wording for the
+ * cut it actually suffered.
+ *
+ * The caller guarantees a non-empty prefix: an empty one must abstain, never become a
+ * zero-finding blocking review.
+ */
+export function salvageResult(salvaged: Prefix, cut: Cut): ProviderResult {
+  const n = salvaged.findings.length;
+  const result: ProviderResult = {
+    verdict: "changes",
+    findings: salvaged.findings,
+    review_plan: salvaged.review_plan ?? "",
+    partial: true,
+    error:
+      cut.reason === "deadline"
+        ? deadlineSalvageMessage(n)
+        : truncationSalvageMessage(n, cut.exhausted === true),
+  };
+  // Only a length cut carries a finish reason; a deadline cut stopped for our own
+  // reasons, and claiming "length" there would send the reader after the wrong knob.
+  if (cut.reason === "length") result.finishReason = "length";
+  if (cut.exhausted === true) result.budgetExhausted = true;
+  return result;
+}
+
 /**
  * Recover a usable review from a response the strict Verdict schema rejected, so one bad
  * value does not discard a whole pass. Covers both rejection shapes:
@@ -58,8 +122,12 @@ export function hasPartialOutput(err: unknown): boolean {
  * that cut before the first finding closed (its `[]` means unknown, not clean), no
  * finding AND no recognizable verdict, or an "approved" that would paper over findings
  * we had to drop. The caller then abstains, which is the honest outcome.
+ *
+ * @param exhausted - budget state from the CALLER (only it knows how far the ladder
+ * got): true when the output budget was already at its ceiling, which switches a
+ * truncation's advice from "raise MAX_TOKENS" to "lower MAX_CHUNK_LINES".
  */
-export function recover(err: unknown): ProviderResult | null {
+export function recover(err: unknown, exhausted = false): ProviderResult | null {
   if (!NoObjectGeneratedError.isInstance(err) || typeof err.text !== "string") return null;
   // Nothing was emitted at all (the hidden-reasoning bug) — there is no output to read.
   if (err.text.trim() === "") return null;
@@ -122,10 +190,46 @@ export function recover(err: unknown): ProviderResult | null {
   if (truncated || dropped > 0) {
     result.partial = true;
     result.error = truncated
-      ? `output truncated at the token limit — recovered ${findings.length} finding(s) ` +
-        `completed before the cut; later findings may be missing. Raise MAX_TOKENS to avoid.`
-      : `${dropped} finding(s) did not match the required shape and were dropped; ` +
-        `${findings.length} recovered.`;
+      ? truncationSalvageMessage(findings.length, exhausted)
+      : droppedFindingsMessage(dropped, findings.length);
+    if (truncated && exhausted) result.budgetExhausted = true;
+  }
+  return result;
+}
+
+/**
+ * Classify a thrown error into a bisectability cause. `aborted` — read from the live
+ * AbortController at the call site — takes priority: an aborted request can ALSO throw
+ * something that looks schema-shaped downstream, but the cause was our own deadline, not
+ * the model's output. Otherwise a {@link NoObjectGeneratedError} is a schema failure (the
+ * SDK only produces that class for empty/truncated/nonconforming output); every other
+ * error reaching here — APICallError for HTTP 5xx after the SDK's own retries, a bare
+ * fetch/network failure, or streamVerdict's no-finish-part Error — is transport.
+ */
+function classifyFailure(err: unknown, aborted: boolean): "schema" | "transport" | "timeout" {
+  if (aborted) return "timeout";
+  if (NoObjectGeneratedError.isInstance(err)) return "schema";
+  return "transport";
+}
+
+/**
+ * Build the abstention result from a thrown error — what the caller returns when nothing
+ * was recoverable and nothing was salvaged. Pulls the model's finishReason off a
+ * {@link NoObjectGeneratedError} when present (the error class for empty content — the
+ * reasoning-budget bug surfaces here as "length").
+ *
+ * @param aborted - whether the CALLER's own per-attempt deadline fired; the source of
+ * truth for the "timeout" classification, which no error shape can be trusted to carry.
+ */
+export function abstain(err: unknown, aborted: boolean): ProviderResult {
+  const result: ProviderResult = {
+    verdict: "error",
+    findings: [],
+    error: errorMessage(err, "OpenRouter request failed"),
+    failure: classifyFailure(err, aborted),
+  };
+  if (NoObjectGeneratedError.isInstance(err) && err.finishReason !== undefined) {
+    result.finishReason = err.finishReason;
   }
   return result;
 }

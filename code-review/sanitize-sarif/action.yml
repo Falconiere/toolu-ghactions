@@ -1,0 +1,19 @@
+# sanitize-sarif/ — node-type entry for the SARIF region sanitizer. Internal:
+# invoked by the parent composite (../action.yml) via the `$/` self-repository
+# syntax between the scanner steps and the Code Scanning upload. Copies each
+# *.sarif from SRC_DIR into DEST_DIR, clamping sub-1 region values that make
+# GitHub reject the whole file (gitleaks emits 0s for path-anchored findings).
+# Copies only — the originals keep feeding the LLM triage, which deliberately
+# drops line-0 results instead of rewriting them.
+name: 'Toolu Code Review — sanitize SARIF (internal)'
+description: 'Copies *.sarif from SRC_DIR to DEST_DIR clamping sub-1 regions so Code Scanning accepts gitleaks output. Use the parent action, not this one.'
+inputs:
+  SRC_DIR:
+    description: 'Directory the scanner steps wrote *.sarif files into'
+    required: true
+  DEST_DIR:
+    description: 'Directory to write sanitized copies into (created if absent)'
+    required: true
+runs:
+  using: 'node24'
+  main: 'index.cjs'

@@ -25,6 +25,7 @@
 ### ⚠ BREAKING CHANGES
 
 * **code-review:** `@v7` — size-proof review pipeline. `MAX_CHUNKS` default changes `20` → `0` (unlimited); the sticky comment gains new sections (coverage ledger, repeated-finding clusters, unanchored findings) and prompt byte counts change; the `subject_type: "file"` inline-comment fallback is removed (unanchorable findings now render in the sticky comment instead). No input is removed. See `code-review/README.md` → "v7 migration" for the full list.
+* **code-review:** packaging refactor — `dist/` single bundle is now two per-action bundles (`run/index.cjs` for the LLM reviewer, `sanitize-sarif/index.cjs` for the SARIF sanitizer CLI). `action.yml` entry point updated; consumers see no change.
 
 ### Features
 
@@ -33,6 +34,11 @@
 * **code-review:** finding clustering — a defect repeated identically across 3+ files collapses to one inline comment (exemplar + enumerated members) instead of one per file; dismissing the exemplar's thread dismisses the whole cluster.
 * **code-review:** `MAX_WALL_MS` input — soft wall-clock budget for the review loop; a run that runs out of time persists a resumable state and completes via `@toolu resume`, a plain re-run, or the PR's next push.
 * **code-review:** batched inline-comment publishing with 422 bisection, so one comment GitHub's Reviews API rejects can no longer zero out the whole review.
+* **code-review:** SARIF sanitizer — standalone `sanitize-sarif/index.cjs` CLI removes false positives from gitleaks/opengrep SARIF output (bundled test keys, generated code noise); upload-only, copy into your SARIF upload step.
+* **code-review:** streaming salvage — findings completed before output-token truncation are kept (partial review) instead of lost; truncation triggers budget escalation (8192 → 16384 → 32768 → 65536 → 131072 tokens), with honest partial-review verdicts when the ceiling is still exceeded.
+* **code-review:** honest budget banner — when truncation occurs, the comment says exactly which lever to pull (raise `MAX_TOKENS`, lower `MAX_CHUNK_LINES`, or split the PR).
+* **code-review:** self-negating-finding filter — removes findings that contradict each other (e.g., a finding saying "add X" and another saying "X is redundant" on the same line).
+* **code-review:** nested node24 actions — no Docker runtime required on runners without bash/git; actions self-contained and runnable on node-less runners.
 
 ## [6.6.0](https://github.com/Falconiere/toolu-ghactions/compare/v6.5.4...v6.6.0) (2026-08-05)
 

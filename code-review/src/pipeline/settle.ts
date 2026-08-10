@@ -36,7 +36,8 @@ export function ledgerExceptions(ledger: CoverageLedger): LedgerExceptions {
   return { unreviewed, pending, complete: unreviewed.length === 0 && pending.length === 0 };
 }
 
-/** The settled verdict: out-of-scope + suppressed findings removed, flips and caps applied. */
+/** The settled verdict: out-of-scope + suppressed + self-negating findings
+ *  removed, flips and caps applied. */
 export interface SettledVerdict {
   validated: ProviderResult;
   /** The surviving cluster REPRESENTATIVES (expand before persisting/reporting). */
@@ -91,12 +92,17 @@ export function settleVerdict(
   // that updates one half and forgets the other is how the returned verdict and the
   // ProviderResult the comment renders from come to disagree.
   let verdict = resolveVerdict(validated.verdict, findings.length);
-  const removed = suppressed.length + scoped.dropped.length;
+  // `removed` — every finding this round accounted for but did not carry forward
+  // to the comment: settled on its thread (suppressed), out of the incremental
+  // scope (scoped.dropped), or self-negating noise validateFindings already
+  // dropped before this function ever saw it (input.selfNegating — AC-8).
+  const removed = suppressed.length + scoped.dropped.length + input.selfNegating;
   if (verdict === "changes" && findings.length === 0 && removed > 0) {
     // Every concrete finding was either settled on its thread (resolved or
-    // dismissed by the author) or out of the incremental scope; keeping the
-    // model's request-changes would re-block on code that was already reviewed
-    // or decisions a human already made.
+    // dismissed by the author), out of the incremental scope, or dropped as
+    // self-negating chatter that never should have been a finding; keeping the
+    // model's request-changes would re-block on code that was already reviewed,
+    // decisions a human already made, or junk the model itself contradicted.
     verdict = "approved";
   }
   // A CARRIED finding was not re-examined this round (its path was out of the tree

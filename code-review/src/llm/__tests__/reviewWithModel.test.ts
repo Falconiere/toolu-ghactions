@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { reviewWithModel } from "@/llm/reviewWithModel.js";
 import type { Envelope } from "@/prompt.js";
 import { changes, modelServer } from "@/__tests__/integration/model.js";
+import { replayCompletion } from "@/__tests__/integration/sse.js";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -13,13 +14,13 @@ function fixture(name: string): unknown {
   return JSON.parse(readFileSync(join(FIXTURES, `${name}.json`), "utf8"));
 }
 
-/** A fetch that always replays one recorded response — no network, no code mocks. */
+/**
+ * A fetch that always replays one recorded response — no network, no code mocks. The
+ * review call streams, so the recorded body is re-served as complete SSE chunk frames
+ * (replayCompletion); its CONTENT and finish reason are the recorded ones, untouched.
+ */
 function replayFetch(body: unknown): typeof fetch {
-  return async () =>
-    new Response(JSON.stringify(body), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
+  return async (_url, init) => replayCompletion(body, init);
 }
 
 const ENVELOPE: Envelope = {
@@ -69,12 +70,9 @@ describe("reviewWithModel", () => {
     // must abstain immediately — one model call, no budget-escalation retries — even
     // though maxAttempts 3 leaves room.
     let calls = 0;
-    const countingFetch: typeof fetch = async () => {
+    const countingFetch: typeof fetch = async (_url, init) => {
       calls++;
-      return new Response(JSON.stringify(fixture("empty-content")), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      return replayCompletion(fixture("empty-content"), init);
     };
 
     const result = await reviewWithModel(ENVELOPE, {
@@ -112,6 +110,40 @@ describe("reviewWithModel", () => {
     expect(result.findings[0]?.path).toBe("src/auth.ts");
     expect(result.findings[1]?.path).toBe("src/db.ts");
     expect(result.error).toContain("truncated");
+  });
+
+  it("escalates the output budget on a salvageable truncation, then salvages", async () => {
+    // The truncation is now a RETURNED outcome (streamVerdict), not a thrown parse
+    // failure, so this pins that the doubled-budget retry still fires off it: every call
+    // hits the same recorded cut and the budget doubles until MAX_ESCALATIONS (4) is
+    // spent, then the last one keeps the salvaged prefix rather than abstaining. From
+    // 4096 that is 8192 → 16384 → 32768 → 65536, still under MAX_TOKEN_CEILING, so the
+    // salvage advises raising MAX_TOKENS rather than lowering MAX_CHUNK_LINES.
+    const budgets: unknown[] = [];
+    const truncating: typeof fetch = async (_url, init) => {
+      const raw = typeof init?.body === "string" ? init.body : "{}";
+      const body: { max_tokens?: number } = JSON.parse(raw);
+      budgets.push(body.max_tokens);
+      return replayCompletion(fixture("truncated-findings"), init);
+    };
+
+    const result = await reviewWithModel(ENVELOPE, {
+      model: "deepseek/deepseek-v4-flash",
+      apiKey: "sk-test",
+      fetch: truncating,
+      maxRetries: 0,
+      maxAttempts: 3,
+    });
+
+    expect(budgets).toEqual([4096, 8192, 16384, 32768, 65536]);
+    expect(result.verdict).toBe("changes");
+    expect(result.partial).toBe(true);
+    expect(result.finishReason).toBe("length");
+    expect(result.findings).toHaveLength(2);
+    // Headroom remains (65536 < 131072), so MAX_TOKENS is still the knob to name — and
+    // the ladder never spent a hang attempt, which maxAttempts 3 would have capped at 3.
+    expect(result.budgetExhausted).toBeUndefined();
+    expect(result.error).toContain("Raise MAX_TOKENS");
   });
 
   it("abstains when truncation cut before the first finding, despite a readable verdict", async () => {
@@ -297,12 +329,9 @@ describe("reviewWithModel", () => {
     // deepseek.test.ts is the actual fix; this pins the failure mode it prevents, and
     // that recovery does not paper over it with a fabricated verdict.
     let calls = 0;
-    const countingFetch: typeof fetch = async () => {
+    const countingFetch: typeof fetch = async (_url, init) => {
       calls++;
-      return new Response(JSON.stringify(fixture("deepseek-thinking-length")), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      return replayCompletion(fixture("deepseek-thinking-length"), init);
     };
 
     const result = await reviewWithModel(ENVELOPE, {
@@ -386,12 +415,7 @@ describe("reviewWithModel", () => {
           }
         });
       }
-      return Promise.resolve(
-        new Response(JSON.stringify(success), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      );
+      return Promise.resolve(replayCompletion(success, init));
     };
 
     const result = await reviewWithModel(ENVELOPE, {

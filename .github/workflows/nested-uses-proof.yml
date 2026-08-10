@@ -1,0 +1,46 @@
+# OQ-2 ship gate for the nested node24 actions (docs/toolu/specs/
+# 2026-08-10-code-review-reliability-design.md): proves the composite's
+# `$/code-review/run` + `$/code-review/sanitize-sarif` references resolve when
+# the action is consumed REMOTELY (owner/repo/path@ref → actions cache), the
+# shape every real consumer uses. Success = both nested steps START (resolution);
+# the review step is expected to no-op/skip on workflow_dispatch — that part is
+# runtime, not resolution, and is not what this gate measures.
+#
+# Run manually per release branch: gh workflow run nested-uses-proof.yml
+#   -f ref=<branch-or-sha>
+name: Nested uses proof (OQ-2)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch or SHA of this repo to consume the composite at'
+        required: true
+        default: 'feat/code-review-reliability'
+
+permissions:
+  contents: read
+
+jobs:
+  consume-remote-shape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (consumer workspace — deliberately NOT this action repo layout)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # Remote-style reference to our own composite: fetched into the actions
+      # cache exactly like a consumer's pin, so `$/` inside it must resolve
+      # against the ACTION repo, not this workspace.
+      - name: Consume composite at the requested ref
+        id: probe
+        continue-on-error: true # runtime failures are fine; resolution failures are what we read from the log
+        uses: falconiere/toolu-ghactions/code-review@feat/code-review-reliability
+        with:
+          PROVIDER: deepseek
+          API_KEY: proof-run-no-key
+          RUN_SECRET_SCAN: 'false'
+          RUN_SAST: 'false'
+      - name: Report
+        run: |
+          echo "Composite completed with outcome '${{ steps.probe.outcome }}'."
+          echo "Resolution proof = the nested steps appeared in the log above;"
+          echo "an unresolved \$/ reference fails the job BEFORE any step runs."

@@ -5,15 +5,19 @@ import { describe, expect, it } from "vitest";
 import { reviewWithModel } from "@/llm/reviewWithModel.js";
 import type { ProviderResult } from "@/llm/reviewWithModel.js";
 import { mergeResults } from "@/llm/merge.js";
+import { MAX_TOKEN_CEILING } from "@/llm/budget.js";
+import { reviewChunked } from "@/review/chunked.js";
+import type { DiffData } from "@/git/diff.js";
 import type { Envelope } from "@/prompt.js";
+import { replayCompletion } from "@/__tests__/integration/sse.js";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 
-/** A fetch that replays one recorded OpenRouter body — no network, no code mocks. */
+/** A fetch that replays one recorded OpenRouter body — no network, no code mocks. The
+ *  review call streams, so the recorded content is re-served as SSE chunk frames. */
 function replayFetch(name: string): typeof fetch {
-  const body = readFileSync(join(FIXTURES, `${name}.json`), "utf8");
-  return async () =>
-    new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+  const body: unknown = JSON.parse(readFileSync(join(FIXTURES, `${name}.json`), "utf8"));
+  return async (_url, init) => replayCompletion(body, init);
 }
 
 const ENVELOPE: Envelope = {
@@ -30,6 +34,50 @@ async function resultFrom(fixture: string): Promise<ProviderResult> {
     apiKey: "sk-test",
     fetch: replayFetch(fixture),
     maxRetries: 0,
+  });
+}
+
+/** A REAL salvaged partial: the recorded truncation replayed at `maxTokens`. At the
+ *  ceiling the budget cannot grow, so the loop salvages on the first call; below it the
+ *  ladder escalates first and salvages once its four doublings are spent. */
+async function truncatedAt(maxTokens: number): Promise<ProviderResult> {
+  return reviewWithModel(
+    { ...ENVELOPE, max_tokens: maxTokens },
+    {
+      model: "deepseek/deepseek-v4-flash",
+      apiKey: "sk-test",
+      fetch: replayFetch("truncated-findings"),
+      maxRetries: 0,
+      maxAttempts: 1,
+    },
+  );
+}
+
+/** The un-chunked fast path (chunked.ts): a within-budget diff is ONE call whose result is
+ *  returned as-is — mergeResults never runs, so the wording has to be right at the source.
+ *  Only `changed_files` is read on this path; the rest is an empty, well-formed DiffData. */
+async function unchunked(result: ProviderResult): Promise<ProviderResult> {
+  const diff: DiffData = {
+    diff: "",
+    files: [],
+    changed_files: ["src/auth.ts"],
+    binary_files: [],
+    dropped_files: [],
+    renames: [],
+    total_lines: 0,
+    total_files: 1,
+    truncated: false,
+    base_sha: "0000000",
+  };
+  return reviewChunked({
+    diff,
+    maxChunkLines: 0, // chunking disabled → the fast path
+    maxChunks: 0,
+    mechanical: [],
+    brief: null,
+    buildEnvelope: () => ENVELOPE,
+    review: async () => result,
+    onCoverage: () => {},
   });
 }
 
@@ -165,4 +213,66 @@ describe("mergeResults", () => {
     expect(merged.review_plan?.endsWith("…")).toBe(false);
     expect(merged.other_checks?.endsWith("…")).toBe(false);
   });
+});
+
+// The PR #6 failure this fixes: the banner told the reader to raise a MAX_TOKENS that was
+// already at its ceiling, because merge.ts RECOMPOSED the sentence instead of reusing the
+// one composed where the budget state was known. The merged banner now contributes only a
+// neutral count prefix, so whatever the chunk actually suffered rides through verbatim —
+// and the un-chunked path, which never reaches merge at all, says the same thing because
+// the per-chunk message was right to begin with.
+describe("truncation wording is single-sourced (AC-6)", () => {
+  it("renders the ceiling advice for an exhausted budget, merged AND un-chunked", async () => {
+    const partial = await truncatedAt(MAX_TOKEN_CEILING);
+    expect(partial.budgetExhausted).toBe(true);
+    expect(partial.error).toContain("lower MAX_CHUNK_LINES");
+
+    const merged = mergeResults([[partial], [await resultFrom("approved")]]);
+    expect(merged.error).toBe(`1/2 chunks were cut short — ${partial.error ?? ""}`);
+    expect(merged.error).toContain("lower MAX_CHUNK_LINES");
+    expect(merged.error).not.toContain("Raise MAX_TOKENS");
+    expect(merged.budgetExhausted).toBe(true);
+    expect(merged.partial).toBe(true);
+    expect(merged.finishReason).toBe("length");
+
+    // Same words on the path that bypasses the merge entirely.
+    const whole = await unchunked(partial);
+    expect(whole.error).toBe(partial.error);
+    expect(whole.error).toContain("lower MAX_CHUNK_LINES");
+  }, 20_000);
+
+  it("renders the raise-MAX_TOKENS advice while headroom remains, merged AND un-chunked", async () => {
+    // 4096 doubles four times to 65536 — under the ceiling, so a bigger MAX_TOKENS is
+    // still the reader's move and the ceiling is named so they know how far it goes.
+    const partial = await truncatedAt(4096);
+    expect(partial.budgetExhausted).toBeUndefined();
+
+    const merged = mergeResults([[partial], [await resultFrom("approved")]]);
+    expect(merged.error).toBe(`1/2 chunks were cut short — ${partial.error ?? ""}`);
+    expect(merged.error).toContain("Raise MAX_TOKENS");
+    expect(merged.error).toContain(String(MAX_TOKEN_CEILING));
+    expect(merged.error).not.toContain("lower MAX_CHUNK_LINES");
+    expect(merged.budgetExhausted).toBeUndefined();
+
+    const whole = await unchunked(partial);
+    expect(whole.error).toBe(partial.error);
+    expect(whole.error).toContain("Raise MAX_TOKENS");
+  }, 20_000);
+
+  it("keeps the dropped-findings recovery wording distinct from any truncation wording", async () => {
+    // A complete response with off-schema findings loses data too, but nothing about it is
+    // a budget problem — advising a budget change there is advice that cannot help.
+    const dropped = await resultFrom("deepseek-schema-mismatch");
+    expect(dropped.partial).toBe(true);
+    expect(dropped.error).toContain("did not match the required shape");
+    expect(dropped.error).not.toContain("MAX_TOKENS");
+    expect(dropped.error).not.toContain("MAX_CHUNK_LINES");
+    expect(dropped.error).not.toContain("truncated");
+    expect(dropped.budgetExhausted).toBeUndefined();
+
+    // And it reaches the reader intact through the merged banner.
+    const merged = mergeResults([[dropped], [await resultFrom("approved")]]);
+    expect(merged.error).toBe(`1/2 chunks were cut short — ${dropped.error ?? ""}`);
+    expect(merged.error).not.toContain("MAX_TOKENS");
+  }, 20_000);
 });

@@ -66,9 +66,11 @@ export function mergeResults(chunks: PackageResults[]): ProviderResult {
   const failed = covered.filter((chunk) => chunk.some((r) => r.verdict === "error"));
   const errored = results.filter((r) => r.verdict === "error");
   const succeeded = results.filter((r) => r.verdict !== "error");
-  // A salvaged chunk has verdict "changes" (so it counts as a success above) but
-  // was recovered from a length-truncated response — surface that distinctly below.
-  const partials = covered.filter((chunk) => chunk.some((r) => r.partial));
+  // A salvaged chunk has verdict "changes" (so it counts as a success above) but was
+  // recovered from a cut response — surface that distinctly below. Keyed per CHUNK for
+  // the count, and the first partial RESULT supplies the wording.
+  const partials = covered.filter((chunk) => chunk.some((r) => r.partial === true));
+  const firstPartial = results.find((r) => r.partial === true);
 
   const verdict: ProviderResult["verdict"] =
     succeeded.length === 0
@@ -97,12 +99,21 @@ export function mergeResults(chunks: PackageResults[]): ProviderResult {
       `${failed.length}/${covered.length} chunks failed (after a retry) — the files in ` +
       `those chunks were NOT reviewed: ${first.error ?? "unknown error"}`;
     if (first.finishReason !== undefined) merged.finishReason = first.finishReason;
-  } else if (partials.length > 0) {
-    merged.error =
-      `${partials.length}/${covered.length} chunks truncated at the output-token limit — ` +
-      `recovered the findings completed before the cut; later findings may be missing. ` +
-      `Raise MAX_TOKENS to avoid.`;
-    merged.finishReason = "length";
+  } else if (partials.length > 0 && firstPartial !== undefined) {
+    // REUSE, never recompose. The per-chunk message was composed where the budget state
+    // was known (llm/budget.ts, via reviewWithModel) and can say any of three different
+    // things — raise MAX_TOKENS, the budget is at its ceiling so lower MAX_CHUNK_LINES,
+    // or the deadline cut it. A banner that re-wrote it here is exactly how PR #6 ended
+    // up advising a MAX_TOKENS raise on a budget already at its ceiling, so this prefix
+    // stays NEUTRAL ("cut short") and the honest sentence rides through verbatim.
+    const detail = firstPartial.error ?? "recovered the findings completed before the cut";
+    merged.error = `${partials.length}/${covered.length} chunks were cut short — ${detail}`;
+    if (firstPartial.finishReason !== undefined) merged.finishReason = firstPartial.finishReason;
+    // Any exhausted chunk exhausts the merged review's budget advice too — the flag rides
+    // with the reused message rather than being re-worded here.
+    if (partials.some((chunk) => chunk.some((r) => r.budgetExhausted === true))) {
+      merged.budgetExhausted = true;
+    }
   }
   return merged;
 }

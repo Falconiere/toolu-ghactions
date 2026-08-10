@@ -1,8 +1,13 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "plugins": ["typescript"],
-  "ignorePatterns": ["dist", "node_modules"],
+  "ignorePatterns": ["run/index.cjs", "sanitize-sarif/index.cjs", "node_modules"],
   "rules": {
-    "typescript/consistent-type-assertions": ["error", { "assertionStyle": "never" }]
+    "typescript/consistent-type-assertions": [
+      "error",
+      {
+        "assertionStyle": "never"
+      }
+    ]
   }
 }
