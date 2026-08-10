@@ -734,16 +734,15 @@ The originals in `$RUNNER_TEMP` are untouched on purpose: the LLM triage reads t
 
 Best-effort like the scanner steps: an unparseable file is skipped with a workflow warning, and the step never fails the review.
 
-Only use it if your scanners produce noise that wastes review time. The action itself handles SARIF cleanup (for both scanner outputs) as part of its triage logic.
 
 ## Streaming salvage & budget ceiling
 
 Large PRs can exceed the per-request `MAX_TOKENS` budget. When this happens:
 - **Streaming salvage** — findings completed *before* the truncation cut are kept (partial review), instead of the whole chunk being lost.
 - **Budget escalation** — a truncated response is retried with double the budget (`8192 → 16384 → 32768 → 65536 → 131072`), up to the 131072-token ceiling.
-- **Honest partial verdict** — when the budget still runs out, the comment notes **exactly** what to fix (raise `MAX_TOKENS`, lower `MAX_CHUNK_LINES`, or split the PR).
+- **Honest partial banner** — when the budget still runs out, the comment names the lever that can actually help: raise `MAX_TOKENS` while below the 131072 ceiling, lower `MAX_CHUNK_LINES` at it.
 
-A partial review always degrades a would-be `approved` verdict to an `error` (a partial pass is not an honest approval), so the gateway never auto-merges incomplete coverage.
+A truncation salvage never approves: a chunk cut mid-review always carries a `changes` verdict (the model never finished deciding), and unreviewed/pending files degrade a would-be `approved` to `error` via the coverage ledger — incomplete coverage never auto-merges.
 
 ## Development
 

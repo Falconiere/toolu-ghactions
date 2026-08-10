@@ -226,4 +226,37 @@ describe("streamVerdict — transport failures (AC-5)", () => {
     expect(result.verdict).toBe("error");
     expect(result.failure).toBe("transport");
   }, 10_000);
+
+  it("throws instead of awaiting object when the stream ends with no finish part", async () => {
+    // Defensive backstop, unreachable through the shipped providers: both transforms
+    // synthesize a finish part on flush, so only a future/misbehaving provider can end
+    // a stream finishless. The SDK's own test model is the one way to exercise the
+    // branch directly — everything else in this file rides the real provider stack.
+    const { MockLanguageModelV1 } = await import("ai/test");
+    const { content } = fixture("findings-two");
+    const finishless = new MockLanguageModelV1({
+      doStream: async () => ({
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: "text-delta", textDelta: content });
+            controller.close(); // no finish part, no error part
+          },
+        }),
+        rawCall: { rawPrompt: null, rawSettings: {} },
+      }),
+    });
+    const err: unknown = await streamVerdict({
+      model: finishless,
+      system: "You are a code reviewer.",
+      prompt: "Review the following pull request diff.",
+      maxTokens: 4096,
+      maxRetries: 0,
+      abortSignal: new AbortController().signal,
+    }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect(String(err)).toContain("without a finish");
+  });
 });

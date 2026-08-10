@@ -13,24 +13,40 @@ const LOADING_GIF_URL =
 
 /**
  * Locate the shipped review-checklist.txt, mirroring build-prompt.sh's prompt_path.
- * In node24 the action's CWD is the CONSUMER repo, so its own files live at
- * $GITHUB_ACTION_PATH — the FIRST candidate. Fallbacks: /action/prompts (old Docker
- * path), the package-root-relative paths (dev/test/CI), and a __dirname-relative
- * path for the bundle (esbuild defines __dirname in CJS). Returns the first that
- * exists, else the Docker path so buildPrompt raises its own clear PromptError. No
- * import.meta, so the CJS bundle resolves identically to ESM.
+ * ORDER IS SECURITY-RELEVANT: the checklist is the reviewer's system prompt — its
+ * trust root — and the node action's CWD is the CONSUMER checkout, which on a PR
+ * run contains PR-author-controlled files. Bundle- and action-relative candidates
+ * therefore come FIRST, so a consumer-repo `prompts/review-checklist.txt` can never
+ * shadow the shipped one (REVIEW_PROMPT_FILE is the explicit, opt-in override).
+ *
+ * In production the load-bearing candidate is `__dirname/../prompts` — the bundle
+ * lives in run/ with prompts/ its sibling, in both the monorepo and hoisted-mirror
+ * layouts (esbuild defines __dirname in CJS; the ESM dev/test runtime, where it is
+ * undefined, misses and falls through). $GITHUB_ACTION_PATH points at the NESTED
+ * run/ action's dir, so its `../prompts` is the action-relative equivalent. The
+ * CWD-relative paths exist for dev/test/CI only, where the cwd IS this package.
+ * Returns the first that exists, else the old Docker path so buildPrompt raises
+ * its own clear PromptError. No import.meta, so CJS and ESM resolve identically.
  */
 export function resolveChecklistPath(): string {
   const fallback = "/action/prompts/review-checklist.txt";
   // `typeof` guard: the CJS bundle defines __dirname; the ESM dev/test runtime,
   // where a bare reference throws, does not.
   const here = typeof __dirname !== "undefined" ? __dirname : "";
+  const actionPath = process.env["GITHUB_ACTION_PATH"] ?? "";
+  // An empty base would turn "../prompts/…" into a CWD-PARENT-relative path —
+  // exclude the candidate entirely instead of joining onto "".
   const candidates = [
-    join(process.env["GITHUB_ACTION_PATH"] ?? "", "prompts/review-checklist.txt"),
+    ...(here === "" ? [] : [join(here, "../prompts/review-checklist.txt")]),
+    ...(actionPath === ""
+      ? []
+      : [
+          join(actionPath, "../prompts/review-checklist.txt"),
+          join(actionPath, "prompts/review-checklist.txt"),
+        ]),
     fallback,
     "prompts/review-checklist.txt",
     "code-review/prompts/review-checklist.txt",
-    join(here, "../prompts/review-checklist.txt"),
   ];
   return candidates.find((p) => existsSync(p)) ?? fallback;
 }

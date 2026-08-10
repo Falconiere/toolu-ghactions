@@ -208,12 +208,14 @@ runs:
       if: ${{ inputs.RUN_SAST == 'true' }}
       shell: bash
       run: |
-        # Exclude build output / deps — they are generated, not reviewed (mirrors the
-        # review's own noise filter), and bundled output must not dominate the scan.
+        # Exclude build output / deps in the CONSUMER's checkout — generated, not
+        # reviewed, and a committed bundle would dominate the scan. dist/build are
+        # the consumer-repo norm; run/sanitize-sarif keep this action's own
+        # committed bundles out when it reviews its own repo.
         command -v opengrep >/dev/null \
           && opengrep scan --sarif --output "$RUNNER_TEMP/opengrep.sarif" \
                --config "${{ inputs.SAST_RULES }}" \
-               --exclude run --exclude sanitize-sarif --exclude build --exclude node_modules . \
+               --exclude dist --exclude run --exclude sanitize-sarif --exclude build --exclude node_modules . \
           || true
     # Copies *.sarif into an upload-only directory, clamping the sub-1 region
     # values gitleaks emits for path-anchored findings (Code Scanning rejects the
@@ -250,8 +252,9 @@ runs:
       id: review
       uses: $/code-review/run
       env:
-        # The node action reads inputs via @actions/core.getInput (process.env.INPUT_*).
-        # Composite run-steps do NOT auto-expose inputs, so map each one explicitly.
+        # The nested run/ action declares no inputs of its own — the reviewer reads
+        # process.env.INPUT_* directly (@actions/core.getInput), so the composite
+        # maps each of its inputs onto the step's env explicitly.
         INPUT_PROVIDER: ${{ inputs.PROVIDER }}
         INPUT_MODEL_ID: ${{ inputs.MODEL_ID }}
         INPUT_API_KEY: ${{ inputs.API_KEY }}

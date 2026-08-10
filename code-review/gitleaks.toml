@@ -8,6 +8,9 @@ useDefault = true
 [allowlist]
 description = "Ignore build output, bundles, and dependencies"
 paths = [
+  # The scan runs against the CONSUMER's checkout: keep dist/ excluded (the norm
+  # for committed JS-action bundles) alongside this repo's own bundle paths.
+  '''(^|/)dist/''',
   '''(^|/)run/index\.cjs''',
   '''(^|/)sanitize-sarif/index\.cjs''',
   '''(^|/)build/''',

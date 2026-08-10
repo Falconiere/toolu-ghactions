@@ -107,24 +107,28 @@ jobs:
       - name: Unit tests
         if: ${{ env.RUN == 'true' }}
         run: bun run test
-      - name: Build dist
+      - name: Build bundles
         if: ${{ env.RUN == 'true' }}
         run: bun run build
-      - name: dist is in sync with src
-        # The committed dist/index.cjs must match a fresh build — consumers run the
-        # checked-in bundle, not the TS sources. Fail if `bun run build` produced
-        # any change.
+      - name: bundles are in sync with src
+        # The committed run/index.cjs + sanitize-sarif/index.cjs must match a fresh
+        # build — consumers run the checked-in bundles, not the TS sources. Fail if
+        # `bun run build` produced any change.
         if: ${{ env.RUN == 'true' }}
-        run: git diff --quiet -- dist
+        run: git diff --quiet -- run/index.cjs sanitize-sarif/index.cjs
       - name: Install action-validator
         if: ${{ env.RUN == 'true' }}
         run: npm i -g @action-validator/cli
-      - name: action.yml is a composite action wrapping the node24 review + SAST steps
+      - name: action.yml is a composite wrapping the nested node24 review + SAST steps
         if: ${{ env.RUN == 'true' }}
         run: |
           grep -qF "using: 'composite'" action.yml
-          grep -qF 'dist/index.cjs' action.yml
+          grep -qF 'uses: $/code-review/run' action.yml
+          grep -qF 'uses: $/code-review/sanitize-sarif' action.yml
+          grep -q "using: 'node24'" run/action.yml
+          grep -q "using: 'node24'" sanitize-sarif/action.yml
           grep -qF 'opengrep' action.yml
+          # composite manifest only — the nested manifests DO carry node24
           ! grep -qF "using: 'node24'" action.yml
           ! grep -qF '6 AI vendors' action.yml
       - name: action.yml validates (composite is accepted by action-validator)
