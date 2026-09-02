@@ -14,7 +14,7 @@
 // review is billed to the vendor's key instead of OpenRouter's. What differs per vendor
 // (reasoning switch, whether an empty length cut is recoverable) is tabulated in
 // CALL_TUNING below; Kimi's sampling gate is a model middleware (NO_TEMPERATURE) applied
-// in its factory branch. Nothing provider-specific lives outside this file.
+// in its factory branch. The review loop itself never names a provider.
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { createDeepSeek } from "@ai-sdk/deepseek";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
