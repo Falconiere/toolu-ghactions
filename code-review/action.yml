@@ -5,8 +5,9 @@ description: |
   coverage, doc accuracy, tight assertions, migration warnings, and adherence
   to the project's own convention files read from the base ref) and posts a
   structured verdict with actionable findings. Runs on OpenRouter (any
-  OpenAI-compatible model) or the native DeepSeek API, via the Vercel AI SDK
-  with structured-output validation and retries.
+  OpenAI-compatible model) or a vendor's native API — DeepSeek, MiniMax, or
+  Kimi (Moonshot AI) — via the Vercel AI SDK with structured-output validation
+  and retries.
 author: 'Falconiere'
 branding:
   icon: 'check-circle'
@@ -14,17 +15,17 @@ branding:
 
 inputs:
   PROVIDER:
-    description: 'LLM backend: "openrouter" (default — any OpenAI-compatible model via OpenRouter) or "deepseek" (native api.deepseek.com). Any other value fails with an error.'
+    description: 'LLM backend: "openrouter" (default — any OpenAI-compatible model via OpenRouter), or a vendor''s native API, billed to that vendor''s own key: "deepseek" (api.deepseek.com), "minimax" (api.minimax.io), or "kimi" (Moonshot AI, api.moonshot.ai; "moonshot" is accepted as an alias). Any other value fails with an error.'
     required: false
     default: 'openrouter'
   MODEL_ID:
-    description: 'Model id for the chosen provider. Defaults per provider: openrouter -> deepseek/deepseek-v4-pro, deepseek -> deepseek-v4-flash. Use a "<vendor>/<model>" id for OpenRouter; a bare id like "deepseek-v4-flash" for native DeepSeek.'
+    description: 'Model id for the chosen provider. Defaults per provider: openrouter -> deepseek/deepseek-v4-pro, deepseek -> deepseek-v4-flash, minimax -> MiniMax-M3, kimi -> kimi-k2.7-code. Use a "<vendor>/<model>" id for OpenRouter; a bare native id (no vendor prefix, e.g. "deepseek-v4-flash", "MiniMax-M3", "kimi-k3") for the native providers.'
     required: false
   API_KEY:
     description: 'API key for the chosen provider (Authorization: Bearer). Required. Prefer passing via a step-level env: block for better secret hygiene.'
     required: true
   MAX_TOKENS:
-    description: 'Max completion tokens per request. Always sent — omitting it makes the provider reserve the model''s full output capacity against your credit budget. A truncated (finish_reason "length") chunk is retried with a DOUBLED budget, up to 4 times and never past the 131072 ceiling (8192 -> 16384 -> 32768 -> 65536 -> 131072); those escalations are counted separately from the hang/timeout retries, so neither eats the other. When the budget still runs out, the findings completed before the cut are kept (a partial review) instead of the chunk being lost, and the comment says whether raising this value or lowering MAX_CHUNK_LINES is the fix.'
+    description: 'Max completion tokens per request. Always sent — omitting it makes the provider reserve the model''s full output capacity against your credit budget. A truncated (finish_reason "length") chunk is retried with a DOUBLED budget, up to 4 times and never past the 131072 ceiling (8192 -> 16384 -> 32768 -> 65536 -> 131072); those escalations are counted separately from the hang/timeout retries, so neither eats the other. When the budget still runs out, the findings completed before the cut are kept (a partial review) instead of the chunk being lost, and the comment says whether raising this value or lowering MAX_CHUNK_LINES is the fix. Kimi''s current models (and MiniMax''s M2.x ids) reason on every call and bill that reasoning against this budget too; a response that ran out before any JSON started is retried at the doubled budget on those providers.'
     required: false
     default: '8192'
   MIN_CONFIDENCE:

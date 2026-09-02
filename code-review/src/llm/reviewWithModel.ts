@@ -7,13 +7,17 @@
 // budget.ts, and this file owns only the LOOP (timeout/abort, hang retries, budget
 // escalation, salvage, abstain). The export is reviewWithModel().
 //
-// REASONING-OFF: every provider must have hidden reasoning DISABLED, because reasoning
-// tokens are billed against max_tokens — a thinking model spends the whole budget before
-// emitting a byte of JSON and returns finish_reason "length" with empty content. Each
-// backend spells it differently and both spellings live in providers.ts: OpenRouter's
-// `reasoning:{effort:"none"}` (plus require_parameters) is baked into the client via
-// OPENROUTER_EXTRA_BODY, while native DeepSeek's `thinking:{type:"disabled"}` rides on
-// the CALL via providerOptionsFor(). See request-shape.test.ts and deepseek.test.ts.
+// REASONING-OFF: every provider that offers a switch has hidden reasoning DISABLED,
+// because reasoning tokens are billed against max_tokens — a thinking model spends the
+// whole budget before emitting a byte of JSON and returns finish_reason "length" with
+// empty content. Each backend spells it differently and every spelling lives in
+// providers.ts: OpenRouter's `reasoning:{effort:"none"}` (plus require_parameters) is
+// baked into the client via OPENROUTER_EXTRA_BODY, while native DeepSeek's and MiniMax's
+// `thinking:{type:"disabled"}` ride on the CALL via providerOptionsFor(). Kimi offers no
+// switch on its current models, so for it (and for MiniMax's M2.x ids, which ignore the
+// switch) providers.ts marks an EMPTY length cut as budget-recoverable instead — see
+// escalatesEmptyCut() and the catch below. Per-provider proofs: request-shape.test.ts,
+// deepseek.test.ts, minimax.test.ts, kimi.test.ts.
 //
 // RECOVER-THEN-ABSTAIN: the call throws on empty content, a JSON parse or schema
 // validation failure, or an API error (after retries). We CATCH every throw; recover()
@@ -22,7 +26,12 @@
 // Never throw to the caller, never return a null verdict: a failed call abstains, it
 // does not block.
 import { generateObject } from "ai";
-import { resolveModel, providerOptionsFor, type ProviderId } from "./providers.js";
+import {
+  escalatesEmptyCut,
+  providerOptionsFor,
+  resolveModel,
+  type ProviderId,
+} from "./providers.js";
 import type { Finding } from "./schema.js";
 import {
   abstain,
@@ -151,8 +160,10 @@ export async function reviewWithModel(
     apiKey: opts.apiKey,
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
-  // Per-CALL request-body extras (native DeepSeek's reasoning switch); OpenRouter's
-  // equivalent is baked into the client by resolveModel, so it is undefined there.
+  // Per-CALL request-body extras (native DeepSeek's and MiniMax's reasoning switch);
+  // OpenRouter's equivalent is baked into the client by resolveModel, so it is undefined
+  // there, and Kimi has none (its temperature gate is a model middleware, also in
+  // resolveModel).
   const providerOptions = providerOptionsFor(provider);
   const perAttemptMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
   const maxAttempts = opts.maxAttempts ?? MAX_ATTEMPTS;
@@ -253,10 +264,13 @@ export async function reviewWithModel(
       // let the SDK's own NoObjectGeneratedError through instead of returning a prefix.
       // With partial output present the cut landed mid-JSON before the first finding
       // closed: a doubled budget can still finish it, same as above. Empty content +
-      // finish_reason "length" is instead the hidden-reasoning bug — the model burned the
-      // budget thinking and emitted nothing, and a larger budget only buys MORE reasoning,
-      // so it is neither escalated nor recoverable (the fix is providers.ts's reasoning-off).
-      if (isLengthTruncation(err) && hasPartialOutput(err)) {
+      // finish_reason "length" depends on the provider: where reasoning is switched off
+      // it is the hidden-reasoning bug — the model burned the budget thinking and emitted
+      // nothing, a larger budget only buys MORE reasoning, so it is neither escalated nor
+      // recoverable (the fix is providers.ts's reasoning-off). Where the vendor offers no
+      // switch (Kimi) the same shape is an honest overrun that a doubled budget clears,
+      // and providers.ts says so via escalatesEmptyCut.
+      if (isLengthTruncation(err) && (hasPartialOutput(err) || escalatesEmptyCut(provider))) {
         const next = nextBudget(budget, escalations);
         if (next !== null) {
           budget = next;

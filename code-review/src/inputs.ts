@@ -2,7 +2,7 @@
 // object, ONCE, so the pipeline takes a plain typed object and never reads process.env.
 //
 // FLAT PROVIDER CONTRACT (v4): the action runs a SINGLE model, selected by three flat
-// inputs — PROVIDER ("openrouter" | "deepseek"), MODEL_ID, and API_KEY. The old
+// inputs — PROVIDER ("openrouter" | "deepseek" | "minimax" | "kimi"), MODEL_ID, and API_KEY. The old
 // multi-provider PROVIDERS array and the legacy OPENROUTER_API_KEY/MODEL inputs (plus
 // the MERGE_STRATEGY/FALLBACK_MODEL/REVIEW_MODE/ENFORCE_JSON_SCHEMA no-ops) were removed
 // in v4 — a breaking change. PROVIDER defaults to "openrouter"; MODEL_ID defaults per
@@ -12,7 +12,7 @@ import * as core from "@actions/core";
 import {
   type ProviderId,
   SUPPORTED_PROVIDERS,
-  isSupportedProvider,
+  canonicalProviderId,
   defaultModelFor,
 } from "./llm/providers.js";
 import { parseFailOn, type BlockableVerdict } from "./review/gate.js";
@@ -195,31 +195,32 @@ function readMinTriggerPermission(): "write" | "admin" {
 }
 
 /**
- * Resolve and validate the PROVIDER input. Defaults to "openrouter" when omitted;
- * THROWS on an advertised-but-unimplemented provider (openai/anthropic/...) so a
- * misconfig fails loud here instead of silently routing through the wrong backend.
+ * Resolve and validate the PROVIDER input. Defaults to "openrouter" when omitted; accepts
+ * the aliases providers.ts registers ("moonshot" → "kimi"); THROWS on an unimplemented
+ * provider (openai/anthropic/...) so a misconfig fails loud here instead of silently
+ * routing through the wrong backend.
  */
 function resolveProviderId(raw: string): ProviderId {
   const p = raw.trim().toLowerCase();
   if (p === "") return "openrouter";
-  if (!isSupportedProvider(p)) {
+  const id = canonicalProviderId(p);
+  if (id === undefined) {
     throw new Error(
       `PROVIDER "${p}" is not supported (supported: ${SUPPORTED_PROVIDERS.join(", ")}). ` +
         `To use "${p}" models, set PROVIDER:"openrouter" and MODEL_ID:"${p}/<model>" to route through OpenRouter.`,
     );
   }
-  // The `if (!isSupportedProvider(p)) throw` above narrows p to ProviderId on this branch
-  // (isSupportedProvider is a `s is ProviderId` type guard), so no cast is needed.
-  return p;
+  return id;
 }
 
-/** Warn when a deepseek model id looks like an OpenRouter id (slash namespace) — it will 400.
- *  Heuristic: current native DeepSeek ids have no "/"; revisit if that ever changes. */
+/** Warn when a native-API model id looks like an OpenRouter id (slash namespace) — the
+ *  vendor's own API will 400. Heuristic: current native DeepSeek, MiniMax and Kimi ids
+ *  have no "/"; revisit if that ever changes. */
 function warnSuspiciousModel(provider: ProviderId, model: string): void {
-  if (provider === "deepseek" && model.includes("/")) {
+  if (provider !== "openrouter" && model.includes("/")) {
     core.warning(
-      `MODEL_ID "${model}" looks like an OpenRouter id (contains "/") but PROVIDER is "deepseek"; ` +
-        'the native DeepSeek API will reject it. Use a native id like "deepseek-v4-flash".',
+      `MODEL_ID "${model}" looks like an OpenRouter id (contains "/") but PROVIDER is "${provider}"; ` +
+        `the native ${provider} API will reject it. Use a native id like "${defaultModelFor(provider)}".`,
     );
   }
 }

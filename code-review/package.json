@@ -17,25 +17,26 @@
     "eval": "bun evals/run.ts"
   },
   "dependencies": {
-    "@actions/core": "^1.11.1",
-    "@actions/github": "^6.0.0",
+    "@actions/core": "^3.0.1",
+    "@actions/github": "^9.1.1",
     "@ai-sdk/deepseek": "0.2.16",
-    "@octokit/auth-app": "^7.1.5",
+    "@ai-sdk/openai-compatible": "0.2.16",
+    "@octokit/auth-app": "^8.3.1",
     "@openrouter/ai-sdk-provider": "^0.7.0",
     "ai": "^4.3.0",
-    "jsonrepair": "^3.14.0",
+    "jsonrepair": "^3.15.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@types/node": "^22.10.0",
-    "esbuild": "^0.24.2",
-    "lefthook": "^2.1.9",
-    "oxfmt": "^0.55.0",
-    "oxlint": "^1.70.0",
-    "oxlint-tsgolint": "^0.23.0",
+    "@types/node": "^22.20.1",
+    "esbuild": "^0.28.2",
+    "lefthook": "^2.1.12",
+    "oxfmt": "^0.66.0",
+    "oxlint": "^1.81.0",
+    "oxlint-tsgolint": "^7.0.2001",
     "typescript": "^5.7.2",
     "vite-tsconfig-paths": "^6.1.1",
-    "vitest": "^2.1.8"
+    "vitest": "^4.1.11"
   },
   "engines": {
     "node": ">=20"

@@ -10,6 +10,10 @@
 // two early-return gates — now lives inside one try/catch, mirroring post.ts.
 import { describe, expect, it, vi } from "vitest";
 import * as core from "@actions/core";
+// @actions/core is native ESM (v3+), whose namespace is frozen, so `vi.spyOn(core, …)`
+// below needs this spy-mode mock: every export stays the real implementation, wrapped
+// in a spy that vi.spyOn can then redirect. Nothing about the logger is faked.
+vi.mock(import("@actions/core"), { spy: true });
 import { reportRun } from "@/report/report-run.js";
 import type { ReportRunInput } from "@/report/report-run.js";
 

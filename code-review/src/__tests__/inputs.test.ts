@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as core from "@actions/core";
+// @actions/core is native ESM (v3+), whose namespace is frozen, so `vi.spyOn(core, …)`
+// below needs this spy-mode mock: every export stays the real implementation, wrapped
+// in a spy that vi.spyOn can then redirect. Nothing about the logger is faked.
+vi.mock(import("@actions/core"), { spy: true });
 import { readInputs } from "@/inputs.js";
 
 /** Set an action input as @actions/core reads it (process.env.INPUT_<NAME>). */
@@ -212,9 +216,32 @@ describe("provider contract (PROVIDER / MODEL_ID / API_KEY)", () => {
     expect(() => readInputs()).toThrow(/API_KEY is required/);
   });
 
+  it("PROVIDER=minimax without MODEL_ID defaults to MiniMax-M3", () => {
+    setInput("PROVIDER", "minimax");
+    const inputs = readInputs();
+    expect(inputs.provider).toBe("minimax");
+    expect(inputs.model).toBe("MiniMax-M3");
+  });
+
+  it("PROVIDER=kimi without MODEL_ID defaults to kimi-k2.7-code", () => {
+    setInput("PROVIDER", "kimi");
+    const inputs = readInputs();
+    expect(inputs.provider).toBe("kimi");
+    expect(inputs.model).toBe("kimi-k2.7-code");
+  });
+
+  it("accepts PROVIDER=moonshot as an alias of kimi (the vendor's former branding)", () => {
+    setInput("PROVIDER", "moonshot");
+    const inputs = readInputs();
+    expect(inputs.provider).toBe("kimi");
+    expect(inputs.model).toBe("kimi-k2.7-code");
+  });
+
   it("AC-6: an unsupported PROVIDER throws, naming the supported set and the workaround", () => {
     setInput("PROVIDER", "openai");
-    expect(() => readInputs()).toThrow(/is not supported \(supported: openrouter, deepseek\)/);
+    expect(() => readInputs()).toThrow(
+      /is not supported \(supported: openrouter, deepseek, minimax, kimi\)/,
+    );
     expect(() => readInputs()).toThrow(/PROVIDER:"openrouter"/);
   });
 
@@ -229,5 +256,22 @@ describe("provider contract (PROVIDER / MODEL_ID / API_KEY)", () => {
     const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
     readInputs();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("looks like an OpenRouter id"));
+  });
+
+  it("warns for the other native providers too, naming that provider's own default id", () => {
+    setInput("PROVIDER", "kimi");
+    setInput("MODEL_ID", "moonshotai/kimi-k2");
+    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+    readInputs();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('PROVIDER is "kimi"'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('"kimi-k2.7-code"'));
+  });
+
+  it("never warns about a slash for openrouter, whose ids are namespaced by design", () => {
+    setInput("PROVIDER", "openrouter");
+    setInput("MODEL_ID", "moonshotai/kimi-k2");
+    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+    readInputs();
+    expect(warn).not.toHaveBeenCalled();
   });
 });

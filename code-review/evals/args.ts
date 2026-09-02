@@ -2,7 +2,12 @@
 // (evals/run.ts, AC-16). Pure and side-effect-free: given argv, returns a typed
 // EvalArgs or throws ArgError — no env reads, no I/O, so `--help` and bad-flag
 // tests never need a key, gh, or a network.
-import { defaultModelFor, isSupportedProvider, type ProviderId } from "@/llm/providers.js";
+import {
+  SUPPORTED_PROVIDERS,
+  canonicalProviderId,
+  defaultModelFor,
+  type ProviderId,
+} from "@/llm/providers.js";
 
 /** The default PR the harness targets when `--pr` is omitted (spec §Eval harness). */
 export const DEFAULT_PR = "Falconiere/comemory#72";
@@ -49,7 +54,8 @@ on PATH.
 
 Options:
   --pr <owner/repo#number>   PR to review (default: ${DEFAULT_PR})
-  --provider <id>            "openrouter" | "deepseek" (default: openrouter)
+  --provider <id>            ${SUPPORTED_PROVIDERS.map((p) => `"${p}"`).join(" | ")}
+                              (default: openrouter)
   --model <id>                Model id for --provider (default: the action's own
                               per-provider default, see llm/providers.ts)
   --max-wall-ms <ms>          Soft wall-clock budget forwarded to MAX_WALL_MS
@@ -114,10 +120,13 @@ export function parseArgs(argv: readonly string[]): EvalArgs {
         break;
       case "--provider": {
         const raw = requireValue(argv, ++i, "--provider");
-        if (!isSupportedProvider(raw)) {
-          throw new ArgError(`--provider "${raw}" is not supported (openrouter, deepseek).`);
+        const id = canonicalProviderId(raw);
+        if (id === undefined) {
+          throw new ArgError(
+            `--provider "${raw}" is not supported (${SUPPORTED_PROVIDERS.join(", ")}).`,
+          );
         }
-        provider = raw;
+        provider = id;
         break;
       }
       case "--model":
