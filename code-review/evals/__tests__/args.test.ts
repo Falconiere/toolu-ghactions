@@ -75,10 +75,13 @@ describe("parseArgs", () => {
     const minimax = parseArgs(["--provider", "minimax"]);
     expect(minimax.provider).toBe("minimax");
     expect(minimax.model).toBe("MiniMax-M3");
-    // "moonshot" is Kimi's vendor and the spelling the action advertised first.
-    const moonshot = parseArgs(["--provider", "Moonshot"]);
-    expect(moonshot.provider).toBe("kimi");
-    expect(moonshot.model).toBe("kimi-k2.7-code");
+    // "moonshot" is Kimi's vendor and the spelling the action advertised first; the
+    // alias path is case-insensitive like the canonical ids.
+    for (const spelling of ["moonshot", "Moonshot"]) {
+      const moonshot = parseArgs(["--provider", spelling]);
+      expect(moonshot.provider).toBe("kimi");
+      expect(moonshot.model).toBe("kimi-k2.7-code");
+    }
   });
 
   it("rejects a malformed --pr", () => {
