@@ -11,5 +11,11 @@ export default defineConfig({
     include: ["src/**/__tests__/**/*.test.ts"],
     environment: "node",
     testTimeout: 30_000,
+    // Clear every spy's call history before each test. The @actions/core logger is
+    // spied through a spy-mode module mock (it is native ESM, so its namespace cannot be
+    // patched directly), and since vitest 3 `vi.restoreAllMocks()` no longer clears the
+    // history of such spies — without this, a warning emitted by one test counts against
+    // the next test's "no warning" assertion.
+    clearMocks: true,
   },
 });

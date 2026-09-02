@@ -339,24 +339,18 @@ describe("postInlineReview — batching + 422 bisection (AC-5)", () => {
     const { client, calls } = fakeValidatingClient([...anchorableFiles, ...unanchorableFiles]);
 
     const findings: Finding[] = [
-      ...Array.from(
-        { length: 45 },
-        (_, i): Finding => ({
-          path: `f${i}.ts`,
-          line: 1,
-          severity: "low",
-          text: `anchorable ${i}`,
-        }),
-      ),
-      ...Array.from(
-        { length: 5 },
-        (_, i): Finding => ({
-          path: `g${i}.ts`,
-          line: 1,
-          severity: "low",
-          text: `unanchorable ${i}`,
-        }),
-      ),
+      ...Array.from({ length: 45 }, (_, i): Finding => ({
+        path: `f${i}.ts`,
+        line: 1,
+        severity: "low",
+        text: `anchorable ${i}`,
+      })),
+      ...Array.from({ length: 5 }, (_, i): Finding => ({
+        path: `g${i}.ts`,
+        line: 1,
+        severity: "low",
+        text: `unanchorable ${i}`,
+      })),
     ];
 
     const r = await postInlineReview(client, findings, REVIEW_TARGET);
@@ -505,10 +499,12 @@ describe("postInlineReview — batching + 422 bisection (AC-5)", () => {
   it("batch 2+ posts a COMMENT-event review with the 'continued' body, never repeating the verdict pointer", async () => {
     const { client, calls } = fakeReviewClient();
     // 31 anchored findings on distinct paths → 30 in batch 1, 1 in batch 2.
-    const findings: Finding[] = Array.from(
-      { length: 31 },
-      (_, i): Finding => ({ path: `f${i}.ts`, line: 1, severity: "low", text: `finding ${i}` }),
-    );
+    const findings: Finding[] = Array.from({ length: 31 }, (_, i): Finding => ({
+      path: `f${i}.ts`,
+      line: 1,
+      severity: "low",
+      text: `finding ${i}`,
+    }));
 
     const r = await postInlineReview(client, findings, REVIEW_TARGET);
 

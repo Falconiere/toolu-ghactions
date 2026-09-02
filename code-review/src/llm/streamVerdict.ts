@@ -50,7 +50,8 @@ import { Finding, PartialVerdict, Verdict, normalizeFinding } from "./schema.js"
 
 /** Everything one streamed review call needs. Mirrors the generateObject call it
  *  replaces; `mode: "json"`, the {@link Verdict} schema and temperature 0 are pinned
- *  here because they are the wire contract, not a caller's choice. */
+ *  here because they are the wire contract, not a caller's choice (a provider that
+ *  rejects an explicit temperature strips it in its own model — providers.ts). */
 export interface StreamVerdictArgs {
   /** resolveModel() output — the provider-specific AI SDK model object. */
   model: LanguageModel;
@@ -64,7 +65,7 @@ export interface StreamVerdictArgs {
   maxRetries: number;
   /** The caller's per-attempt deadline signal; also the source of truth for "aborted". */
   abortSignal: AbortSignal;
-  /** Per-call provider extras (native DeepSeek's reasoning switch). */
+  /** Per-call provider extras (native DeepSeek's / MiniMax's reasoning switch). */
   providerOptions?: ProviderMetadata;
 }
 
