@@ -3,7 +3,9 @@ import tsconfigPaths from "vite-tsconfig-paths";
 
 // Real-data tests only (no mocks): unit specs colocate in src/**/__tests__/.
 // Network is stubbed only at the fetch boundary by replaying REAL recorded
-// OpenRouter responses; git tests build real repos in temp dirs.
+// OpenRouter responses; git tests build real repos in temp dirs. The one module-level
+// mock is the spy-mode wrap of @actions/core's logger (see clearMocks below), which
+// keeps every implementation real and only makes the exports observable.
 // tsconfigPaths() resolves the "@/*" -> src/* alias from tsconfig at test time.
 export default defineConfig({
   plugins: [tsconfigPaths()],

@@ -2,10 +2,10 @@
 // object, ONCE, so the pipeline takes a plain typed object and never reads process.env.
 //
 // FLAT PROVIDER CONTRACT (v4): the action runs a SINGLE model, selected by three flat
-// inputs — PROVIDER ("openrouter" | "deepseek" | "minimax" | "kimi"), MODEL_ID, and API_KEY. The old
-// multi-provider PROVIDERS array and the legacy OPENROUTER_API_KEY/MODEL inputs (plus
-// the MERGE_STRATEGY/FALLBACK_MODEL/REVIEW_MODE/ENFORCE_JSON_SCHEMA no-ops) were removed
-// in v4 — a breaking change. PROVIDER defaults to "openrouter"; MODEL_ID defaults per
+// inputs — PROVIDER ("openrouter" | "deepseek" | "minimax" | "kimi"), MODEL_ID, and
+// API_KEY. The old multi-provider PROVIDERS array and the legacy OPENROUTER_API_KEY/MODEL
+// inputs (plus the MERGE_STRATEGY/FALLBACK_MODEL/REVIEW_MODE/ENFORCE_JSON_SCHEMA no-ops)
+// were removed in v4 — a breaking change. PROVIDER defaults to "openrouter"; MODEL_ID defaults per
 // provider (see llm/providers.ts defaultModelFor); an unsupported PROVIDER or an empty
 // API_KEY throws so a misconfig fails loud instead of silently abstaining.
 import * as core from "@actions/core";
