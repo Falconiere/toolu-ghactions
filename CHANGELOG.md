@@ -1,5 +1,18 @@
 # Changelog
 
+## [7.2.0](https://github.com/Falconiere/toolu-ghactions/compare/v7.1.0...v7.2.0) (2026-09-02)
+
+
+### Features
+
+* **code-review:** native minimax and kimi providers — OpenAI-compatible vendor endpoints, dependency refresh ([4f0ced6](https://github.com/Falconiere/toolu-ghactions/commit/4f0ced661f4efcb7d29f5bfbf754471fa88ecc4c))
+
+
+### Bug Fixes
+
+* **code-review:** address PR review feedback ([3f1f30a](https://github.com/Falconiere/toolu-ghactions/commit/3f1f30a2c1ed4c19cc12f537929a03361afb26ab))
+* **code-review:** normalize the PROVIDER input exactly once ([63d1b06](https://github.com/Falconiere/toolu-ghactions/commit/63d1b06fb596d266b105489a58c78e839b539565))
+
 ## [7.1.0](https://github.com/Falconiere/toolu-ghactions/compare/v7.0.0...v7.1.0) (2026-08-10)
 
 
