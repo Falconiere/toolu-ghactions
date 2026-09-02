@@ -201,16 +201,16 @@ function readMinTriggerPermission(): "write" | "admin" {
  * routing through the wrong backend.
  */
 function resolveProviderId(raw: string): ProviderId {
+  // canonicalProviderId trims and lowercases itself, so the raw input goes in as-is and
+  // the happy path normalizes exactly once; only the default/error path repeats it.
+  const id = canonicalProviderId(raw);
+  if (id !== undefined) return id;
   const p = raw.trim().toLowerCase();
   if (p === "") return "openrouter";
-  const id = canonicalProviderId(p);
-  if (id === undefined) {
-    throw new Error(
-      `PROVIDER "${p}" is not supported (supported: ${SUPPORTED_PROVIDERS.join(", ")}). ` +
-        `To use "${p}" models, set PROVIDER:"openrouter" and MODEL_ID:"${p}/<model>" to route through OpenRouter.`,
-    );
-  }
-  return id;
+  throw new Error(
+    `PROVIDER "${p}" is not supported (supported: ${SUPPORTED_PROVIDERS.join(", ")}). ` +
+      `To use "${p}" models, set PROVIDER:"openrouter" and MODEL_ID:"${p}/<model>" to route through OpenRouter.`,
+  );
 }
 
 /** Warn when a native-API model id looks like an OpenRouter id (slash namespace) — the

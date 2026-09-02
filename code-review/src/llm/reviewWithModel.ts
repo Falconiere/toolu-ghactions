@@ -268,8 +268,9 @@ export async function reviewWithModel(
       // it is the hidden-reasoning bug — the model burned the budget thinking and emitted
       // nothing, a larger budget only buys MORE reasoning, so it is neither escalated nor
       // recoverable (the fix is providers.ts's reasoning-off). Where the vendor offers no
-      // switch (Kimi) the same shape is an honest overrun that a doubled budget clears,
-      // and providers.ts says so via escalatesEmptyCut.
+      // switch (Kimi, MiniMax's M2.x ids) the same shape is an honest overrun that a
+      // doubled budget clears, and providers.ts says so via escalatesEmptyCut — per
+      // provider, since on a model whose switch holds the shape cannot occur at all.
       if (isLengthTruncation(err) && (hasPartialOutput(err) || escalatesEmptyCut(provider))) {
         const next = nextBudget(budget, escalations);
         if (next !== null) {

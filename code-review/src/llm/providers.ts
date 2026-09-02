@@ -155,6 +155,14 @@ interface CallTuning {
    * True where the vendor offers no switch: the model reasoned past the budget before
    * writing a byte of JSON, and — as the vendor's own docs advise — a larger budget lets
    * the answer through.
+   *
+   * Per PROVIDER, not per model id, on purpose. The id is user-chosen and a per-id table
+   * would go stale with every vendor release, and the flag only errs on the cheap side:
+   * on a model whose switch holds (MiniMax-M3) an empty cut cannot occur at all — no
+   * reasoning and no content cannot fill a budget — so the branch is unreachable there,
+   * and if it ever fires the switch was not honoured, which is exactly the case to
+   * escalate. A wrong "true" costs at most MAX_ESCALATIONS extra calls on a response
+   * shape that should not exist; a wrong "false" (an M2.x id) costs every chunk.
    */
   escalatesEmptyCut: boolean;
 }
@@ -164,9 +172,11 @@ const CALL_TUNING: Record<ProviderId, CallTuning> = {
   openrouter: { providerOptions: undefined, escalatesEmptyCut: false },
   // Reasoning off per call — createDeepSeek exposes no extraBody hook.
   deepseek: { providerOptions: DEEPSEEK_PROVIDER_OPTIONS, escalatesEmptyCut: false },
-  // The switch holds on M3 only, so an empty cut from an M2.x id is a real reasoning
-  // overrun and escalates. (temperature 0 is accepted: the current M2.x/M3 endpoint
-  // takes [0, 2]; only the legacy abab API rejected 0.)
+  // The switch holds on M3 only: an empty cut from an M2.x id is a real reasoning overrun,
+  // and one from M3 means the switch was not honoured — both escalate (see
+  // CallTuning.escalatesEmptyCut for why this is not keyed by model id). temperature 0
+  // is accepted: the current M2.x/M3 endpoint takes [0, 2]; only the legacy abab API
+  // rejected 0.
   minimax: { providerOptions: MINIMAX_PROVIDER_OPTIONS, escalatesEmptyCut: true },
   // Kimi's current models reason on every call: kimi-k3 and kimi-k2.7-code cannot be
   // switched off (`thinking:{type:"disabled"}` is an ERROR on k2.7-code and unknown to
