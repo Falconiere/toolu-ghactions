@@ -12,7 +12,7 @@ import * as core from "@actions/core";
 import {
   type ProviderId,
   SUPPORTED_PROVIDERS,
-  canonicalProviderId,
+  providerFromNormalized,
   defaultModelFor,
 } from "./llm/providers.js";
 import { parseFailOn, type BlockableVerdict } from "./review/gate.js";
@@ -196,17 +196,18 @@ function readMinTriggerPermission(): "write" | "admin" {
 
 /**
  * Resolve and validate the PROVIDER input. Defaults to "openrouter" when omitted; accepts
- * the aliases providers.ts registers ("moonshot" → "kimi"); THROWS on an unimplemented
+ * the aliases providers.ts registers ("moonshot" → "kimi") via its normalized-spelling
+ * lookup; THROWS on an unimplemented
  * provider (openai/anthropic/...) so a misconfig fails loud here instead of silently
  * routing through the wrong backend.
  */
 function resolveProviderId(raw: string): ProviderId {
-  // canonicalProviderId trims and lowercases itself, so the raw input goes in as-is and
-  // the happy path normalizes exactly once; only the default/error path repeats it.
-  const id = canonicalProviderId(raw);
-  if (id !== undefined) return id;
+  // Normalized exactly once, here: the empty-default check and the error message need the
+  // normalized text, so the lookup takes it as-is instead of re-normalizing.
   const p = raw.trim().toLowerCase();
   if (p === "") return "openrouter";
+  const id = providerFromNormalized(p);
+  if (id !== undefined) return id;
   throw new Error(
     `PROVIDER "${p}" is not supported (supported: ${SUPPORTED_PROVIDERS.join(", ")}). ` +
       `To use "${p}" models, set PROVIDER:"openrouter" and MODEL_ID:"${p}/<model>" to route through OpenRouter.`,

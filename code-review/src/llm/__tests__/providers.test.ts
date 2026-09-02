@@ -9,6 +9,7 @@ import {
   defaultModelFor,
   escalatesEmptyCut,
   isSupportedProvider,
+  providerFromNormalized,
   providerOptionsFor,
   resolveModel,
 } from "@/llm/providers.js";
@@ -37,6 +38,11 @@ describe("provider factory", () => {
     expect(canonicalProviderId("Moonshot")).toBe("kimi");
     expect(canonicalProviderId("openai")).toBeUndefined();
     expect(canonicalProviderId("")).toBeUndefined();
+    // The lookup underneath takes an already-normalized spelling and does not normalize
+    // itself — inputs.ts normalizes once and quotes the same text in its error.
+    expect(providerFromNormalized("moonshot")).toBe("kimi");
+    expect(providerFromNormalized("minimax")).toBe("minimax");
+    expect(providerFromNormalized("Moonshot")).toBeUndefined();
   });
 
   it("builds an AI SDK model for each supported provider, carrying the requested id", () => {

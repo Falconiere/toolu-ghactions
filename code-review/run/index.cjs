@@ -38318,8 +38318,7 @@ function isSupportedProvider(s) {
   return SUPPORTED_PROVIDERS.some((p) => p === s);
 }
 var PROVIDER_ALIASES = /* @__PURE__ */ new Map([["moonshot", "kimi"]]);
-function canonicalProviderId(raw) {
-  const s = raw.trim().toLowerCase();
+function providerFromNormalized(s) {
   if (isSupportedProvider(s)) return s;
   return PROVIDER_ALIASES.get(s);
 }
@@ -38530,10 +38529,10 @@ function readMinTriggerPermission() {
   return getInput("MIN_TRIGGER_PERMISSION").trim().toLowerCase() === "admin" ? "admin" : "write";
 }
 function resolveProviderId(raw) {
-  const id = canonicalProviderId(raw);
-  if (id !== void 0) return id;
   const p = raw.trim().toLowerCase();
   if (p === "") return "openrouter";
+  const id = providerFromNormalized(p);
+  if (id !== void 0) return id;
   throw new Error(
     `PROVIDER "${p}" is not supported (supported: ${SUPPORTED_PROVIDERS.join(", ")}). To use "${p}" models, set PROVIDER:"openrouter" and MODEL_ID:"${p}/<model>" to route through OpenRouter.`
   );
