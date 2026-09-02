@@ -50,7 +50,15 @@ const PROVIDER_ALIASES: ReadonlyMap<string, ProviderId> = new Map([["moonshot", 
  * The one resolver every input surface (action inputs, the eval CLI) goes through.
  */
 export function canonicalProviderId(raw: string): ProviderId | undefined {
-  const s = raw.trim().toLowerCase();
+  return providerFromNormalized(raw.trim().toLowerCase());
+}
+
+/**
+ * The lookup behind {@link canonicalProviderId} for a spelling that is ALREADY trimmed
+ * and lowercased — for a caller that normalizes once itself because it also needs the
+ * normalized text (inputs.ts quotes it in its error). Not case-insensitive on its own.
+ */
+export function providerFromNormalized(s: string): ProviderId | undefined {
   if (isSupportedProvider(s)) return s;
   return PROVIDER_ALIASES.get(s);
 }
