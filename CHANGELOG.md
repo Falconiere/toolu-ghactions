@@ -1,5 +1,19 @@
 # Changelog
 
+## [7.3.0](https://github.com/Falconiere/toolu-ghactions/compare/v7.2.0...v7.3.0) (2026-09-20)
+
+
+### Features
+
+* **code-review:** severity-grouped findings layout in the verdict comment ([d9c0e59](https://github.com/Falconiere/toolu-ghactions/commit/d9c0e595614eee40a4760a36510b2f1f15192ece))
+
+
+### Bug Fixes
+
+* **code-review:** address PR review feedback ([9c3323e](https://github.com/Falconiere/toolu-ghactions/commit/9c3323ecf9f53beb86937395567bd07785489f09))
+* **code-review:** keep a finding's own text out of the parser's header matching ([fd4aa8d](https://github.com/Falconiere/toolu-ghactions/commit/fd4aa8df739cfd2ca0a9cadb10f0a4af46f118df))
+* **code-review:** keep a multi-paragraph finding text whole in the comment ([994af1a](https://github.com/Falconiere/toolu-ghactions/commit/994af1a683cc6fead58228c10611382a19c77ad1))
+
 ## [7.2.0](https://github.com/Falconiere/toolu-ghactions/compare/v7.1.0...v7.2.0) (2026-09-02)
 
 
