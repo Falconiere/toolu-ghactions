@@ -149,7 +149,10 @@ describe("fitToSizeLimit — the ledger rungs run BEFORE findings shrink", () =>
     expect(body).toMatch(
       /_… \d+ more findings — see the \[job log]\(https:\/\/ci\.example\/job\/1\)_/,
     );
-    expect(body).toContain("blocker: bulky finding 0");
+    // The worst finding survived, in its severity group, text intact.
+    expect(body).toContain("#### 🔴 Blocker");
+    expect(body).toContain("**1.** `src/big0.ts` **L1**");
+    expect(body).toContain("bulky finding 0 ");
     expect(lastLine(body)).toBe(MARKER);
   });
 

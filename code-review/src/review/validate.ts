@@ -20,9 +20,9 @@
 // Then dedup by (path|line|end_line|normalized-text) fingerprint, keeping the
 // max severity within each group.
 import type { Finding } from "@/llm/schema.js";
-// SEVERITY_RANK is owned by render.ts (single source of truth) — imported here so
-// the dedup's max-severity comparison can never drift from the render ordering.
-import { SEVERITY_RANK } from "./render.js";
+// SEVERITY_RANK is owned by findings.ts (single source of truth) — imported here
+// so the dedup's max-severity comparison can never drift from the render ordering.
+import { SEVERITY_RANK } from "./findings.js";
 import { isSelfNegating } from "./selfNegating.js";
 
 /** Confidence floor: "high" keeps high only; "medium" keeps high or medium. */
