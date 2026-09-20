@@ -105,6 +105,23 @@ describe("buildFindingsSection", () => {
     expect(section).toContain("**1.** `docs/readme.md`\n\nstale link");
   });
 
+  it("keeps a multi-paragraph finding text in one block (a blank line would end it)", () => {
+    const section = buildFindingsSection([
+      finding({
+        path: "src/a.ts",
+        line: 12,
+        severity: "high",
+        text: "First paragraph of the explanation.\n\nSecond paragraph that still belongs to it.",
+      }),
+    ]);
+    expect(section).toContain(
+      "First paragraph of the explanation.\nSecond paragraph that still belongs to it.",
+    );
+    // The only blank lines left are the structural two: heading → block header,
+    // block header → text. One inside the text would close the block early.
+    expect(section.split("\n\n")).toHaveLength(3);
+  });
+
   it("does not mutate the caller's array (the pipeline reuses it downstream)", () => {
     const snapshot = [...MIXED];
     buildFindingsSection(MIXED);
@@ -213,6 +230,19 @@ describe.skipIf(!hasJq)("scripts/parse-verdict.sh round-trip", () => {
         key: expect.any(String),
       },
     ]);
+  });
+
+  it("recovers a multi-paragraph finding text whole, not truncated at its first blank line", () => {
+    const text =
+      "First paragraph of the explanation.\n\nSecond paragraph that still belongs to it.";
+    const section = buildFindingsSection([
+      finding({ path: "src/a.ts", line: 12, severity: "high", text }),
+    ]);
+    const { findings } = parse(comment(section));
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.text).toBe(
+      "First paragraph of the explanation. Second paragraph that still belongs to it.",
+    );
   });
 
   it("ignores the truncation note instead of reading it as a finding", () => {
