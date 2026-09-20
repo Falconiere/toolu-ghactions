@@ -151,3 +151,20 @@ EOF
     [ "$(jq -r '.is_review_comment' <<<"$output")" = "false" ]
     [ "$(jq -r '.findings | length' <<<"$output")" = "0" ]
 }
+
+@test "a heading of ordinary prose does not open a severity group" {
+    body=$(comment <<'EOF'
+### Findings (1)
+
+#### Why High severity matters
+
+**1.** `src/a.ts` **L4**
+<sub>correctness</sub>
+
+Prose heading carries no severity, so this block has none to inherit.
+EOF
+)
+    run bash -c "printf '%s' \"\$1\" | '$SCRIPT'" _ "$body"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.findings | length' <<<"$output")" = "0" ]
+}

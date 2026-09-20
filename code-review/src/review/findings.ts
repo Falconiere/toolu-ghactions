@@ -14,6 +14,16 @@
 // written by earlier versions).
 import type { Finding } from "@/llm/schema.js";
 
+/**
+ * What this renderer actually receives. {@link Finding} marks `line` required,
+ * but a finding can reach the comment without one — `github/review.ts` filters
+ * exactly that case (`f.line == null`) before posting inline, and `review/recap.ts`
+ * guards for it too. Typing the reality here keeps the guard below honest and lets
+ * a test build the case without deleting a required property behind the compiler's
+ * back. A plain `Finding[]` is assignable to it.
+ */
+export type RenderableFinding = Omit<Finding, "line"> & { line?: number | null };
+
 /** Severity rank, blocker (worst) → nit (least). Used to order/shrink findings. */
 export const SEVERITY_RANK: Record<Finding["severity"], number> = {
   blocker: 0,
@@ -38,7 +48,7 @@ const SEVERITY_HEADING: Record<Finding["severity"], string> = {
  * present, worst-first, each holding one block per finding. "_No findings._"
  * when empty.
  */
-export function buildFindingsSection(findings: Finding[]): string {
+export function buildFindingsSection(findings: readonly RenderableFinding[]): string {
   if (findings.length === 0) return "_No findings._";
   return renderGroups(severitySorted(findings));
 }
@@ -49,7 +59,7 @@ export function buildFindingsSection(findings: Finding[]): string {
  * which halves `keep` down to 0 — at which point only the note is left.
  */
 export function buildTruncatedFindingsSection(
-  findings: Finding[],
+  findings: readonly RenderableFinding[],
   keep: number,
   jobUrl: string,
 ): string {
@@ -64,7 +74,7 @@ export function buildTruncatedFindingsSection(
 /** Worst-severity-first COPY of `findings`: the caller's array is the SAME one the
  *  pipeline later maps for reconcile and inline posting, so sorting it in place
  *  would reorder those. The sort is stable, so equal severities keep input order. */
-function severitySorted(findings: Finding[]): Finding[] {
+function severitySorted(findings: readonly RenderableFinding[]): RenderableFinding[] {
   return [...findings].sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]);
 }
 
@@ -73,7 +83,7 @@ function severitySorted(findings: Finding[]): Finding[] {
  * keep in sync: `ordered` is already severity-sorted, so a group simply opens at
  * the first finding of a new severity.
  */
-function renderGroups(ordered: Finding[]): string {
+function renderGroups(ordered: readonly RenderableFinding[]): string {
   const counts = new Map<Finding["severity"], number>();
   for (const f of ordered) counts.set(f.severity, (counts.get(f.severity) ?? 0) + 1);
 
@@ -92,14 +102,14 @@ function renderGroups(ordered: Finding[]): string {
 
 /** One finding: `**N.** \`path\` **L12**`, an optional `<sub>` meta line, then
  *  the text as its own paragraph. */
-function findingBlock(f: Finding, index: number): string {
+function findingBlock(f: RenderableFinding, index: number): string {
   const line = f.line !== undefined && f.line !== null ? ` **L${f.line}**` : "";
   return `**${index}.** \`${f.path}\`${line}${metaLine(f)}\n\n${f.text}`;
 }
 
 /** The small grey line under the location: provenance (only when a deterministic
  *  tool confirmed it), category, confidence. All optional → "" drops the line. */
-function metaLine(f: Finding): string {
+function metaLine(f: RenderableFinding): string {
   const bits: string[] = [];
   if (f.source !== undefined && f.source !== "llm") bits.push(`**[${f.source}]**`);
   if (f.category !== undefined && f.category !== "") bits.push(f.category);
