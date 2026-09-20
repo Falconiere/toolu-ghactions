@@ -11,14 +11,13 @@ import {
   buildUnanchoredSection,
 } from "@/review/sections.js";
 
-/** Severity rank, blocker (worst) → nit (least). Used to order/shrink findings. */
-export const SEVERITY_RANK: Record<Finding["severity"], number> = {
-  blocker: 0,
-  high: 1,
-  medium: 2,
-  low: 3,
-  nit: 4,
-};
+// The findings list itself lives in review/findings.ts (this file is at its size
+// budget); re-exported here so verdict.ts keeps one import site for the body.
+export {
+  buildFindingsSection,
+  buildTruncatedFindingsSection,
+  SEVERITY_RANK,
+} from "@/review/findings.js";
 
 /** Cap on the rendered top-must-fix list, matching coordinate-findings.sh `.[0:3]`. */
 const TOP_MUST_FIX_MAX = 3;
@@ -169,52 +168,6 @@ function buildChecklist(body: ReviewBody): string {
     "- [x] Post findings\n" +
     `- [x] Set verdict label (${body.verdictLabel})\n\n`
   );
-}
-
-/**
- * The findings list — one line per finding, `path:line`: severity: text plus an
- * optional italic "(category · confidence)" suffix. "_No findings._" when empty.
- * Sorted worst-severity-first so the top of the list IS the must-fix view (the
- * auto-generated Top-N was dropped as a duplicate of this).
- */
-export function buildFindingsSection(findings: Finding[]): string {
-  if (findings.length === 0) return "_No findings._";
-  // Sort a COPY: `findings` is the SAME array the pipeline later maps for reconcile and
-  // inline posting, so an in-place sort would reorder those; the sort is stable, so
-  // equal-severity findings keep their input order.
-  const ordered = [...findings].sort(
-    (a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity],
-  );
-  return ordered.map(findingLine).join("\n");
-}
-
-/**
- * Findings shrunk to the highest-severity `keep`, with a trailing
- * "_… N more findings — see the [job log](url)_" note. Used by the size guard.
- */
-export function buildTruncatedFindingsSection(
-  findings: Finding[],
-  keep: number,
-  jobUrl: string,
-): string {
-  const ordered = [...findings].sort(
-    (a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity],
-  );
-  const shown = ordered.slice(0, keep);
-  const lines = shown.map(findingLine);
-  const extra = findings.length - keep;
-  if (extra > 0) lines.push(`_… ${extra} more findings — see the [job log](${jobUrl})_`);
-  return lines.join("\n");
-}
-
-/** One finding line: ``path:line`` [source]: severity: text (category · confidence). */
-function findingLine(f: Finding): string {
-  const loc = f.line !== undefined && f.line !== null ? `:${f.line}` : "";
-  // Provenance tag for findings the model confirmed from a deterministic tool.
-  const src = f.source !== undefined && f.source !== "llm" ? ` _[${f.source}]_` : "";
-  const meta = [f.category, f.confidence].filter((x): x is string => x !== undefined && x !== "");
-  const suffix = meta.length > 0 ? ` _(${meta.join(" · ")})_` : "";
-  return `\`${f.path}${loc}\`${src}: ${f.severity}: ${f.text}${suffix}`;
 }
 
 /**

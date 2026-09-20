@@ -66,23 +66,79 @@ else
   verdict="none"
 fi
 
-# --- Findings: only the `### Findings` … next `### ` block, lines of the form
-#     `path[:line]`: severity: text
+# --- Findings: only the `### Findings` … next `### ` block. Two shapes are
+#     accepted, because a repo can be running an older bot than this script:
+#       new (grouped blocks)   `#### 🟠 High · 2` heading, then per finding
+#                              `**1.** `path` **L12**`, an optional `<sub>…</sub>`
+#                              meta line, then the text paragraph;
+#       old (one line each)    `path[:line]`: severity: text.
+#     `#### ` sub-headings do NOT close the block — only a top-level `### ` does.
 _sha1() { (sha1sum 2>/dev/null || shasum 2>/dev/null || echo nohash) | cut -c1-8; }
-# Tolerate a decorated header (`### Findings`, `### Findings (6)`) — exact-match
-# would miss a count suffix and silently report zero findings.
 findings_block=$(printf '%s\n' "$input" | awk '/^### Findings([[:space:]]|$)/{f=1;next} /^### /{f=0} f')
 findings_json="[]"
-while IFS= read -r line; do
-  [[ "$line" =~ ^\`([^\`]+)\`:\ (blocker|high|medium|low|nit):\ (.*)$ ]] || continue
-  raw_path="${BASH_REMATCH[1]}"; sev="${BASH_REMATCH[2]}"; text="${BASH_REMATCH[3]}"
-  if [[ "$raw_path" =~ ^(.+):([0-9]+)$ ]]; then path="${BASH_REMATCH[1]}"; ln="${BASH_REMATCH[2]}"; else path="$raw_path"; ln=""; fi
+
+# Append one finding (silently skipped when it lacks a path, severity or text).
+_emit() {
+  local path="$1" ln="$2" sev="$3" text="$4" h key obj
+  [ -n "$path" ] && [ -n "$sev" ] && [ -n "$text" ] || return 0
   h=$(printf '%s' "$text" | _sha1)
   key="${path}:${ln}:${h}"
   obj=$(jq -nc --arg path "$path" --arg line "$ln" --arg severity "$sev" --arg text "$text" --arg key "$key" \
-    '{path:$path, line:(if $line=="" then null else ($line|tonumber) end), severity:$severity, text:$text, key:$key}') || continue
+    '{path:$path, line:(if $line=="" then null else ($line|tonumber) end), severity:$severity, text:$text, key:$key}') || return 0
   findings_json=$(jq -c --argjson o "$obj" '. + [$o]' <<<"$findings_json")
+}
+
+# State for the grouped shape: the severity of the current `#### ` group and the
+# block being read (its text arrives on the lines AFTER its header).
+cur_sev=""; pending=false; p_path=""; p_line=""; p_sev=""; p_text=""
+_flush() {
+  [ "$pending" = true ] && _emit "$p_path" "$p_line" "$p_sev" "$p_text"
+  pending=false; p_path=""; p_line=""; p_sev=""; p_text=""
+  return 0
+}
+
+# Regexes as variables: keeps the backtick/asterisk-heavy patterns out of the
+# shell's quoting rules.
+group_re='^####[[:space:]].*(Blocker|High|Medium|Low|Nit)([[:space:]]|$)'
+block_re='^\*\*[0-9]+\.\*\*[[:space:]]`([^`]+)`([[:space:]]\*\*L([0-9]+)\*\*)?[[:space:]]*$'
+oneline_re='^`([^`]+)`: (blocker|high|medium|low|nit): (.*)$'
+path_line_re='^(.+):([0-9]+)$'
+
+while IFS= read -r line; do
+  # Group heading — severity for every block until the next one.
+  if [[ "$line" =~ $group_re ]]; then
+    _flush
+    cur_sev=$(printf '%s' "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')
+    continue
+  fi
+  # Block header: `**3.** `path/to/file.ts` **L75**` (the line part is optional).
+  if [[ "$line" =~ $block_re ]]; then
+    _flush
+    p_path="${BASH_REMATCH[1]}"; p_line="${BASH_REMATCH[3]}"; p_sev="$cur_sev"; p_text=""; pending=true
+    continue
+  fi
+  # Old one-line shape, still parsed so comments from an older bot keep working.
+  if [[ "$line" =~ $oneline_re ]]; then
+    _flush
+    raw_path="${BASH_REMATCH[1]}"; sev="${BASH_REMATCH[2]}"; text="${BASH_REMATCH[3]}"
+    if [[ "$raw_path" =~ $path_line_re ]]; then path="${BASH_REMATCH[1]}"; ln="${BASH_REMATCH[2]}"; else path="$raw_path"; ln=""; fi
+    _emit "$path" "$ln" "$sev" "$text"
+    continue
+  fi
+  # Inside a block: skip the `<sub>` meta line, gather the text paragraph, and
+  # close the block on the blank line that ends it.
+  if [ "$pending" = true ]; then
+    case "$line" in
+      "<sub>"*) continue ;;
+    esac
+    if [ -z "${line//[[:space:]]/}" ]; then
+      [ -n "$p_text" ] && _flush
+      continue
+    fi
+    p_text="${p_text:+$p_text }$line"
+  fi
 done <<< "$findings_block"
+_flush
 
 jq -nc \
   --argjson is_review "$is_review" \

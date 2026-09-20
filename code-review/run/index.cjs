@@ -41988,80 +41988,7 @@ function appendDroppedNotice(otherChecks, dropped, maxChunks) {
 ${notice}` : notice;
 }
 
-// src/review/sections.ts
-var MAX_UNANCHORED_ROWS = 20;
-var MAX_CLUSTERS = 10;
-var MAX_MEMBERS_LISTED = 10;
-function locationOf(f) {
-  return f.line !== void 0 && f.line !== null ? `${f.path}:${f.line}` : f.path;
-}
-function memberPaths(members) {
-  const listed = members.slice(0, MAX_MEMBERS_LISTED).map((m) => `\`${m.path}\``);
-  const hidden = members.length - listed.length;
-  return hidden > 0 ? `${listed.join(", ")}, \u2026 ${hidden} more` : listed.join(", ");
-}
-function sameFindingLine(members) {
-  return `Same finding in ${members.length} files: ${memberPaths(members)}`;
-}
-function dismissalLine(count) {
-  return `_Dismissing this thread dismisses the pattern (${count} files)._`;
-}
-function clusterMemberNote(members) {
-  return `${sameFindingLine(members)}
-
-${dismissalLine(members.length)}`;
-}
-function buildUnanchoredSection(findings) {
-  if (findings.length === 0) return "";
-  return `### Unanchored findings (${findings.length})
-
-GitHub does not show these files in its own diff of this PR, so they cannot carry an inline comment. They are reported here instead.
-
-${findingRows(findings)}
-
-`;
-}
-function buildDroppedSection(findings) {
-  if (findings.length === 0) return "";
-  return `### Findings GitHub rejected inline (${findings.length})
-
-GitHub's Reviews API rejected these comments (422) even posted one at a time, so they could not be attached to their lines. They are reported here instead.
-
-${findingRows(findings)}
-
-`;
-}
-function findingRows(findings) {
-  const shown = findings.slice(0, MAX_UNANCHORED_ROWS);
-  const lines = shown.map((f) => `- \`${locationOf(f)}\`: ${f.severity}: ${f.text}`);
-  const extra = findings.length - shown.length;
-  if (extra > 0) lines.push(`_\u2026 ${extra} more_`);
-  return lines.join("\n");
-}
-function buildClusterSection(clusters) {
-  const repeated = clusters.filter((c) => c.members.length > 1);
-  if (repeated.length === 0) return "";
-  const shown = repeated.slice(0, MAX_CLUSTERS);
-  const blocks = shown.map(clusterBlock);
-  const extra = repeated.length - shown.length;
-  if (extra > 0) blocks.push(`_\u2026 ${extra} more repeated finding(s)_`);
-  return `### Repeated findings (${repeated.length})
-
-Each of these is one finding repeated across several files. It is posted once, on its exemplar; resolving or dismissing that thread settles the whole pattern.
-
-${blocks.join("\n\n")}
-
-`;
-}
-function clusterBlock(cluster) {
-  const { exemplar, members } = cluster;
-  const category = exemplar.category !== void 0 ? ` _(${exemplar.category})_` : "";
-  return `- \`${locationOf(exemplar)}\`${category}: ${exemplar.severity}: ${exemplar.text}
-  - ${sameFindingLine(members)}
-  - ${dismissalLine(members.length)}`;
-}
-
-// src/review/render.ts
+// src/review/findings.ts
 var SEVERITY_RANK = {
   blocker: 0,
   high: 1,
@@ -42069,149 +41996,58 @@ var SEVERITY_RANK = {
   low: 3,
   nit: 4
 };
-var TOP_MUST_FIX_MAX = 3;
-function renderBody(body, findingsSection) {
-  const parts = [];
-  parts.push(`<img src="${body.botLogoUrl}" width="20" align="left"> **${body.botName}**
-`);
-  let main2 = `${body.header}
-
-`;
-  main2 += "---\n";
-  main2 += `### Code Review \u2014 \`${body.branch}\`
-
-`;
-  main2 += buildChecklist(body);
-  main2 += `**Verdict:** ${body.verdictBadge}   ${buildSeveritySummary(body.findings)}`;
-  if (body.errorDetail !== "") {
-    const label = body.llmErrored ? "Provider error" : "Partial review";
-    main2 += `
-
-> \u26A0\uFE0F **${label}:** ${body.errorDetail}`;
-  }
-  if (body.capNote !== "") main2 += `
-
-> \u{1F501} **Round cap:** ${body.capNote}`;
-  parts.push(main2);
-  if (body.recap !== "") parts.push(`
-${body.recap}
-`);
-  let section = "\n";
-  if (body.reviewPlan !== "") section += `### Review Plan
-${body.reviewPlan}
-
-`;
-  section += `### Findings (${body.findings.length})
-
-`;
-  section += `${findingsSection}
-
-`;
-  section += buildClusterSection(body.clusters);
-  section += buildUnanchoredSection(body.unanchored);
-  section += buildDroppedSection(body.dropped);
-  section += buildMechanicalSection(body.mechanical, body.llmErrored);
-  if (body.ledger !== "") section += `${body.ledger}
-`;
-  if (body.otherChecks !== "") section += `### Other checks
-${body.otherChecks}
-
-`;
-  const topMustFix = buildTopMustFixSection(body.topMustFix);
-  if (topMustFix !== "") section += `### Top-N must-fix
-${topMustFix}`;
-  parts.push(section);
-  if (body.history !== "") parts.push(`
-${body.history}
-`);
-  parts.push(`
-${body.verdictLabel}
-`);
-  if (body.marker !== "") parts.push(`
-${body.marker}
-`);
-  return parts.join("");
-}
-function buildChecklist(body) {
-  if (body.compact) {
-    const n = body.changedFiles;
-    return `- [x] Reviewed ${n}-file diff \u2014 verdict set
-
-`;
-  }
-  return `- [x] Read repository context and PR diff
-- [x] Review changed files
-- [x] Analyze correctness, security, performance
-- [x] Post findings
-- [x] Set verdict label (${body.verdictLabel})
-
-`;
-}
+var SEVERITY_HEADING = {
+  blocker: "\u{1F534} Blocker",
+  high: "\u{1F7E0} High",
+  medium: "\u{1F7E1} Medium",
+  low: "\u{1F535} Low",
+  nit: "\u26AA Nit"
+};
 function buildFindingsSection(findings) {
   if (findings.length === 0) return "_No findings._";
-  const ordered = [...findings].sort(
-    (a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]
-  );
-  return ordered.map(findingLine).join("\n");
+  return renderGroups(severitySorted(findings));
 }
 function buildTruncatedFindingsSection(findings, keep, jobUrl2) {
-  const ordered = [...findings].sort(
-    (a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]
-  );
-  const shown = ordered.slice(0, keep);
-  const lines = shown.map(findingLine);
-  const extra = findings.length - keep;
-  if (extra > 0) lines.push(`_\u2026 ${extra} more findings \u2014 see the [job log](${jobUrl2})_`);
-  return lines.join("\n");
+  const shown = severitySorted(findings).slice(0, keep);
+  const extra = findings.length - shown.length;
+  const groups = shown.length > 0 ? renderGroups(shown) : "";
+  if (extra <= 0) return groups;
+  const note = `_\u2026 ${extra} more findings \u2014 see the [job log](${jobUrl2})_`;
+  return groups === "" ? note : `${groups}
+
+${note}`;
 }
-function findingLine(f) {
-  const loc = f.line !== void 0 && f.line !== null ? `:${f.line}` : "";
-  const src = f.source !== void 0 && f.source !== "llm" ? ` _[${f.source}]_` : "";
-  const meta = [f.category, f.confidence].filter((x) => x !== void 0 && x !== "");
-  const suffix = meta.length > 0 ? ` _(${meta.join(" \xB7 ")})_` : "";
-  return `\`${f.path}${loc}\`${src}: ${f.severity}: ${f.text}${suffix}`;
+function severitySorted(findings) {
+  return [...findings].sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]);
 }
-function buildMechanicalSection(mechanical, llmErrored) {
-  if (mechanical.length === 0) {
-    return llmErrored ? "> \u26A0\uFE0F **LLM judgment unavailable** \u2014 no deterministic findings either.\n\n" : "";
+function renderGroups(ordered) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const f of ordered) counts.set(f.severity, (counts.get(f.severity) ?? 0) + 1);
+  const blocks = [];
+  let index = 0;
+  let group = null;
+  for (const f of ordered) {
+    if (f.severity !== group) {
+      group = f.severity;
+      blocks.push(`#### ${SEVERITY_HEADING[group]} \xB7 ${counts.get(group) ?? 0}`);
+    }
+    blocks.push(findingBlock(f, ++index));
   }
-  const byTool = /* @__PURE__ */ new Map();
-  for (const f of mechanical) byTool.set(f.tool, (byTool.get(f.tool) ?? 0) + 1);
-  const counts = [...byTool.entries()].map(([tool, n]) => `${n} ${tool}`).join(", ");
-  let out = "### Mechanical checks\n\n";
-  out += `${mechanical.length} deterministic finding(s) \u2014 ${counts}. See the **Code Scanning** tab for details.
-`;
-  if (llmErrored) {
-    out += "\n> \u26A0\uFE0F **LLM judgment unavailable** \u2014 showing deterministic findings only.\n";
-  }
-  return `${out}
-`;
+  return blocks.join("\n\n");
 }
-function buildTopMustFixSection(topMustFix) {
-  const capped = dedupeCap(topMustFix, TOP_MUST_FIX_MAX);
-  return capped.length > 0 ? capped.join("\n") : "";
+function findingBlock(f, index) {
+  const line = f.line !== void 0 && f.line !== null ? ` **L${f.line}**` : "";
+  return `**${index}.** \`${f.path}\`${line}${metaLine(f)}
+
+${f.text}`;
 }
-function dedupeCap(items, max) {
-  const seen = /* @__PURE__ */ new Set();
-  const out = [];
-  for (const item of items) {
-    if (seen.has(item)) continue;
-    seen.add(item);
-    out.push(item);
-    if (out.length === max) break;
-  }
-  return out;
-}
-function buildSeveritySummary(findings) {
-  const counts = { blocker: 0, high: 0, medium: 0, low: 0, nit: 0 };
-  for (const f of findings) counts[f.severity]++;
-  const parts = [];
-  if (counts.blocker > 0) parts.push(`\u{1F534} ${counts.blocker} blocker`);
-  if (counts.high > 0) parts.push(`\u{1F7E0} ${counts.high} high`);
-  if (counts.medium > 0) parts.push(`\u{1F7E1} ${counts.medium} medium`);
-  if (counts.low > 0) parts.push(`\u{1F535} ${counts.low} low`);
-  if (counts.nit > 0) parts.push(`\u26AA ${counts.nit} nit`);
-  return parts.join(" ");
+function metaLine(f) {
+  const bits = [];
+  if (f.source !== void 0 && f.source !== "llm") bits.push(`**[${f.source}]**`);
+  if (f.category !== void 0 && f.category !== "") bits.push(f.category);
+  if (f.confidence !== void 0) bits.push(`${f.confidence} confidence`);
+  return bits.length > 0 ? `
+<sub>${bits.join(" \xB7 ")}</sub>` : "";
 }
 
 // src/review/selfNegating.ts
@@ -43008,6 +42844,201 @@ function validate(result, diff, inputs) {
     stamped: anchored.findings.map((f) => ({ ...f, fp: fingerprint(f) })),
     selfNegating: anchored.selfNegating
   };
+}
+
+// src/review/sections.ts
+var MAX_UNANCHORED_ROWS = 20;
+var MAX_CLUSTERS = 10;
+var MAX_MEMBERS_LISTED = 10;
+function locationOf(f) {
+  return f.line !== void 0 && f.line !== null ? `${f.path}:${f.line}` : f.path;
+}
+function memberPaths(members) {
+  const listed = members.slice(0, MAX_MEMBERS_LISTED).map((m) => `\`${m.path}\``);
+  const hidden = members.length - listed.length;
+  return hidden > 0 ? `${listed.join(", ")}, \u2026 ${hidden} more` : listed.join(", ");
+}
+function sameFindingLine(members) {
+  return `Same finding in ${members.length} files: ${memberPaths(members)}`;
+}
+function dismissalLine(count) {
+  return `_Dismissing this thread dismisses the pattern (${count} files)._`;
+}
+function clusterMemberNote(members) {
+  return `${sameFindingLine(members)}
+
+${dismissalLine(members.length)}`;
+}
+function buildUnanchoredSection(findings) {
+  if (findings.length === 0) return "";
+  return `### Unanchored findings (${findings.length})
+
+GitHub does not show these files in its own diff of this PR, so they cannot carry an inline comment. They are reported here instead.
+
+${findingRows(findings)}
+
+`;
+}
+function buildDroppedSection(findings) {
+  if (findings.length === 0) return "";
+  return `### Findings GitHub rejected inline (${findings.length})
+
+GitHub's Reviews API rejected these comments (422) even posted one at a time, so they could not be attached to their lines. They are reported here instead.
+
+${findingRows(findings)}
+
+`;
+}
+function findingRows(findings) {
+  const shown = findings.slice(0, MAX_UNANCHORED_ROWS);
+  const lines = shown.map((f) => `- \`${locationOf(f)}\`: ${f.severity}: ${f.text}`);
+  const extra = findings.length - shown.length;
+  if (extra > 0) lines.push(`_\u2026 ${extra} more_`);
+  return lines.join("\n");
+}
+function buildClusterSection(clusters) {
+  const repeated = clusters.filter((c) => c.members.length > 1);
+  if (repeated.length === 0) return "";
+  const shown = repeated.slice(0, MAX_CLUSTERS);
+  const blocks = shown.map(clusterBlock);
+  const extra = repeated.length - shown.length;
+  if (extra > 0) blocks.push(`_\u2026 ${extra} more repeated finding(s)_`);
+  return `### Repeated findings (${repeated.length})
+
+Each of these is one finding repeated across several files. It is posted once, on its exemplar; resolving or dismissing that thread settles the whole pattern.
+
+${blocks.join("\n\n")}
+
+`;
+}
+function clusterBlock(cluster) {
+  const { exemplar, members } = cluster;
+  const category = exemplar.category !== void 0 ? ` _(${exemplar.category})_` : "";
+  return `- \`${locationOf(exemplar)}\`${category}: ${exemplar.severity}: ${exemplar.text}
+  - ${sameFindingLine(members)}
+  - ${dismissalLine(members.length)}`;
+}
+
+// src/review/render.ts
+var TOP_MUST_FIX_MAX = 3;
+function renderBody(body, findingsSection) {
+  const parts = [];
+  parts.push(`<img src="${body.botLogoUrl}" width="20" align="left"> **${body.botName}**
+`);
+  let main2 = `${body.header}
+
+`;
+  main2 += "---\n";
+  main2 += `### Code Review \u2014 \`${body.branch}\`
+
+`;
+  main2 += buildChecklist(body);
+  main2 += `**Verdict:** ${body.verdictBadge}   ${buildSeveritySummary(body.findings)}`;
+  if (body.errorDetail !== "") {
+    const label = body.llmErrored ? "Provider error" : "Partial review";
+    main2 += `
+
+> \u26A0\uFE0F **${label}:** ${body.errorDetail}`;
+  }
+  if (body.capNote !== "") main2 += `
+
+> \u{1F501} **Round cap:** ${body.capNote}`;
+  parts.push(main2);
+  if (body.recap !== "") parts.push(`
+${body.recap}
+`);
+  let section = "\n";
+  if (body.reviewPlan !== "") section += `### Review Plan
+${body.reviewPlan}
+
+`;
+  section += `### Findings (${body.findings.length})
+
+`;
+  section += `${findingsSection}
+
+`;
+  section += buildClusterSection(body.clusters);
+  section += buildUnanchoredSection(body.unanchored);
+  section += buildDroppedSection(body.dropped);
+  section += buildMechanicalSection(body.mechanical, body.llmErrored);
+  if (body.ledger !== "") section += `${body.ledger}
+`;
+  if (body.otherChecks !== "") section += `### Other checks
+${body.otherChecks}
+
+`;
+  const topMustFix = buildTopMustFixSection(body.topMustFix);
+  if (topMustFix !== "") section += `### Top-N must-fix
+${topMustFix}`;
+  parts.push(section);
+  if (body.history !== "") parts.push(`
+${body.history}
+`);
+  parts.push(`
+${body.verdictLabel}
+`);
+  if (body.marker !== "") parts.push(`
+${body.marker}
+`);
+  return parts.join("");
+}
+function buildChecklist(body) {
+  if (body.compact) {
+    const n = body.changedFiles;
+    return `- [x] Reviewed ${n}-file diff \u2014 verdict set
+
+`;
+  }
+  return `- [x] Read repository context and PR diff
+- [x] Review changed files
+- [x] Analyze correctness, security, performance
+- [x] Post findings
+- [x] Set verdict label (${body.verdictLabel})
+
+`;
+}
+function buildMechanicalSection(mechanical, llmErrored) {
+  if (mechanical.length === 0) {
+    return llmErrored ? "> \u26A0\uFE0F **LLM judgment unavailable** \u2014 no deterministic findings either.\n\n" : "";
+  }
+  const byTool = /* @__PURE__ */ new Map();
+  for (const f of mechanical) byTool.set(f.tool, (byTool.get(f.tool) ?? 0) + 1);
+  const counts = [...byTool.entries()].map(([tool, n]) => `${n} ${tool}`).join(", ");
+  let out = "### Mechanical checks\n\n";
+  out += `${mechanical.length} deterministic finding(s) \u2014 ${counts}. See the **Code Scanning** tab for details.
+`;
+  if (llmErrored) {
+    out += "\n> \u26A0\uFE0F **LLM judgment unavailable** \u2014 showing deterministic findings only.\n";
+  }
+  return `${out}
+`;
+}
+function buildTopMustFixSection(topMustFix) {
+  const capped = dedupeCap(topMustFix, TOP_MUST_FIX_MAX);
+  return capped.length > 0 ? capped.join("\n") : "";
+}
+function dedupeCap(items, max) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const item of items) {
+    if (seen.has(item)) continue;
+    seen.add(item);
+    out.push(item);
+    if (out.length === max) break;
+  }
+  return out;
+}
+function buildSeveritySummary(findings) {
+  const counts = { blocker: 0, high: 0, medium: 0, low: 0, nit: 0 };
+  for (const f of findings) counts[f.severity]++;
+  const parts = [];
+  if (counts.blocker > 0) parts.push(`\u{1F534} ${counts.blocker} blocker`);
+  if (counts.high > 0) parts.push(`\u{1F7E0} ${counts.high} high`);
+  if (counts.medium > 0) parts.push(`\u{1F7E1} ${counts.medium} medium`);
+  if (counts.low > 0) parts.push(`\u{1F535} ${counts.low} low`);
+  if (counts.nit > 0) parts.push(`\u26AA ${counts.nit} nit`);
+  return parts.join(" ");
 }
 
 // src/review/verdict.ts

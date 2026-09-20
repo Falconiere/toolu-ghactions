@@ -144,11 +144,12 @@ describe("formatVerdict", () => {
     expect(body).toContain(MARKER);
     expect(lastLine(body)).toBe(MARKER);
     // Lowest-severity dropped first: blockers/highs kept, the overflow note present.
-    expect(body).toContain("blocker:");
+    expect(body).toContain("#### 🔴 Blocker · ");
     expect(body).toMatch(/_… \d+ more findings/);
-    // The truncated section is ordered worst-first, so a blocker line precedes any nit.
-    const blockerIdx = body.indexOf(": blocker:");
-    const nitIdx = body.indexOf(": nit:");
+    // The truncated section is ordered worst-first, so the blocker group heading
+    // precedes any nit group heading.
+    const blockerIdx = body.indexOf("#### 🔴 Blocker");
+    const nitIdx = body.indexOf("#### ⚪ Nit");
     if (nitIdx !== -1) expect(blockerIdx).toBeLessThan(nitIdx);
   });
 });
@@ -223,7 +224,7 @@ describe("formatVerdict — verbosity (compact vs full) + dedup", () => {
     // Blocker renders before the nit even though it was second in the input. Assert
     // on the extracted finding-line path sequence, not indexOf over the whole body,
     // so surrounding text (severity summary, headings) can't mask a bad sort.
-    const orderedPaths = [...body.matchAll(/^`(src\/[^`:]+):\d+`/gm)].map((m) => m[1]);
+    const orderedPaths = [...body.matchAll(/^\*\*\d+\.\*\* `(src\/[^`]+)`/gm)].map((m) => m[1]);
     expect(orderedPaths).toEqual(["src/blk.ts", "src/nit.ts"]);
     // The caller's array is untouched (reconcile/inline posting reuse it downstream).
     expect(findings).toEqual(snapshot);
@@ -262,7 +263,7 @@ describe("formatVerdict — mechanical findings + graceful degradation", () => {
     const { body } = formatVerdict(result, { mechanical: [secret] });
     expect(body).toContain("### Mechanical checks");
     expect(body).toContain("1 gitleaks");
-    expect(body).toContain("_[gitleaks]_"); // provenance tag on the finding line
+    expect(body).toContain("**[gitleaks]**"); // provenance tag on the finding's meta line
   });
 
   it("on LLM error WITH mechanical findings, degrades gracefully (section + 'LLM judgment unavailable')", () => {

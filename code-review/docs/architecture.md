@@ -98,6 +98,11 @@ header for the full story, this is just the index).
   (any member fp matching a thread covers the whole cluster).
 - **`render.ts`** — assembles the verdict-comment markdown body from a
   `ReviewBody` (findings, ledger, unanchored findings, cluster sections).
+- **`findings.ts`** — the `### Findings` layout (and `SEVERITY_RANK`, the
+  worst-first order every consumer sorts by): one `#### <severity>` group per
+  severity present, one numbered block per finding (location line, `<sub>` meta
+  line, text paragraph), plus the size-guard's truncated variant. The block shape
+  is a contract — `scripts/parse-verdict.sh` reads it back into JSON.
 - **`sections.ts`** — renders the three size-capped sticky-comment sections
   split out of `render.ts`: `### Unanchored findings` (no anchor exists),
   `### Findings GitHub rejected inline` (422'd even isolated alone — the

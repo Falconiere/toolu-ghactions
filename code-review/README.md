@@ -327,7 +327,7 @@ A generative reviewer re-derives its findings from the diff on every push, so le
 
 With `INLINE_COMMENTS: true` (default), findings are posted as inline review comments anchored to the exact file and line, batched at up to 30 comments per `createReview` call. When the model has a concrete, high-confidence fix it attaches a ` ```suggestion ` block you can commit straight from the PR. Anchors are validated against GitHub's own view of the PR diff before posting: a finding on a file GitHub's own diff omits (or whose line can't be mapped onto it) is **never** posted inline — GitHub's Reviews API rejects the whole `createReview` call outright if it contains even one such comment, so there is no file-level fallback. It is instead rendered in the sticky comment's [`### Unanchored findings`](#coverage-ledger) section, so it is never silently lost. If a batch still fails after anchor validation (a comment GitHub's API rejects for a reason we couldn't predict up front), the batch is bisected to isolate the poison comment — every other comment in the batch still posts, and the isolated one is rendered in the sticky comment's [`### Findings GitHub rejected inline`](#coverage-ledger) section, so one bad comment can no longer zero out the whole review or silently drop a finding. Set `INLINE_COMMENTS: false` for a summary-comment-only review.
 
-The verdict comment is compatible with [`parse-verdict.sh`](https://github.com/Falconiere/toolu/blob/main/plugins/pr-babysit/scripts/parse-verdict.sh) and the [`pr-babysit`](https://github.com/Falconiere/toolu/tree/main/plugins/pr-babysit) automation loop, so toolu users can drop this into CI and their existing babysit workflow consumes the verdict without changes. The elements that contract depends on — the `### Code Review` heading, at least one checked `- [x]` box, the `### Findings` block, and the machine-readable label — are present in **both** verbosity modes (below).
+The verdict comment is compatible with [`parse-verdict.sh`](https://github.com/Falconiere/toolu/blob/main/plugins/pr-babysit/scripts/parse-verdict.sh) and the [`pr-babysit`](https://github.com/Falconiere/toolu/tree/main/plugins/pr-babysit) automation loop, so toolu users can drop this into CI and their existing babysit workflow consumes the verdict without changes. The elements that contract depends on — the `### Code Review` heading, at least one checked `- [x]` box, the `### Findings` block, and the machine-readable label — are present in **both** verbosity modes (below). `parse-verdict.sh` reads both the current grouped-block findings layout and the older one-line-per-finding shape, so an older comment on a long-lived PR still parses; a babysit loop pinned to a **pre-7.3 copy** of the script reads the verdict, the label and completeness as before, but recovers no findings from a comment written by this version until that copy is updated.
 
 ## Example verdict
 
@@ -347,10 +347,18 @@ Reviewing 4 files: 1 correctness-critical (format.ts), 1 test-quality, 1 config,
 1 security-sensitive (login.ts).
 
 ### Findings (2)
-`src/utils/format.ts:17`: low: Comment says 'Temporary workaround' with no
-removal date or tracking issue.
-`src/utils/__tests__/format.test.ts:6`: low: Test assertion uses loose suffix
-match. Tighten to assert full identity.
+
+#### 🔵 Low · 2
+
+**1.** `src/utils/format.ts` **L17**
+<sub>doc/comment accuracy · high confidence</sub>
+
+Comment says 'Temporary workaround' with no removal date or tracking issue.
+
+**2.** `src/utils/__tests__/format.test.ts` **L6**
+<sub>test quality · high confidence</sub>
+
+Test assertion uses loose suffix match. Tighten to assert full identity.
 
 `merge-approved`
 ```
@@ -359,6 +367,8 @@ match. Tighten to assert full identity.
 
 - **`compact`** (default) — the checklist collapses to one line, and the review-memory recap lists changed findings as `` `path:line` `` refs (the full text already lives once in `### Findings`).
 - **`full`** — restores the five-line static checklist and the inline recap text.
+
+**Findings layout.** Findings render as one block per finding, grouped under a `#### <severity>` sub-heading (worst-severity group first) and numbered continuously: a bold location line, a small meta line (`category · confidence`, plus `[gitleaks]`/`[opengrep]` when a deterministic tool confirmed it), then the text as its own paragraph. GitHub runs consecutive lines together as one block of body text, so the previous one-line-per-finding list arrived as a wall on any PR with more than a handful of findings.
 
 These changes apply in **both** modes, independent of `VERBOSITY`:
 
