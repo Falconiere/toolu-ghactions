@@ -122,6 +122,18 @@ describe("buildFindingsSection", () => {
     expect(section.split("\n\n")).toHaveLength(3);
   });
 
+  it("keeps indentation on the line after a collapsed blank line (fenced code survives)", () => {
+    const section = buildFindingsSection([
+      finding({
+        path: "src/a.ts",
+        line: 12,
+        severity: "high",
+        text: "Guard the early return:\n\n```ts\nfunction foo() {\n\n  return 1;\n}\n```",
+      }),
+    ]);
+    expect(section).toContain("function foo() {\n  return 1;\n}");
+  });
+
   it("does not mutate the caller's array (the pipeline reuses it downstream)", () => {
     const snapshot = [...MIXED];
     buildFindingsSection(MIXED);
@@ -242,6 +254,26 @@ describe.skipIf(!hasJq)("scripts/parse-verdict.sh round-trip", () => {
     expect(findings).toHaveLength(1);
     expect(findings[0]?.text).toBe(
       "First paragraph of the explanation. Second paragraph that still belongs to it.",
+    );
+  });
+
+  it("does not split a finding whose text quotes a block header", () => {
+    // The layout invites referring to a finding by number, so the model can write
+    // one into its text. A header there must not close the block and invent a
+    // second finding: a real header always follows the blank line that ends a block.
+    const section = buildFindingsSection([
+      finding({
+        path: "src/a.ts",
+        line: 4,
+        severity: "high",
+        text: "Same root cause as\n**2.** `src/other.ts` **L99**\nwhich repeats it.",
+      }),
+    ]);
+    const { findings } = parse(comment(section));
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.path).toBe("src/a.ts");
+    expect(findings[0]?.text).toBe(
+      "Same root cause as **2.** `src/other.ts` **L99** which repeats it.",
     );
   });
 

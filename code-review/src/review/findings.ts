@@ -116,7 +116,10 @@ function findingBlock(f: RenderableFinding, index: number): string {
  * paragraph split survives visually.
  */
 function blockText(text: string): string {
-  return text.trim().replace(/(\r?\n[ \t]*){2,}/g, "\n");
+  // The trailing `\r?\n` is NOT part of the repeated group on purpose: letting the
+  // group match it would also swallow the following line's own indentation, so
+  // indented code after a blank line inside a fenced block came out flush left.
+  return text.trim().replace(/(?:\r?\n[ \t]*)+\r?\n/g, "\n");
 }
 
 /** The small grey line under the location: provenance (only when a deterministic
