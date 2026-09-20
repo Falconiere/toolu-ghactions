@@ -104,7 +104,19 @@ function renderGroups(ordered: readonly RenderableFinding[]): string {
  *  the text as its own paragraph. */
 function findingBlock(f: RenderableFinding, index: number): string {
   const line = f.line !== undefined && f.line !== null ? ` **L${f.line}**` : "";
-  return `**${index}.** \`${f.path}\`${line}${metaLine(f)}\n\n${f.text}`;
+  return `**${index}.** \`${f.path}\`${line}${metaLine(f)}\n\n${blockText(f.text)}`;
+}
+
+/**
+ * The finding text as ONE block. A blank line is what closes a block for
+ * scripts/parse-verdict.sh, so a text the model wrote in several paragraphs would
+ * be silently truncated at its first blank line — everything after it dropped from
+ * the parsed finding. Collapsing those to single newlines keeps the whole text in
+ * the block; GitHub still renders a single newline as a line break, so the
+ * paragraph split survives visually.
+ */
+function blockText(text: string): string {
+  return text.trim().replace(/(\r?\n[ \t]*){2,}/g, "\n");
 }
 
 /** The small grey line under the location: provenance (only when a deterministic

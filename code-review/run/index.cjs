@@ -42039,7 +42039,10 @@ function findingBlock(f, index) {
   const line = f.line !== void 0 && f.line !== null ? ` **L${f.line}**` : "";
   return `**${index}.** \`${f.path}\`${line}${metaLine(f)}
 
-${f.text}`;
+${blockText(f.text)}`;
+}
+function blockText(text2) {
+  return text2.trim().replace(/(\r?\n[ \t]*){2,}/g, "\n");
 }
 function metaLine(f) {
   const bits = [];

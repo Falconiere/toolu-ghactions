@@ -168,3 +168,22 @@ EOF
     [ "$status" -eq 0 ]
     [ "$(jq -r '.findings | length' <<<"$output")" = "0" ]
 }
+
+@test "a block whose text spans several lines comes back whole" {
+    body=$(comment <<'EOF'
+### Findings (1)
+
+#### 🟡 Medium · 1
+
+**1.** `src/a.ts` **L12**
+<sub>correctness · high confidence</sub>
+
+First paragraph of the explanation.
+Second line that still belongs to the same finding.
+EOF
+)
+    run bash -c "printf '%s' \"\$1\" | '$SCRIPT'" _ "$body"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.findings | length' <<<"$output")" = "1" ]
+    [ "$(jq -r '.findings[0].text' <<<"$output")" = "First paragraph of the explanation. Second line that still belongs to the same finding." ]
+}
