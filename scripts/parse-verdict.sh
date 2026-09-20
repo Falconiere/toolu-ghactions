@@ -108,6 +108,15 @@ oneline_re='^`([^`]+)`: (blocker|high|medium|low|nit): (.*)$'
 path_line_re='^(.+):([0-9]+)$'
 
 while IFS= read -r line; do
+  # Already reading a block's TEXT: nothing in it can be a header. A real header
+  # is always preceded by the blank line that closed the previous block, and that
+  # blank line flushes `pending` — so a header-shaped line reached HERE is the
+  # model quoting one ("see `**2.** `src/other.ts` **L20**` above"), and honoring
+  # it would truncate this finding and fabricate a second, bogus one.
+  if [ "$pending" = true ] && [ -n "$p_text" ]; then
+    if [ -z "${line//[[:space:]]/}" ]; then _flush; else p_text="$p_text $line"; fi
+    continue
+  fi
   # Group heading — severity for every block until the next one.
   if [[ "$line" =~ $group_re ]]; then
     _flush
@@ -128,17 +137,14 @@ while IFS= read -r line; do
     _emit "$path" "$ln" "$sev" "$text"
     continue
   fi
-  # Inside a block: skip the `<sub>` meta line, gather the text paragraph, and
-  # close the block on the blank line that ends it.
+  # Between a block's header and its text: skip the `<sub>` meta line and the
+  # blank line under it, and take the first line of the text.
   if [ "$pending" = true ]; then
     case "$line" in
       "<sub>"*) continue ;;
     esac
-    if [ -z "${line//[[:space:]]/}" ]; then
-      [ -n "$p_text" ] && _flush
-      continue
-    fi
-    p_text="${p_text:+$p_text }$line"
+    [ -z "${line//[[:space:]]/}" ] && continue
+    p_text="$line"
   fi
 done <<< "$findings_block"
 _flush

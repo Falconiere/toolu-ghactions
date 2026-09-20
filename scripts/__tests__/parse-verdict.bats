@@ -187,3 +187,24 @@ EOF
     [ "$(jq -r '.findings | length' <<<"$output")" = "1" ]
     [ "$(jq -r '.findings[0].text' <<<"$output")" = "First paragraph of the explanation. Second line that still belongs to the same finding." ]
 }
+
+@test "a header-shaped line inside a finding's text does not start a new finding" {
+    body=$(comment <<'EOF'
+### Findings (1)
+
+#### 🟠 High · 1
+
+**1.** `src/a.ts` **L4**
+<sub>correctness · high confidence</sub>
+
+See the same mistake at
+**2.** `src/other.ts` **L99**
+which repeats it.
+EOF
+)
+    run bash -c "printf '%s' \"\$1\" | '$SCRIPT'" _ "$body"
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.findings | length' <<<"$output")" = "1" ]
+    [ "$(jq -r '.findings[0].path' <<<"$output")" = "src/a.ts" ]
+    [ "$(jq -r '.findings[0].text' <<<"$output")" = 'See the same mistake at **2.** `src/other.ts` **L99** which repeats it.' ]
+}

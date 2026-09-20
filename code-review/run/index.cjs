@@ -42042,7 +42042,7 @@ function findingBlock(f, index) {
 ${blockText(f.text)}`;
 }
 function blockText(text2) {
-  return text2.trim().replace(/(\r?\n[ \t]*){2,}/g, "\n");
+  return text2.trim().replace(/(?:\r?\n[ \t]*)+\r?\n/g, "\n");
 }
 function metaLine(f) {
   const bits = [];
