@@ -8,6 +8,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Finding } from "@/llm/schema.js";
+import type { RenderableFinding } from "@/review/findings.js";
 import { buildFindingsSection, buildTruncatedFindingsSection } from "@/review/findings.js";
 
 const finding = (
@@ -17,17 +18,14 @@ const finding = (
   ...over,
 });
 
-/**
- * A finding that reached the renderer WITHOUT a line. The schema marks `line`
- * required, but repaired model JSON and carried-forward state can still arrive
- * without one, and both renderers guard for it — so the guard gets a test.
- * `Reflect.deleteProperty` (not `delete`) because the property is non-optional.
- */
-function withoutLine(f: Finding): Finding {
-  const copy: Finding = { ...f };
-  Reflect.deleteProperty(copy, "line");
-  return copy;
-}
+/** A finding that reached the renderer WITHOUT a line — what `RenderableFinding`
+ *  exists to model (`github/review.ts` filters exactly this case before posting
+ *  inline). No line, no anchor to render. */
+const LINELESS: RenderableFinding = {
+  path: "docs/readme.md",
+  severity: "low",
+  text: "stale link",
+};
 
 const MIXED: Finding[] = [
   finding({ path: "src/nit.ts", line: 3, severity: "nit", text: "spacing", category: "style" }),
@@ -103,9 +101,7 @@ describe("buildFindingsSection", () => {
   });
 
   it("omits the line anchor for a finding that carries none", () => {
-    const section = buildFindingsSection([
-      withoutLine(finding({ path: "docs/readme.md", severity: "low", text: "stale link" })),
-    ]);
+    const section = buildFindingsSection([LINELESS]);
     expect(section).toContain("**1.** `docs/readme.md`\n\nstale link");
   });
 
@@ -206,9 +202,7 @@ describe.skipIf(!hasJq)("scripts/parse-verdict.sh round-trip", () => {
   });
 
   it("recovers a finding with no line anchor as line: null", () => {
-    const section = buildFindingsSection([
-      withoutLine(finding({ path: "docs/readme.md", severity: "low", text: "stale link" })),
-    ]);
+    const section = buildFindingsSection([LINELESS]);
     const { findings } = parse(comment(section));
     expect(findings).toEqual([
       {

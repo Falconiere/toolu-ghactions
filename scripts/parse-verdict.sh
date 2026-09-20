@@ -99,7 +99,10 @@ _flush() {
 
 # Regexes as variables: keeps the backtick/asterisk-heavy patterns out of the
 # shell's quoting rules.
-group_re='^####[[:space:]].*(Blocker|High|Medium|Low|Nit)([[:space:]]|$)'
+# Anchored to the WHOLE heading the renderer emits — `#### <emoji> <Severity> · N`
+# — not just to the severity word appearing somewhere in it, so a heading of
+# ordinary prose ("#### Why High severity matters") cannot open a group.
+group_re='^#### [^[:space:]]+ (Blocker|High|Medium|Low|Nit) · [0-9]+[[:space:]]*$'
 block_re='^\*\*[0-9]+\.\*\*[[:space:]]`([^`]+)`([[:space:]]\*\*L([0-9]+)\*\*)?[[:space:]]*$'
 oneline_re='^`([^`]+)`: (blocker|high|medium|low|nit): (.*)$'
 path_line_re='^(.+):([0-9]+)$'
