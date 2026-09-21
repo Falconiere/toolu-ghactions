@@ -10,7 +10,7 @@ Audits the diff against an 8-dimension checklist — correctness, security, perf
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](../LICENSE)
 [![Tests](https://img.shields.io/badge/tests-vitest-3fb950)](https://github.com/Falconiere/toolu-ghactions/actions/workflows/tests.yml)
 
-[Quick start](#quick-start) · [Choosing a model](#choosing-a-model) · [How it works](#how-it-works) · [Example verdict](#example-verdict) · [Coverage ledger](#coverage-ledger) · [Finding clustering](#finding-clustering) · [Custom identity](#custom-identity-github-app) · [@mention re-trigger](#mention-re-trigger) · [Review memory](#review-memory) · [Inputs](#inputs) · [Outputs](#outputs) · [v7 migration](#v7-migration)
+[Quick start](#quick-start) · [Choosing a model](#choosing-a-model) · [How it works](#how-it-works) · [Example verdict](#example-verdict) · [Coverage ledger](#coverage-ledger) · [Finding clustering](#finding-clustering) · [Custom identity](#custom-identity-github-app) · [@mention re-trigger](#mention-re-trigger) · [Review memory](#review-memory) · [Inputs](#inputs) · [Outputs](#outputs) · [v8 migration](#v8-migration) · [v7 migration](#v7-migration)
 
 </div>
 
@@ -184,11 +184,18 @@ The native vendor backends this action used to ship — `deepseek`
 (`api.moonshot.ai`) — are **gone**. Every model they serve is reachable through
 OpenRouter under a `<vendor>/<model>` id, so the migration is one input pair:
 
-| Removed | Replacement |
+| Removed | Nearest OpenRouter id |
 |---|---|
 | `PROVIDER: deepseek` + `MODEL_ID: deepseek-v4-flash` | `MODEL_ID: deepseek/deepseek-v4-flash` |
 | `PROVIDER: minimax` + `MODEL_ID: MiniMax-M3` | `MODEL_ID: minimax/minimax-m3` |
 | `PROVIDER: kimi` + `MODEL_ID: kimi-k2.7-code` | `MODEL_ID: moonshotai/kimi-k2` |
+
+These are the **nearest** ids, not guaranteed byte-identical checkpoints — a
+vendor does not always publish every native model to OpenRouter under the same
+name (Kimi's line-up is namespaced `moonshotai/`, not `kimi/`, and
+`kimi-k2.7-code` has no exact OpenRouter twin). Check
+[openrouter.ai/models](https://openrouter.ai/models) for the current id before
+pinning, and prefer one with reliable JSON structured output.
 
 …plus an `API_KEY` that is now your **OpenRouter** key, not the vendor's. A
 `PROVIDER` still pinned to a removed vendor fails the action with an error naming
@@ -197,6 +204,12 @@ in `API_KEY` would only 401 mid-review.
 
 `openrouter` is the only implemented backend; any other `PROVIDER` value fails the
 action with that same error (`PROVIDER: "openrouter"`, `MODEL_ID: "<vendor>/<model>"`).
+
+**Half-done migrations warn.** Flipping `PROVIDER` but leaving `MODEL_ID` on the
+vendor's bare native id (`deepseek-v4-flash`, `MiniMax-M3`, `kimi-k2.7-code`) is
+the common slip: OpenRouter ids are namespaced `<vendor>/<model>` and it rejects a
+bare one. The action logs a warning naming the fix at input-read time rather than
+letting the run 400 at the first model call.
 
 ### Removed in v4 (migration)
 
@@ -796,6 +809,23 @@ By default (`FAIL_ON: changes`) the action **fails its own job** when the bot's 
 - `FAIL_ON: none` — never fail on a verdict; the review stays purely advisory (the pre-4.x behavior). You can still gate yourself with `if: steps.review.outputs.verdict == 'changes'`.
 
 The gate governs the verdict only; a thrown infra error fails the job regardless of `FAIL_ON`. A `skip` (non-trigger event) never blocks.
+
+## v8 migration
+
+`@v8` is a **breaking change**: the three native vendor backends are removed and
+`PROVIDER` accepts only `openrouter` (its default). Nothing else about the review
+changes — same pipeline, same comment shape, same inputs otherwise.
+
+| What changed | Detail |
+|---|---|
+| `PROVIDER` values | `deepseek`, `minimax`, `kimi` and `moonshot` are **rejected**. The action fails with a config error naming the OpenRouter model id to switch to — it never silently reroutes, because the vendor key in `API_KEY` would only 401 mid-review. `openrouter` (the default) is the only accepted value. |
+| `MODEL_ID` | Must be an OpenRouter id, namespaced `<vendor>/<model>`. A bare native id now **warns** at input-read time instead of 400ing at the first model call. See [Native vendor APIs (removed)](#native-vendor-apis-removed) for the id mapping. |
+| `API_KEY` | Now always your **OpenRouter** key. Workflows passing `secrets.DEEPSEEK_API_KEY` / `MINIMAX_API_KEY` / `KIMI_API_KEY` must swap in `secrets.OPENROUTER_API_KEY`. |
+| Empty-budget retries | A response that burned the whole `MAX_TOKENS` budget on hidden reasoning and returned **no content** is no longer retried at a doubled budget — reasoning is off on OpenRouter (`reasoning: {effort: "none"}`), so that shape means the chosen model ignored the switch and a larger budget only buys more of it. A truncation that **did** produce partial output still escalates exactly as before. If you pin a model that reasons unconditionally, raise `MAX_TOKENS` or lower `MAX_CHUNK_LINES` yourself. |
+
+To adopt `@v8`: bump the pinned ref, drop any `PROVIDER` line naming a removed
+vendor (or set it to `openrouter`), namespace `MODEL_ID`, and point `API_KEY` at
+your OpenRouter key.
 
 ## v7 migration
 
