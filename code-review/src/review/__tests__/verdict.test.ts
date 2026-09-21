@@ -320,6 +320,43 @@ describe("formatVerdict — mechanical findings + graceful degradation", () => {
     expect(body).toContain("1/3 chunks truncated");
     expect(label).toBe("request-changes");
   });
+
+  it("an evidence-gated review is NOT 'LLM judgment unavailable' (PR #109 regression)", () => {
+    // Replays the real failure: the provider answered in full — review plan AND
+    // other-checks blurb — but every finding was dropped by the source-evidence gate,
+    // so reviewCall.ts forced verdict "error". The comment then rendered "LLM judgment
+    // unavailable — no deterministic findings either." directly above the model's own
+    // review plan and other-checks prose, contradicting its own body.
+    const result: ProviderResult = {
+      verdict: "error",
+      findings: [],
+      review_plan: "Reviewing 37 files: 8 correctness-critical, 6 test-coverage additions.",
+      other_checks: "The wallLimited guard misattributes per-attempt timeouts as wall expiries.",
+      top_must_fix: [],
+      partial: true,
+      error: "Review findings lacked valid source evidence; affected files remain unreviewed.",
+    };
+    const { body, label } = formatVerdict(result, {});
+    expect(body).not.toContain("LLM judgment unavailable");
+    // The gate failure is still surfaced, and the review still fails safe.
+    expect(body).toContain("affected files remain unreviewed");
+    expect(label).toBe("request-changes");
+  });
+
+  it("an evidence-gated review WITH mechanical findings keeps the counts, no 'unavailable' note", () => {
+    const result: ProviderResult = {
+      verdict: "error",
+      findings: [],
+      review_plan: "Reviewing 37 files.",
+      other_checks: "",
+      top_must_fix: [],
+      error: "Review findings lacked valid source evidence; affected files remain unreviewed.",
+    };
+    const { body } = formatVerdict(result, { mechanical: [secret] });
+    expect(body).toContain("### Mechanical checks");
+    expect(body).toContain("1 gitleaks");
+    expect(body).not.toContain("LLM judgment unavailable");
+  });
 });
 
 describe("capNote (MAX_ROUNDS surrender note)", () => {

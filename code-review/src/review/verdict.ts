@@ -114,9 +114,14 @@ export function formatVerdict(
       result.error !== undefined && result.error !== ""
         ? result.error + (result.finishReason ? ` [finish_reason: ${result.finishReason}]` : "")
         : "",
-    // "LLM judgment unavailable" keys off the RESOLVED verdict, not errorDetail: a
-    // recovered truncation sets `error` while still delivering findings + a verdict.
-    llmErrored: verdict === "error",
+    // "LLM judgment unavailable" means the model produced NOTHING. It keys off the
+    // resolved verdict AND the absence of model-authored content — never errorDetail:
+    // a recovered truncation sets `error` while still delivering findings + a verdict.
+    // The verdict alone is not enough either: the source-evidence gate
+    // (pipeline/reviewCall.ts) and the coverage degrade (pipeline/settle.ts) both force
+    // "error" on a review the provider answered in full, whose review plan and
+    // other-checks blurb this very body goes on to render.
+    llmErrored: verdict === "error" && !deliveredJudgment(result, findings),
     header,
     branch: opts.branch ?? "unknown",
     jobUrl: opts.jobUrl ?? "https://github.com",
@@ -141,6 +146,19 @@ export function formatVerdict(
 
   const rendered = fitToSizeLimit(body, marker, opts.ledgerSummary ?? "");
   return { body: rendered, label };
+}
+
+/**
+ * True when the model authored ANY of the content this body renders — a review plan,
+ * an other-checks blurb, or a surviving finding. An abstention (provider down, response
+ * unparseable) carries none of the three, so this is what separates "the LLM never
+ * answered" from "the LLM answered and a downstream gate rejected its findings"; the
+ * resolved verdict is "error" in both cases and cannot tell them apart.
+ */
+function deliveredJudgment(result: ProviderResult, findings: Finding[]): boolean {
+  return (
+    (result.review_plan ?? "") !== "" || (result.other_checks ?? "") !== "" || findings.length > 0
+  );
 }
 
 /**
