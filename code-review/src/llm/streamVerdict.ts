@@ -31,8 +31,8 @@
 //     so reviewWithModel's hang-retry branch still fires exactly as before.
 //   - A stream that ends with neither a finish nor an error part throws a
 //     transport-classified plain Error rather than falling through to `await object`
-//     (same deadlock class). Backstop only: both shipped providers synthesize a finish
-//     part in their transform's flush, so a body that closes early instead errors the
+//     (same deadlock class). Backstop only: the shipped provider synthesizes a finish
+//     part in its transform's flush, so a body that closes early instead errors the
 //     stream and lands in the throw path above.
 //   - `object` resolves against the SDK's REPAIRED PARTIAL SNAPSHOT, not the raw text
 //     generateObject used to parse. So a response cut at `"findings":[` closes to an
@@ -44,16 +44,14 @@ import {
   streamObject,
   type LanguageModel,
   type ObjectStreamPart,
-  type ProviderMetadata,
 } from "ai";
 import { Finding, PartialVerdict, Verdict, normalizeFinding } from "./schema.js";
 
 /** Everything one streamed review call needs. Mirrors the generateObject call it
  *  replaces; `mode: "json"`, the {@link Verdict} schema and temperature 0 are pinned
- *  here because they are the wire contract, not a caller's choice (a provider that
- *  rejects an explicit temperature strips it in its own model — providers.ts). */
+ *  here because they are the wire contract, not a caller's choice. */
 export interface StreamVerdictArgs {
-  /** resolveModel() output — the provider-specific AI SDK model object. */
+  /** resolveModel() output — the OpenRouter AI SDK model object. */
   model: LanguageModel;
   /** System prompt (the review checklist envelope). */
   system: string;
@@ -65,8 +63,6 @@ export interface StreamVerdictArgs {
   maxRetries: number;
   /** The caller's per-attempt deadline signal; also the source of truth for "aborted". */
   abortSignal: AbortSignal;
-  /** Per-call provider extras (native DeepSeek's / MiniMax's reasoning switch). */
-  providerOptions?: ProviderMetadata;
 }
 
 /**
@@ -117,7 +113,6 @@ export async function streamVerdict(args: StreamVerdictArgs): Promise<StreamVerd
     maxTokens: args.maxTokens,
     maxRetries: args.maxRetries,
     abortSignal: args.abortSignal,
-    providerOptions: args.providerOptions,
   });
 
   // Read AFTER the loop, so they must outlive it: the latest snapshot the SDK parsed out

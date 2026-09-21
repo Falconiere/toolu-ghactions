@@ -4,7 +4,7 @@
 
 ### AI code review for every pull request
 
-Audits the diff against an 8-dimension checklist — correctness, security, performance, test coverage, doc accuracy, tight assertions, migration warnings, and adherence to the project's own convention files — by running **one model** through either [OpenRouter](https://openrouter.ai) (any OpenAI-compatible model id) or a vendor's **native API** — DeepSeek (`api.deepseek.com`), MiniMax (`api.minimax.io`) or Kimi / Moonshot AI (`api.moonshot.ai`) — selected with a single `PROVIDER` input, via the **[Vercel AI SDK](https://sdk.vercel.ai)** (`generateObject` + Zod: structured output with retries, reasoning disabled). Posts a structured, machine-readable comment with inline, committable suggestions.
+Audits the diff against an 8-dimension checklist — correctness, security, performance, test coverage, doc accuracy, tight assertions, migration warnings, and adherence to the project's own convention files — by running **one model** through [OpenRouter](https://openrouter.ai) (any OpenAI-compatible model id), via the **[Vercel AI SDK](https://sdk.vercel.ai)** (`generateObject` + Zod: structured output with retries, reasoning disabled). Posts a structured, machine-readable comment with inline, committable suggestions.
 
 [![Release](https://img.shields.io/github/v/release/Falconiere/toolu-ghactions?sort=semver&color=d97757)](https://github.com/Falconiere/toolu-ghactions/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](../LICENSE)
@@ -71,14 +71,11 @@ On every PR push, the action shapes the diff, sends it to the configured model, 
 
 The action runs **one model**, selected with three flat inputs:
 
-- **`PROVIDER`** — `openrouter` (default), or a vendor's native API billed to that
-  vendor's own key: `deepseek`, `minimax`, or `kimi` (`moonshot` is accepted as an alias).
-- **`MODEL_ID`** — the model id (per-provider default if omitted).
-- **`API_KEY`** — the provider API key (**required**).
+- **`PROVIDER`** — `openrouter`, the default and the only supported value.
+- **`MODEL_ID`** — the OpenRouter model id (defaults to `deepseek/deepseek-v4-pro`).
+- **`API_KEY`** — your OpenRouter API key (**required**).
 
-By default it is resolved through OpenRouter; you can also point it at a **native
-vendor API** (see below). Anything OpenRouter serves works as long as it's
-OpenAI-compatible:
+Anything OpenRouter serves works as long as it's OpenAI-compatible:
 
 ```yaml
 - uses: falconiere/toolu-ghactions/code-review@v4
@@ -103,74 +100,26 @@ the action surfaces an `error` verdict carrying the finish reason — rendered a
 "🚫 Review incomplete" and labeled `request-changes`, so a failed review
 never auto-merges. It never emits a silent null verdict.
 
-### Native DeepSeek API
+### Native vendor APIs (removed)
 
-To call DeepSeek's own API (`api.deepseek.com`) directly instead of going through
-OpenRouter — lower cost, direct billing — set `PROVIDER: deepseek` and a **native**
-model id (no vendor prefix):
+The native vendor backends this action used to ship — `deepseek`
+(`api.deepseek.com`), `minimax` (`api.minimax.io`) and `kimi`/`moonshot`
+(`api.moonshot.ai`) — are **gone**. Every model they serve is reachable through
+OpenRouter under a `<vendor>/<model>` id, so the migration is one input pair:
 
-```yaml
-- uses: falconiere/toolu-ghactions/code-review@v4
-  with:
-    PROVIDER: deepseek
-    MODEL_ID: deepseek-v4-flash
-    API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-```
+| Removed | Replacement |
+|---|---|
+| `PROVIDER: deepseek` + `MODEL_ID: deepseek-v4-flash` | `MODEL_ID: deepseek/deepseek-v4-flash` |
+| `PROVIDER: minimax` + `MODEL_ID: MiniMax-M3` | `MODEL_ID: minimax/minimax-m3` |
+| `PROVIDER: kimi` + `MODEL_ID: kimi-k2.7-code` | `MODEL_ID: moonshotai/kimi-k2` |
 
-`PROVIDER: deepseek` hits `api.deepseek.com` directly (lower cost, direct billing).
-`MODEL_ID` takes a **native** DeepSeek model id (no vendor prefix) and defaults to
-`deepseek-v4-flash` (fast, 1M context) when omitted. `API_KEY` is your
-DeepSeek key — here `${{ secrets.DEEPSEEK_API_KEY }}` is just the name of *your*
-GitHub repo secret, passed into the single `API_KEY` input.
+…plus an `API_KEY` that is now your **OpenRouter** key, not the vendor's. A
+`PROVIDER` still pinned to a removed vendor fails the action with an error naming
+the OpenRouter id to use — it is never silently rerouted, because the vendor key
+in `API_KEY` would only 401 mid-review.
 
-### Native MiniMax API
-
-To bill the review to your MiniMax key, set `PROVIDER: minimax` and a **native**
-MiniMax model id:
-
-```yaml
-- uses: falconiere/toolu-ghactions/code-review@v7
-  with:
-    PROVIDER: minimax
-    MODEL_ID: MiniMax-M3            # default; also MiniMax-M2.7, MiniMax-M2.5, …
-    API_KEY: ${{ secrets.MINIMAX_API_KEY }}
-```
-
-`PROVIDER: minimax` hits `api.minimax.io` directly. `MODEL_ID` defaults to
-`MiniMax-M3` (1M context, the `deepseek-v4-flash` price tier) when omitted. The
-action sends `thinking: {type: "disabled"}`, which `MiniMax-M3` honours; the M2.x ids
-think on every call regardless, so their reasoning is billed against `MAX_TOKENS` —
-the action keeps it out of the JSON (`reasoning_split`) and retries a response that
-ran out of budget before any JSON started at the doubled budget, but a larger
-`MAX_TOKENS` is the cheaper fix if you pick one. MiniMax silently ignores
-`response_format`, so the verdict schema reaches the model through the prompt alone.
-
-### Native Kimi (Moonshot AI) API
-
-To bill the review to your Kimi key, set `PROVIDER: kimi` (or `moonshot`) and a
-**native** Kimi model id:
-
-```yaml
-- uses: falconiere/toolu-ghactions/code-review@v7
-  with:
-    PROVIDER: kimi
-    MODEL_ID: kimi-k2.7-code        # default; also kimi-k3, kimi-k2.6, kimi-k2.7-code-highspeed
-    API_KEY: ${{ secrets.KIMI_API_KEY }}
-```
-
-`PROVIDER: kimi` hits `api.moonshot.ai` directly (the host did not change with the
-`platform.kimi.ai` rebrand). `MODEL_ID` defaults to `kimi-k2.7-code` (262K context,
-the code-specialised model with Kimi's most stable structured output) when omitted;
-`kimi-k3` is the 1M-context flagship at roughly 4x the price. Two Kimi-specific
-behaviours: the current models reject any explicit sampling value, so the action
-sends no `temperature` to Kimi (the vendor default applies), and they reason on
-every call with no way to switch it off, so the reasoning is billed against
-`MAX_TOKENS` — a response that ran out of budget before any JSON started is retried
-at the doubled budget, and a larger `MAX_TOKENS` is the cheaper fix on big chunks.
-
-Only `openrouter` (default), `deepseek`, `minimax` and `kimi` are implemented; any
-other `PROVIDER` value fails the action with an error that points you at routing it
-through OpenRouter instead (`PROVIDER: "openrouter"`, `MODEL_ID: "<vendor>/<model>"`).
+`openrouter` is the only implemented backend; any other `PROVIDER` value fails the
+action with that same error (`PROVIDER: "openrouter"`, `MODEL_ID: "<vendor>/<model>"`).
 
 ### Removed in v4 (migration)
 
@@ -180,7 +129,7 @@ are not silent no-ops). Migrate to the three flat provider inputs:
 
 | Removed input | Replacement |
 |---|---|
-| `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY` | `API_KEY` (the key for the selected `PROVIDER`) |
+| `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY` | `API_KEY` (your OpenRouter key) |
 | `MODEL` | `MODEL_ID` |
 | `PROVIDERS` | `PROVIDER` + `MODEL_ID` + `API_KEY` (a single model only) |
 | `MERGE_STRATEGY`, `FALLBACK_MODEL`, `REVIEW_MODE`, `ENFORCE_JSON_SCHEMA` | removed — one model, schema always enforced |
@@ -254,16 +203,12 @@ Omissions are explicit, and the checklist forbids inferring missing code or test
 from incomplete context. Source already fully visible in the diff is not attached
 again. Context cannot expand the changed lines on which findings may be reported.
 
-**3 — Review.** Builds the system + user prompt and calls the configured model (the
-`PROVIDER` backend — OpenRouter or a native vendor API) via
-the Vercel AI SDK (`generateObject` + a Zod verdict schema) against the full
+**3 — Review.** Builds the system + user prompt and calls the configured OpenRouter
+model via the Vercel AI SDK (`generateObject` + a Zod verdict schema) against the full
 8-dimension checklist (the 8th, convention adherence, applies only when project
-rules were found). Output is structured with automatic retries; reasoning is off on
-every backend that has a switch (`reasoning: {effort: "none"}` on OpenRouter,
-`thinking: {type: "disabled"}` on native DeepSeek and MiniMax) — it is billed against
-`MAX_TOKENS`, so a thinking model spends the budget before emitting any JSON. Kimi's
-current models have no switch, so there (and on MiniMax's M2.x ids) a response that
-ran out of budget before any JSON started is retried at the doubled budget instead.
+rules were found). Output is structured with automatic retries; reasoning is off
+(`reasoning: {effort: "none"}`) — it is billed against `MAX_TOKENS`, so a thinking
+model spends the budget before emitting any JSON.
 
 A response the schema rejects is not thrown away on sight: the findings completed
 before a truncation cut are salvaged, and a complete response that merely deviates
@@ -683,9 +628,9 @@ resolution without posting the note again.
 
 | Input | Required | Default | Description |
 |---|---|---|---|
-| `PROVIDER` | no | `openrouter` | Backend to call: `openrouter` (any OpenAI-compatible model via OpenRouter), or a vendor's native API billed to that vendor's key — `deepseek` (`api.deepseek.com`), `minimax` (`api.minimax.io`), or `kimi` (Moonshot AI, `api.moonshot.ai`; `moonshot` is accepted as an alias). Any other value fails the action with an error suggesting `PROVIDER: "openrouter"` + `MODEL_ID: "<vendor>/<model>"`. See [Native DeepSeek API](#native-deepseek-api), [Native MiniMax API](#native-minimax-api), [Native Kimi API](#native-kimi-moonshot-ai-api). |
-| `MODEL_ID` | no | per-provider | Model id. Defaults to `deepseek/deepseek-v4-pro` for `openrouter` (1M-token context, 384k max output, so large diffs and verbose reviews rarely truncate), `deepseek-v4-flash` for `deepseek`, `MiniMax-M3` for `minimax`, and `kimi-k2.7-code` for `kimi`. Use `<vendor>/<model>` ids for OpenRouter; bare native ids for the native providers. Pick one with reliable JSON structured output. |
-| `API_KEY` | **yes** | — | API key for the selected `PROVIDER` (OpenRouter, DeepSeek, MiniMax, or Kimi). **Required** — an empty value fails the action. Pass via a step-level `env:`/`secrets` reference for secret hygiene. |
+| `PROVIDER` | no | `openrouter` | Backend to call. `openrouter` is the only supported value — any OpenAI-compatible model via OpenRouter. Any other value, including the removed native vendor backends, fails the action with an error suggesting `PROVIDER: "openrouter"` + `MODEL_ID: "<vendor>/<model>"`. See [Native vendor APIs (removed)](#native-vendor-apis-removed). |
+| `MODEL_ID` | no | `deepseek/deepseek-v4-pro` | OpenRouter model id, namespaced `<vendor>/<model>`. The default has a 1M-token context and 384k max output, so large diffs and verbose reviews rarely truncate. Pick one with reliable JSON structured output. |
+| `API_KEY` | **yes** | — | OpenRouter API key. **Required** — an empty value fails the action. Pass via a step-level `env:`/`secrets` reference for secret hygiene. |
 | `MAX_TOKENS` | no | `8192` | Max completion-token budget per request (always sent — omitting it makes OpenRouter reserve the model's full output window against your credits and can 402-reject). A response truncated at this limit (`finish_reason: length`) is retried with a doubled budget up to the 131072 ceiling (escalations don't consume hang retries); whatever the outcome, the findings completed before a cut are salvaged. |
 | `MIN_CONFIDENCE` | no | `high` | Drop findings below this confidence at every severity, including blocker/high (`high` or `medium`) |
 | `INLINE_COMMENTS` | no | `true` | Post per-line review comments with committable code suggestions (Reviews API), in addition to the summary comment |
@@ -809,9 +754,8 @@ It was rewritten from the previous Dockerized bash action; there is **no Docker 
 - **Fixes land on merge.** Because consumers run the checked-out ref directly
   (no image to rebuild and re-push to a registry), a fix reaches the action the moment
   it merges — no release required.
-- **Single model, one backend at a time.** The 6-vendor parallel ensemble was dropped
-  in favor of one model — via OpenRouter or a native vendor API (DeepSeek, MiniMax,
-  Kimi), selected with `PROVIDER` — through the Vercel AI SDK. The old ensemble inputs (`PROVIDERS`,
+- **Single model, one backend.** The 6-vendor parallel ensemble was dropped in favor
+  of one model, via OpenRouter, through the Vercel AI SDK. The old ensemble inputs (`PROVIDERS`,
   `MERGE_STRATEGY`, `FALLBACK_MODEL`, `REVIEW_MODE`, `ENFORCE_JSON_SCHEMA`) and the
   split key/model inputs (`OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `MODEL`) were
   [removed in v4](#removed-in-v4-migration).

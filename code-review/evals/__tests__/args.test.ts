@@ -47,9 +47,9 @@ describe("parseArgs", () => {
       "--pr",
       "acme/widgets#9",
       "--provider",
-      "deepseek",
+      "openrouter",
       "--model",
-      "deepseek-v4-flash",
+      "deepseek/deepseek-v4-flash",
       "--max-wall-ms",
       "12000",
       "--out",
@@ -58,30 +58,28 @@ describe("parseArgs", () => {
     expect(args.owner).toBe("acme");
     expect(args.repo).toBe("widgets");
     expect(args.prNumber).toBe(9);
-    expect(args.provider).toBe("deepseek");
-    expect(args.model).toBe("deepseek-v4-flash");
+    expect(args.provider).toBe("openrouter");
+    expect(args.model).toBe("deepseek/deepseek-v4-flash");
     expect(args.maxWallMs).toBe(12000);
     expect(args.out).toBe("/tmp/out.json");
   });
 
-  it("rejects an unsupported --provider, naming every supported id", () => {
+  it("rejects an unsupported --provider, naming the supported id and the workaround", () => {
     expect(() => parseArgs(["--provider", "anthropic"])).toThrow(ArgError);
-    expect(() => parseArgs(["--provider", "anthropic"])).toThrow(
-      /\(openrouter, deepseek, minimax, kimi\)/,
-    );
+    expect(() => parseArgs(["--provider", "anthropic"])).toThrow(/\(openrouter\)/);
+    expect(() => parseArgs(["--provider", "anthropic"])).toThrow(/--model "anthropic\/<model>"/);
   });
 
-  it("resolves the native vendor providers and the moonshot alias to their defaults", () => {
-    const minimax = parseArgs(["--provider", "minimax"]);
-    expect(minimax.provider).toBe("minimax");
-    expect(minimax.model).toBe("MiniMax-M3");
-    // "moonshot" is Kimi's vendor and the spelling the action advertised first; the
-    // alias path is case-insensitive like the canonical ids.
-    for (const spelling of ["moonshot", "Moonshot"]) {
-      const moonshot = parseArgs(["--provider", spelling]);
-      expect(moonshot.provider).toBe("kimi");
-      expect(moonshot.model).toBe("kimi-k2.7-code");
+  it("rejects the REMOVED native vendor providers, which now ride OpenRouter model ids", () => {
+    for (const removed of ["deepseek", "minimax", "kimi", "moonshot"]) {
+      expect(() => parseArgs(["--provider", removed])).toThrow(ArgError);
     }
+  });
+
+  it("resolves --provider case-insensitively and defaults --model to the action's own", () => {
+    const args = parseArgs(["--provider", "OpenRouter"]);
+    expect(args.provider).toBe("openrouter");
+    expect(args.model).toBe("deepseek/deepseek-v4-pro");
   });
 
   it("rejects a malformed --pr", () => {
@@ -109,7 +107,7 @@ describe("parseArgs", () => {
   });
 
   it("treats a value starting with '--' as a missing value, naming the starved flag", () => {
-    expect(() => parseArgs(["--pr", "--provider", "deepseek"])).toThrow(/--pr requires a value/);
+    expect(() => parseArgs(["--pr", "--provider", "openrouter"])).toThrow(/--pr requires a value/);
   });
 });
 

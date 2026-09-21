@@ -47,7 +47,7 @@ jobs:
         continue-on-error: true # runtime failures are fine; resolution failures are what we read from the log
         uses: falconiere/toolu-ghactions/code-review@main
         with:
-          PROVIDER: deepseek
+          PROVIDER: openrouter
           API_KEY: proof-run-no-key
           RUN_SECRET_SCAN: 'false'
           RUN_SAST: 'false'

@@ -160,7 +160,7 @@ header for the full story, this is just the index).
   both).
 
 ### `src/llm/`
-- **`reviewWithModel.ts`** — the provider-agnostic `generateObject` call
+- **`reviewWithModel.ts`** — the OpenRouter `generateObject` call
   (timeout/abort, retries, budget escalation, salvage, abstain). A failed
   call's error result carries `failure: "schema" | "transport" | "timeout"`
   so callers can tell a bisectable failure from one that isn't.

@@ -155,8 +155,7 @@ describe("reviewWithModel", () => {
     // which the author cannot act on. A truncated pass must carry at least one recovered
     // finding to be worth anything.
     const result = await reviewWithModel(ENVELOPE, {
-      provider: "deepseek",
-      model: "deepseek-v4-flash",
+      model: "deepseek/deepseek-v4-flash",
       apiKey: "sk-test",
       fetch: replayFetch(fixture("deepseek-truncated-before-findings")),
       maxRetries: 0,
@@ -180,8 +179,7 @@ describe("reviewWithModel", () => {
     // enum), a quoted line "42", severity "CRITICAL", confidence "low" (outside the
     // optional enum), and a third finding with no line at all.
     const result = await reviewWithModel(ENVELOPE, {
-      provider: "deepseek",
-      model: "deepseek-v4-flash",
+      model: "deepseek/deepseek-v4-flash",
       apiKey: "sk-test",
       fetch: replayFetch(fixture("deepseek-schema-mismatch")),
       maxRetries: 0,
@@ -211,8 +209,7 @@ describe("reviewWithModel", () => {
     // output. Those three are prose and a hint list; a wrong type in any of them must
     // not sink the recovery of a perfectly good finding.
     const result = await reviewWithModel(ENVELOPE, {
-      provider: "deepseek",
-      model: "deepseek-v4-flash",
+      model: "deepseek/deepseek-v4-flash",
       apiKey: "sk-test",
       fetch: replayFetch(fixture("deepseek-null-fields")),
       maxRetries: 0,
@@ -241,8 +238,7 @@ describe("reviewWithModel", () => {
     // Real recorded completion: verdict "approved", one nit, line quoted as "12" (which
     // is what makes the strict schema reject it and recovery run at all).
     const result = await reviewWithModel(ENVELOPE, {
-      provider: "deepseek",
-      model: "deepseek-v4-flash",
+      model: "deepseek/deepseek-v4-flash",
       apiKey: "sk-test",
       fetch: replayFetch(fixture("deepseek-approved-with-nit")),
       maxRetries: 0,
@@ -265,8 +261,7 @@ describe("reviewWithModel", () => {
     // conclusion — it never saw the findings it had not written yet — so a recovered
     // truncation carrying findings is "changes", never a stale "approved".
     const result = await reviewWithModel(ENVELOPE, {
-      provider: "deepseek",
-      model: "deepseek-v4-flash",
+      model: "deepseek/deepseek-v4-flash",
       apiKey: "sk-test",
       fetch: replayFetch(fixture("deepseek-truncated-approved")),
       maxRetries: 0,
@@ -286,8 +281,7 @@ describe("reviewWithModel", () => {
     // a fabricated verdict is normalizeVerdict returning null. Recovery must not guess:
     // neither "approved" (a clean review the model never gave) nor "changes".
     const result = await reviewWithModel(ENVELOPE, {
-      provider: "deepseek",
-      model: "deepseek-v4-flash",
+      model: "deepseek/deepseek-v4-flash",
       apiKey: "sk-test",
       fetch: replayFetch(fixture("deepseek-unrecognizable-verdict")),
       maxRetries: 0,
@@ -307,8 +301,7 @@ describe("reviewWithModel", () => {
     // report a clean review over a defect the model DID raise — worse than no review, so
     // recovery declines and the caller abstains.
     const result = await reviewWithModel(ENVELOPE, {
-      provider: "deepseek",
-      model: "deepseek-v4-flash",
+      model: "deepseek/deepseek-v4-flash",
       apiKey: "sk-test",
       fetch: replayFetch(fixture("deepseek-unusable-findings")),
       maxRetries: 0,
@@ -326,8 +319,8 @@ describe("reviewWithModel", () => {
     // deepseek-thinking-length.json is a REAL api.deepseek.com completion recorded with
     // thinking left at its DEFAULT (enabled): all 200 completion tokens went to
     // reasoning_tokens and content came back "". The request-shape assertion in
-    // deepseek.test.ts is the actual fix; this pins the failure mode it prevents, and
-    // that recovery does not paper over it with a fabricated verdict.
+    // request-shape.test.ts (reasoning off) is the actual fix; this pins the failure mode
+    // it prevents, and that recovery does not paper over it with a fabricated verdict.
     let calls = 0;
     const countingFetch: typeof fetch = async (_url, init) => {
       calls++;
@@ -335,8 +328,7 @@ describe("reviewWithModel", () => {
     };
 
     const result = await reviewWithModel(ENVELOPE, {
-      provider: "deepseek",
-      model: "deepseek-v4-flash",
+      model: "deepseek/deepseek-v4-flash",
       apiKey: "sk-test",
       fetch: countingFetch,
       maxRetries: 0,

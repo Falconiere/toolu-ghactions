@@ -3,9 +3,9 @@
 // EvalArgs or throws ArgError — no env reads, no I/O, so `--help` and bad-flag
 // tests never need a key, gh, or a network.
 import {
-  SUPPORTED_PROVIDERS,
+  DEFAULT_MODEL,
+  PROVIDER_ID,
   canonicalProviderId,
-  defaultModelFor,
   type ProviderId,
 } from "@/llm/providers.js";
 
@@ -54,17 +54,17 @@ on PATH.
 
 Options:
   --pr <owner/repo#number>   PR to review (default: ${DEFAULT_PR})
-  --provider <id>            ${SUPPORTED_PROVIDERS.map((p) => `"${p}"`).join(" | ")}
+  --provider <id>            "${PROVIDER_ID}" — the only supported backend
                               (default: openrouter)
-  --model <id>                Model id for --provider (default: the action's own
-                              per-provider default, see llm/providers.ts)
+  --model <id>                OpenRouter model id (default: the action's own
+                              ${DEFAULT_MODEL})
   --max-wall-ms <ms>          Soft wall-clock budget forwarded to MAX_WALL_MS
                               (default: 0 = off)
   --out <file>                Also write the scorecard as JSON to this path
   --help, -h                  Print this usage and exit 0 (no key/network needed)
 
 Env:
-  API_KEY                     Required for a live run: the PROVIDER's API key.
+  API_KEY                     Required for a live run: the OpenRouter API key.
 
 Example:
   API_KEY=sk-or-... bun run eval -- --pr Falconiere/comemory#72 \\
@@ -74,7 +74,7 @@ Example:
 
 /** Read the next argv slot as a flag's value, or throw a clear ArgError. A
  *  value starting with "--" is treated as the NEXT flag, not this one's value
- *  (so `--pr --provider deepseek` reports `--pr` as missing its value instead
+ *  (so `--pr --provider openrouter` reports `--pr` as missing its value instead
  *  of silently swallowing "--provider" as the PR ref). */
 function requireValue(argv: readonly string[], index: number, flag: string): string {
   const value = argv[index];
@@ -102,7 +102,7 @@ function requireInt(argv: readonly string[], index: number, flag: string): numbe
  */
 export function parseArgs(argv: readonly string[]): EvalArgs {
   let prRef = DEFAULT_PR;
-  let provider: ProviderId = "openrouter";
+  let provider: ProviderId = PROVIDER_ID;
   let model: string | null = null;
   let maxWallMs = 0;
   let out: string | null = null;
@@ -123,7 +123,8 @@ export function parseArgs(argv: readonly string[]): EvalArgs {
         const id = canonicalProviderId(raw);
         if (id === undefined) {
           throw new ArgError(
-            `--provider "${raw}" is not supported (${SUPPORTED_PROVIDERS.join(", ")}).`,
+            `--provider "${raw}" is not supported (${PROVIDER_ID}). ` +
+              `Route a vendor's models through OpenRouter with --model "${raw}/<model>".`,
           );
         }
         provider = id;
@@ -143,7 +144,7 @@ export function parseArgs(argv: readonly string[]): EvalArgs {
     }
   }
 
-  const resolvedModel = model ?? defaultModelFor(provider);
+  const resolvedModel = model ?? DEFAULT_MODEL;
   if (help) {
     return {
       help: true,

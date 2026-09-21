@@ -2,18 +2,20 @@
 // object, ONCE, so the pipeline takes a plain typed object and never reads process.env.
 //
 // FLAT PROVIDER CONTRACT (v4): the action runs a SINGLE model, selected by three flat
-// inputs — PROVIDER ("openrouter" | "deepseek" | "minimax" | "kimi"), MODEL_ID, and
-// API_KEY. The old multi-provider PROVIDERS array and the legacy OPENROUTER_API_KEY/MODEL
-// inputs (plus the MERGE_STRATEGY/FALLBACK_MODEL/REVIEW_MODE/ENFORCE_JSON_SCHEMA no-ops)
-// were removed in v4 — a breaking change. PROVIDER defaults to "openrouter"; MODEL_ID defaults per
-// provider (see llm/providers.ts defaultModelFor); an unsupported PROVIDER or an empty
-// API_KEY throws so a misconfig fails loud instead of silently abstaining.
+// inputs — PROVIDER, MODEL_ID and API_KEY. The old multi-provider PROVIDERS array and the
+// legacy OPENROUTER_API_KEY/MODEL inputs (plus the
+// MERGE_STRATEGY/FALLBACK_MODEL/REVIEW_MODE/ENFORCE_JSON_SCHEMA no-ops) were removed in
+// v4 — a breaking change. PROVIDER now accepts only "openrouter" (its default): the
+// native vendor backends were removed and their models are reachable as OpenRouter
+// "<vendor>/<model>" ids. MODEL_ID defaults to llm/providers.ts's DEFAULT_MODEL; any
+// other PROVIDER value, or an empty API_KEY, throws so a misconfig fails loud instead of
+// silently abstaining.
 import * as core from "@actions/core";
 import {
   type ProviderId,
-  SUPPORTED_PROVIDERS,
-  providerFromNormalized,
-  defaultModelFor,
+  DEFAULT_MODEL,
+  PROVIDER_ID,
+  canonicalProviderId,
 } from "./llm/providers.js";
 import { parseFailOn, type BlockableVerdict } from "./review/gate.js";
 import { splitGlobs } from "./git/globs.js";
@@ -23,11 +25,11 @@ export type MinConfidence = "high" | "medium";
 
 /** The fully-resolved, typed inputs the pipeline consumes (no env reads downstream). */
 export interface ActionInputs {
-  /** Resolved backend provider (PROVIDER | "openrouter"); selects the LLM API. */
+  /** Resolved backend provider; always "openrouter" (the only one wired). */
   provider: ProviderId;
-  /** Effective model id for the provider (MODEL_ID | per-provider default). */
+  /** Effective OpenRouter model id (MODEL_ID | {@link DEFAULT_MODEL}). */
   model: string;
-  /** Provider API key (Authorization: Bearer); required, validated non-empty. */
+  /** OpenRouter API key (Authorization: Bearer); required, validated non-empty. */
   apiKey: string;
   /** Max completion tokens per request. */
   maxTokens: number;
@@ -209,48 +211,36 @@ function readMinTriggerPermission(): "write" | "admin" {
 }
 
 /**
- * Resolve and validate the PROVIDER input. Defaults to "openrouter" when omitted; accepts
- * the aliases providers.ts registers ("moonshot" → "kimi") via its normalized-spelling
- * lookup; THROWS on an unimplemented
- * provider (openai/anthropic/...) so a misconfig fails loud here instead of silently
- * routing through the wrong backend.
+ * Resolve and validate the PROVIDER input. Defaults to "openrouter" when omitted and
+ * THROWS on every other value — including the native vendor backends this action used to
+ * wire ("deepseek", "minimax", "kimi"/"moonshot"), whose models are reachable as
+ * OpenRouter "<vendor>/<model>" ids. A workflow still pinned to one of them must fail
+ * loud here, with the id to use, rather than silently sending that vendor's key to
+ * OpenRouter for a 401 mid-review.
  */
 function resolveProviderId(raw: string): ProviderId {
   // Normalized exactly once, here: the empty-default check and the error message need the
-  // normalized text, so the lookup takes it as-is instead of re-normalizing.
+  // normalized text, so the lookup gets it already trimmed and lowercased.
   const p = raw.trim().toLowerCase();
-  if (p === "") return "openrouter";
-  const id = providerFromNormalized(p);
+  if (p === "") return PROVIDER_ID;
+  const id = canonicalProviderId(p);
   if (id !== undefined) return id;
   throw new Error(
-    `PROVIDER "${p}" is not supported (supported: ${SUPPORTED_PROVIDERS.join(", ")}). ` +
+    `PROVIDER "${p}" is not supported (supported: ${PROVIDER_ID}). ` +
       `To use "${p}" models, set PROVIDER:"openrouter" and MODEL_ID:"${p}/<model>" to route through OpenRouter.`,
   );
-}
-
-/** Warn when a native-API model id looks like an OpenRouter id (slash namespace) — the
- *  vendor's own API will 400. Heuristic: current native DeepSeek, MiniMax and Kimi ids
- *  have no "/"; revisit if that ever changes. */
-function warnSuspiciousModel(provider: ProviderId, model: string): void {
-  if (provider !== "openrouter" && model.includes("/")) {
-    core.warning(
-      `MODEL_ID "${model}" looks like an OpenRouter id (contains "/") but PROVIDER is "${provider}"; ` +
-        `the native ${provider} API will reject it. Use a native id like "${defaultModelFor(provider)}".`,
-    );
-  }
 }
 
 /**
  * Read every action.yml input and resolve it into a typed {@link ActionInputs}.
  *
  * Resolves the flat PROVIDER/MODEL_ID/API_KEY contract: PROVIDER defaults to
- * "openrouter" (unsupported values throw), MODEL_ID defaults per provider, and an
- * empty API_KEY throws (a keyless review would abstain on every call).
+ * "openrouter" (every other value throws), MODEL_ID defaults to {@link DEFAULT_MODEL},
+ * and an empty API_KEY throws (a keyless review would abstain on every call).
  */
 export function readInputs(): ActionInputs {
   const provider = resolveProviderId(core.getInput("PROVIDER"));
-  const model = core.getInput("MODEL_ID").trim() || defaultModelFor(provider);
-  warnSuspiciousModel(provider, model);
+  const model = core.getInput("MODEL_ID").trim() || DEFAULT_MODEL;
 
   const apiKey = core.getInput("API_KEY").trim();
   if (apiKey === "") {
