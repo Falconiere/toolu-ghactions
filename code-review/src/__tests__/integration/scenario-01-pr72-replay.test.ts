@@ -101,6 +101,7 @@ function replyFor(paths: string[]): ReturnType<typeof changes> {
           confidence: "high" as const,
           category: "testing",
           text: EXEMPLAR_TEXT,
+          quoted_line: "mod tests;",
         },
       ];
     }
@@ -113,6 +114,7 @@ function replyFor(paths: string[]): ReturnType<typeof changes> {
         confidence: "high" as const,
         category: REPEAT_CATEGORY,
         text: REPEAT_TEXT,
+        quoted_line: `export const s${path.slice("src/s".length, -".ts".length)} = ${Number(path.slice("src/s".length, -".ts".length)) + 100};`,
       },
     ];
   });

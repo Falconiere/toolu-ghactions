@@ -29,7 +29,7 @@ inputs:
     required: false
     default: '8192'
   MIN_CONFIDENCE:
-    description: 'Drop findings below this confidence unless severity is blocker/high. One of: high, medium'
+    description: 'Drop findings below this confidence at every severity, including blocker/high. One of: high, medium'
     required: false
     default: 'high'
   INLINE_COMMENTS:
@@ -87,9 +87,9 @@ inputs:
     required: false
     default: '0'
   MAX_WALL_MS:
-    description: 'Soft wall-clock budget in milliseconds for the whole review loop. 0 (default) = off. When the budget is exceeded mid-run, packages not yet started are recorded as pending in the coverage ledger instead of being attempted, and the round is resumable — via `@toolu resume`, a plain re-run, or automatically on the next push.'
+    description: 'Shared model-work deadline in milliseconds, including cartography, retries, backoff and token escalation. Default 600000 (10 min); 0 explicitly disables it. Active calls abort at the deadline; recovered findings remain partial, attempted files stay unreviewed and unstarted files stay pending for resume. Publishing happens outside this budget; use a workflow job timeout as an outer ceiling.'
     required: false
-    default: '0'
+    default: '600000'
   REQUEST_TIMEOUT_MS:
     description: 'Per-attempt model deadline in milliseconds. Each chunk gets up to this long per attempt (retried a few times) before it is aborted and the chunk abstains ("This operation was aborted"). Raise it for slow/large models, lower it to fail faster. Default 180000 (3 min).'
     required: false

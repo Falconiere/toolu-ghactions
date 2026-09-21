@@ -149,3 +149,109 @@ describe("deadline aborts (AC-11)", () => {
     expect(result.failure).toBe("timeout");
   }, 20_000);
 });
+
+describe("shared MAX_WALL_MS deadline", () => {
+  it("does not dispatch even the first call after the deadline", async () => {
+    let calls = 0;
+    const result = await reviewWithModel(ENVELOPE, {
+      model: "deepseek/deepseek-v4-flash",
+      apiKey: "sk-test",
+      wallDeadline: Date.now() - 1,
+      fetch: async (_url, init) => {
+        calls++;
+        return replayCompletion(fixture("success").body, init);
+      },
+    });
+    expect(calls).toBe(0);
+    expect(result.verdict).toBe("error");
+    expect(result.failure).toBe("timeout");
+    expect(result.error).toContain("MAX_WALL_MS");
+  });
+
+  it("aborts an in-flight stream at the wall deadline and preserves its findings", async () => {
+    const start = Date.now();
+    let calls = 0;
+    const result = await reviewWithModel(ENVELOPE, {
+      model: "deepseek/deepseek-v4-flash",
+      apiKey: "sk-test",
+      timeoutMs: 1000,
+      maxAttempts: 1,
+      wallDeadline: start + 150,
+      fetch: async (_url, init) => {
+        calls++;
+        return stallingBody(framesWithoutFinish("findings-two"), init?.signal);
+      },
+    });
+    expect(calls).toBe(1);
+    expect(result.partial).toBe(true);
+    expect(result.findings).toHaveLength(2);
+    expect(result.error).toContain("MAX_WALL_MS");
+    expect(Date.now() - start).toBeLessThan(750);
+  });
+
+  it("bounds the cartographer's raw JSON request by the same deadline", async () => {
+    const start = Date.now();
+    let calls = 0;
+    const result = await reviewWithModel(ENVELOPE, {
+      model: "deepseek/deepseek-v4-flash",
+      apiKey: "sk-test",
+      rawJson: true,
+      timeoutMs: 1000,
+      maxAttempts: 1,
+      wallDeadline: start + 150,
+      fetch: async (_url, init) => {
+        calls++;
+        const response = stallingBody([], init?.signal);
+        return new Response(response.body, { headers: { "content-type": "application/json" } });
+      },
+    });
+    expect(calls).toBe(1);
+    expect(result.verdict).toBe("error");
+    expect(result.failure).toBe("timeout");
+    expect(result.error).toContain("MAX_WALL_MS");
+    expect(Date.now() - start).toBeLessThan(750);
+  });
+
+  it("does not reset the deadline when a truncated response escalates the token budget", async () => {
+    const start = Date.now();
+    let calls = 0;
+    const result = await reviewWithModel(ENVELOPE, {
+      model: "deepseek/deepseek-v4-flash",
+      apiKey: "sk-test",
+      timeoutMs: 1000,
+      maxAttempts: 1,
+      wallDeadline: start + 150,
+      fetch: async (_url, init) => {
+        calls++;
+        if (calls === 1) return replayCompletion(fixture("truncated-findings").body, init);
+        return stallingBody([], init?.signal);
+      },
+    });
+    expect(calls).toBe(2);
+    expect(result.partial).toBe(true);
+    expect(result.findings.map((f) => f.path)).toEqual(["src/auth.ts", "src/db.ts"]);
+    expect(result.error).toContain("MAX_WALL_MS");
+    expect(result.finishReason).toBeUndefined();
+    expect(Date.now() - start).toBeLessThan(750);
+  });
+
+  it("ends backoff at the wall deadline without dispatching another attempt", async () => {
+    const start = Date.now();
+    let calls = 0;
+    const result = await reviewWithModel(ENVELOPE, {
+      model: "deepseek/deepseek-v4-flash",
+      apiKey: "sk-test",
+      timeoutMs: 100,
+      maxAttempts: 2,
+      wallDeadline: start + 150,
+      fetch: async (_url, init) => {
+        calls++;
+        return stallingBody([], init?.signal);
+      },
+    });
+    expect(calls).toBe(1);
+    expect(result.verdict).toBe("error");
+    expect(result.error).toContain("MAX_WALL_MS");
+    expect(Date.now() - start).toBeLessThan(400);
+  });
+});

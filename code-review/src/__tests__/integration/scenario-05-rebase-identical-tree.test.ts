@@ -52,6 +52,7 @@ describe("scenario 5 — a rebase that preserves the tree (AC-15.5)", () => {
       confidence: "high" as const,
       category: "correctness",
       text: BUG_TEXT,
+      quoted_line: "return a - b;",
     };
     const round1 = modelServer({
       reply: (call) => (diffPaths(call).includes(BUGGY) ? changes([bug]) : changes([])),

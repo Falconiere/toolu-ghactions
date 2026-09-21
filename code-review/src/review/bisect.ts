@@ -58,7 +58,9 @@ export async function reviewPackage(
 ): Promise<ProviderResult[]> {
   const result = await ctx.review(ctx.buildEnvelope(segments, mechanical));
   if (result.verdict !== "error") {
-    reportCoverage(ctx.onCoverage, segments, { status: "reviewed" });
+    reportCoverage(ctx.onCoverage, segments, {
+      status: result.partial === true ? "unreviewed" : "reviewed",
+    });
     return [result];
   }
   if (result.failure === "schema" && depth < BISECT_MAX_DEPTH && segments.length > 1) {
@@ -79,7 +81,7 @@ export async function reviewPackage(
   // unions them), so skipping the retry costs coverage nothing.
   const retryable = depth === 0 && !deadlinePassed(ctx.wallDeadline);
   const final = retryable ? await ctx.review(ctx.buildEnvelope(segments, mechanical)) : result;
-  const status = final.verdict === "error" ? "unreviewed" : "reviewed";
+  const status = final.verdict === "error" || final.partial === true ? "unreviewed" : "reviewed";
   reportCoverage(ctx.onCoverage, segments, { status });
   return [final];
 }
@@ -142,8 +144,8 @@ export function reportCoverage(
   }
 }
 
-/** True when a wall deadline is set and already reached — checked before every
- *  package and every split, never mid-call (a call in flight always finishes). */
+/** Dispatch guard before packages and splits. reviewWithModel also bounds active
+ *  attempts with this same absolute deadline. */
 export function deadlinePassed(wallDeadline: number | undefined): boolean {
   return wallDeadline !== undefined && Date.now() >= wallDeadline;
 }

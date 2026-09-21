@@ -5,6 +5,7 @@
 import type { Finding } from "@/llm/schema.js";
 import type { MechanicalFinding } from "@/mechanical/sarif.js";
 import type { FindingCluster } from "@/review/cluster.js";
+import { SEVERITY_RANK } from "./findings.js";
 import {
   buildClusterSection,
   buildDroppedSection,
@@ -51,8 +52,6 @@ export interface ReviewBody {
   reviewPlan: string;
   /** The model's other-checks blurb ("" → section omitted). */
   otherChecks: string;
-  /** The model's explicit top-must-fix list (empty → section omitted, never auto-generated). */
-  topMustFix: string[];
   /** All findings (after validation). */
   findings: Finding[];
   /** File count of the reviewed diff — shown in the compact checklist line. */
@@ -134,9 +133,10 @@ export function renderBody(body: ReviewBody, findingsSection: string): string {
   // Per-file coverage: what was reviewed, carried, excluded, or NOT reviewed.
   if (body.ledger !== "") section += `${body.ledger}\n`;
   if (body.otherChecks !== "") section += `### Other checks\n${body.otherChecks}\n\n`;
-  // Top-N renders ONLY from the model's explicit list — it is no longer auto-generated
-  // from findings (that was a verbatim duplicate of the severity-sorted Findings list).
-  const topMustFix = buildTopMustFixSection(body.topMustFix);
+  // Top-N is derived from the same surviving findings the comment renders. Never
+  // render independently generated model prose here: it may describe a claim the
+  // evidence gate, scope filter, or settlement step already rejected.
+  const topMustFix = buildTopMustFixSection(body.findings);
   if (topMustFix !== "") section += `### Top-N must-fix\n${topMustFix}`;
   parts.push(section);
 
@@ -197,28 +197,15 @@ export function buildMechanicalSection(
 }
 
 /**
- * The Top-N must-fix section body — the model's EXPLICIT `top_must_fix` only, deduped
- * and capped at 3. Insertion order is kept: the model lists these worst-first, so
- * priority must survive the dedupe. Returns "" when the model gave no explicit list —
- * the caller then omits the heading. It is NEVER auto-generated from findings: that
- * produced a verbatim duplicate of the (now severity-sorted) Findings list.
+ * The Top-N must-fix section body — derived from the surviving findings, sorted by
+ * severity and capped at three. This summary cannot resurrect an unvalidated claim.
  */
-function buildTopMustFixSection(topMustFix: string[]): string {
-  const capped = dedupeCap(topMustFix, TOP_MUST_FIX_MAX);
-  return capped.length > 0 ? capped.join("\n") : "";
-}
-
-/** Dedupe a string list keeping first occurrence (insertion order), then cap to `max`. */
-function dedupeCap(items: string[], max: number): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const item of items) {
-    if (seen.has(item)) continue;
-    seen.add(item);
-    out.push(item);
-    if (out.length === max) break;
-  }
-  return out;
+function buildTopMustFixSection(findings: Finding[]): string {
+  return [...findings]
+    .sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity])
+    .slice(0, TOP_MUST_FIX_MAX)
+    .map((finding) => `- \`${finding.path}:${finding.line}\` — ${finding.text}`)
+    .join("\n");
 }
 
 /**

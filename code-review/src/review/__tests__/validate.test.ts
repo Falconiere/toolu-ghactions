@@ -1,6 +1,34 @@
 import { describe, it, expect, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { z } from "zod";
 import { validateFindings } from "@/review/validate.js";
 import type { Finding } from "@/llm/schema.js";
+
+const TEST_DIR = dirname(fileURLToPath(import.meta.url));
+const PR175_EVIDENCE = z
+  .object({
+    source: z.object({ path: z.string(), lines: z.record(z.string()) }),
+    comments: z.array(
+      z.object({
+        id: z.number(),
+        path: z.string(),
+        line: z.number(),
+        severity: z.enum(["blocker", "high", "medium", "low", "nit"]),
+        confidence: z.enum(["high", "medium"]),
+        text: z.string(),
+        suggestion: z.string().optional(),
+      }),
+    ),
+  })
+  .parse(JSON.parse(readFileSync(join(TEST_DIR, "fixtures", "pr175-evidence.json"), "utf8")));
+
+function recordedFinding(id: number): Finding {
+  const comment = PR175_EVIDENCE.comments.find((entry) => entry.id === id);
+  if (comment === undefined) throw new Error(`missing recorded PR 175 comment ${id}`);
+  return { ...comment, source: "llm" };
+}
 
 // Real diff coordinates: src/a.ts changed lines 10..14, src/b.ts changed lines 5,6.
 const changed = new Map<string, number[]>([
@@ -19,13 +47,13 @@ describe("validateFindings", () => {
     expect(kept[0]?.text).toBe("real line");
   });
 
-  it("keeps blocker/high findings regardless of confidence", () => {
+  it("applies the confidence floor to blocker/high findings too", () => {
     const findings: Finding[] = [
       { path: "src/a.ts", line: 10, severity: "blocker", text: "blocker no conf" },
       { path: "src/a.ts", line: 11, severity: "high", text: "high low conf", confidence: "medium" },
     ];
     const { findings: kept } = validateFindings(findings, changed, "high");
-    expect(kept.map((f) => f.text)).toEqual(["blocker no conf", "high low conf"]);
+    expect(kept).toEqual([]);
   });
 
   it("drops a medium-confidence low-severity finding under minConfidence=high", () => {
@@ -143,6 +171,9 @@ describe("validateFindings", () => {
       },
     ];
     expect(validateFindings(findings, changed, "high").findings).toHaveLength(1);
+    expect(
+      validateFindings(findings, changed, "high", undefined, { requireQuote: true }).findings,
+    ).toHaveLength(0);
   });
 
   it("drops an LLM finding that quotes non-empty text on a blank cited line", () => {
@@ -234,5 +265,56 @@ describe("validateFindings", () => {
     validateFindings([junkFinding("No issue."), junkFinding("No violation.")], changed, "high");
     expect(write).toHaveBeenCalledWith("  Dropped 2 self-negating finding(s)\n");
     write.mockRestore();
+  });
+
+  it("requires a source quote for fresh LLM findings while preserving legacy omissions", () => {
+    const finding = recordedFinding(4058954931);
+    const path = PR175_EVIDENCE.source.path;
+    const lineText = new Map<string, Map<number, string>>([
+      [path, new Map([[finding.line, PR175_EVIDENCE.source.lines[String(finding.line)] ?? ""]])],
+    ]);
+    const changed = new Map<string, number[]>([[path, [finding.line]]]);
+
+    expect(validateFindings([finding], changed, "high", lineText).findings).toHaveLength(1);
+    const strict = validateFindings([finding], changed, "high", lineText, {
+      requireQuote: true,
+    });
+    expect(strict.findings).toHaveLength(0);
+    expect(strict.unsupportedEvidence).toBe(1);
+    expect(strict.unsupportedPaths).toEqual([path]);
+  });
+
+  it("strips the recorded prose suggestion without discarding its anchored finding", () => {
+    const sourceLine = PR175_EVIDENCE.source.lines["142"];
+    if (sourceLine === undefined) throw new Error("missing recorded PR 175 source line 142");
+    const finding = { ...recordedFinding(4058954931), line: 142 };
+    const path = PR175_EVIDENCE.source.path;
+    const lineText = new Map<string, Map<number, string>>([[path, new Map([[142, sourceLine]])]]);
+
+    const { findings } = validateFindings([finding], new Map([[path, [142]]]), "high", lineText);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.suggestion).toBeUndefined();
+  });
+
+  it("strips an exact no-op suggestion over the complete source span", () => {
+    const sourceLine = PR175_EVIDENCE.source.lines["142"];
+    if (sourceLine === undefined) throw new Error("missing recorded PR 175 source line 142");
+    const path = PR175_EVIDENCE.source.path;
+    const finding: Finding = {
+      path,
+      line: 142,
+      severity: "high",
+      confidence: "high",
+      text: "Recorded source span must change before a suggestion can be offered.",
+      suggestion: sourceLine,
+    };
+    const { findings } = validateFindings(
+      [finding],
+      new Map([[path, [142]]]),
+      "high",
+      new Map([[path, new Map([[142, sourceLine]])]]),
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.suggestion).toBeUndefined();
   });
 });

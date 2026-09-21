@@ -107,11 +107,14 @@ describe("buildPrompt — security", () => {
 });
 
 describe("buildPrompt — noise control signal bar (AC-3)", () => {
-  it("carries the defects-only, never-no-issue, and no-line-walking directives in the built system prompt", () => {
+  it("carries the defects-only, never-no-issue, no-line-walking, and mandatory-source-quote directives", () => {
     const env = buildPrompt({ diff: sampleDiff(), checklistPath: CHECKLIST_PATH });
     expect(env.system).toContain("Findings are DEFECTS ONLY");
     expect(env.system).toContain("NEVER emit a finding whose conclusion is that there");
     expect(env.system).toContain("Never walk a file line-by-line");
+    expect(env.system).toContain("non-empty `quoted_line`");
+    expect(env.system).toContain("leading diff `+` marker");
+    expect(env.system).toContain("contained in the cited post-change source line");
   });
 });
 

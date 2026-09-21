@@ -44,6 +44,7 @@ import {
 } from "./recover.js";
 import { budgetExhausted, isProviderCap, nextBudget } from "./budget.js";
 import { streamVerdict } from "./streamVerdict.js";
+import { wallDeadlineResult, wallTimeLeft } from "./wallDeadline.js";
 import type { Envelope } from "@/prompt.js";
 
 /**
@@ -53,7 +54,8 @@ import type { Envelope } from "@/prompt.js";
  * used to burn the whole budget and abstain with zero recovery, even though the
  * same request usually succeeds. So each ATTEMPT gets this budget; a hung attempt
  * is aborted and RETRIED up to {@link MAX_ATTEMPTS} with a fresh attempt, for a
- * total ceiling of ≈ MAX_ATTEMPTS × this. A final-attempt abort salvages whatever
+ * total ceiling of ≈ MAX_ATTEMPTS × this, bounded by the shared wall deadline.
+ * A final-attempt abort salvages whatever
  * prefix arrived, or abstains as a timeout when none ever did.
  * Input-overridable via {@link ReviewOptions.timeoutMs} (REQUEST_TIMEOUT_MS input).
  *
@@ -86,6 +88,8 @@ export interface ReviewOptions {
   maxRetries?: number;
   /** Per-attempt deadline in ms before THAT attempt is aborted (default {@link REQUEST_TIMEOUT_MS}). */
   timeoutMs?: number;
+  /** Epoch-ms deadline shared by every model call, retry and token escalation. */
+  wallDeadline?: number | undefined;
   /** Outer attempts against a hang/timeout (default {@link MAX_ATTEMPTS}); each gets its own timeoutMs. */
   maxAttempts?: number;
   /**
@@ -169,7 +173,7 @@ export async function reviewWithModel(
   const maxAttempts = opts.maxAttempts ?? MAX_ATTEMPTS;
 
   // TWO INDEPENDENT COUNTERS, because the failures they answer are unrelated:
-  //   `attempt`     — hang retries (≤ maxAttempts), each with its OWN deadline and a fresh
+  //   `attempt`     — hang retries (≤ maxAttempts), each capped by the shared deadline and a fresh
   //                   AbortController; the SDK never retries an abort, so we do. .unref()
   //                   keeps a pending timer from holding the process open; cleared in
   //                   finally on the normal (fast) path.
@@ -186,12 +190,19 @@ export async function reviewWithModel(
   let best: Prefix | undefined;
 
   while (attempt <= maxAttempts) {
+    const remainingMs = wallTimeLeft(opts.wallDeadline);
+    if (remainingMs === 0) return wallDeadlineResult(best);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), perAttemptMs);
+    const wallLimited = remainingMs <= perAttemptMs;
+    const timeout = setTimeout(() => controller.abort(), Math.min(perAttemptMs, remainingMs));
     timeout.unref?.();
     const lastAttempt = attempt >= maxAttempts;
 
     try {
+      process.stdout.write(
+        `  ${opts.rawJson === true ? "PR map" : "Review"} attempt ${attempt}/${maxAttempts}, ` +
+          `output budget ${budget}, deadline ${Math.min(perAttemptMs, remainingMs)}ms\n`,
+      );
       const call = {
         model,
         system: envelope.system,
@@ -220,6 +231,9 @@ export async function reviewWithModel(
       if (streamed.outcome === "complete")
         return { ...streamed.object, finishReason: streamed.finishReason };
       best = bestPrefix(best, streamed);
+      if (wallTimeLeft(opts.wallDeadline) === 0 || (wallLimited && controller.signal.aborted)) {
+        return wallDeadlineResult(best);
+      }
       if (streamed.outcome === "truncated") {
         // Headroom left → one more call at a doubled budget, preferring a COMPLETE review
         // over a prefix; not an abort, so no backoff and no hang attempt spent. None left
@@ -235,12 +249,15 @@ export async function reviewWithModel(
       // OUR deadline cut a stream that had produced findings. Retry FIRST (a transient
       // stall usually clears), keeping the prefix as the fallback the last attempt takes.
       if (!lastAttempt) {
-        await hangBackoff(attempt);
+        await hangBackoff(attempt, opts.wallDeadline);
         attempt++;
         continue;
       }
       return salvageResult(best, { reason: "deadline" });
     } catch (err) {
+      if (wallTimeLeft(opts.wallDeadline) === 0 || (wallLimited && controller.signal.aborted)) {
+        return wallDeadlineResult(best);
+      }
       // FIRST, before any other classification: the provider REFUSING this budget (400
       // naming max_tokens). A bigger budget would fail identically, so a retained prefix
       // resolves right here, marked budget-exhausted. With NO prefix we deliberately fall
@@ -254,7 +271,7 @@ export async function reviewWithModel(
       // timeout only when no attempt ever completed a finding.
       if (controller.signal.aborted) {
         if (!lastAttempt) {
-          await hangBackoff(attempt);
+          await hangBackoff(attempt, opts.wallDeadline);
           attempt++;
           continue;
         }
@@ -308,8 +325,8 @@ export async function reviewWithModel(
  * pipeline never finalizes the comment, and the job goes GREEN with the in-progress
  * comment frozen.
  */
-function hangBackoff(attempt: number): Promise<void> {
+function hangBackoff(attempt: number, wallDeadline: number | undefined): Promise<void> {
   return new Promise<void>((resolve) => {
-    setTimeout(resolve, 300 * attempt);
+    setTimeout(resolve, Math.min(300 * attempt, wallTimeLeft(wallDeadline)));
   });
 }

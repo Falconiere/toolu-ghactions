@@ -145,7 +145,7 @@ async function reviewWhole(opts: ChunkedReviewOptions): Promise<ProviderResult> 
     return mergeResults([]);
   }
   const result = await opts.review(opts.buildEnvelope(opts.diff, opts.mechanical, opts.brief));
-  const status = result.verdict === "error" ? "unreviewed" : "reviewed";
+  const status = result.verdict === "error" || result.partial === true ? "unreviewed" : "reviewed";
   for (const path of paths) opts.onCoverage(path, { status });
   return result;
 }

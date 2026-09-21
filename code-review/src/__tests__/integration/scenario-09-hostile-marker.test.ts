@@ -86,6 +86,7 @@ describe("scenario 9 — a hostile state marker (AC-15.9)", () => {
             confidence: "high",
             category: "reliability",
             text: LIVE_TEXT,
+            quoted_line: "export const a = 1;",
           },
         ]),
     });

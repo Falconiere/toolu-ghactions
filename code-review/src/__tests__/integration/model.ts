@@ -43,6 +43,7 @@ export interface ScriptedFinding {
   category?: string;
   confidence?: "high" | "medium";
   text: string;
+  quoted_line?: string;
   suggestion?: string;
 }
 

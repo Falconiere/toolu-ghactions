@@ -40,15 +40,16 @@ function repeatRepo(): Scratch {
 
 /** The repeated finding on every path except those in `skip`. */
 function repeated(skip: string[] = [], blockerOn?: string): ScriptedFinding[] {
-  return Array.from({ length: MEMBERS }, (_, i) => path(i))
-    .filter((p) => !skip.includes(p))
-    .map((p) => ({
-      path: p,
+  return Array.from({ length: MEMBERS }, (_, i) => i)
+    .filter((i) => !skip.includes(path(i)))
+    .map((i) => ({
+      path: path(i),
       line: 1,
-      severity: p === blockerOn ? ("blocker" as const) : ("medium" as const),
+      severity: path(i) === blockerOn ? ("blocker" as const) : ("medium" as const),
       confidence: "high" as const,
       category: CATEGORY,
       text: TEXT,
+      quoted_line: `export const r${i} = ${i};`,
     }));
 }
 

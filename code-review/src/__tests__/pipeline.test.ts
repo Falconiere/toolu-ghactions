@@ -21,7 +21,7 @@ import {
 } from "@/state.js";
 import { appendFpMarker } from "@/review/fpmarker.js";
 import { git, setupGitRepo, writeFile, removeRepo } from "@/git/__tests__/helpers.js";
-import { replayCompletion } from "./integration/sse.js";
+import { replayWithSourceQuotes } from "./integration/evidenceReplay.js";
 
 const FIXTURES = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -33,10 +33,11 @@ const FIXTURES = join(
 
 /** A fetch that replays one recorded OpenRouter chat-completions response — no network.
  *  Review calls stream, so the recorded body is re-served as SSE chunk frames; its
- *  content is untouched (see integration/sse.ts). */
+ *  findings/text are untouched; the explicit evidenceReplay adapter adds source quotes
+ *  from the real outgoing diff for the current protocol. */
 function replayFetch(name: string): typeof fetch {
   const body: unknown = JSON.parse(readFileSync(join(FIXTURES, `${name}.json`), "utf8"));
-  return async (_url, init) => replayCompletion(body, init);
+  return async (_url, init) => replayWithSourceQuotes(body, init);
 }
 
 /** The captured outgoing request body the prompt-routing assertions read. */
@@ -52,7 +53,7 @@ function capturingReplayFetch(
   const body: unknown = JSON.parse(readFileSync(join(FIXTURES, `${name}.json`), "utf8"));
   return async (_url, init) => {
     captured.body = JSON.parse(typeof init?.body === "string" ? init.body : "{}");
-    return replayCompletion(body, init);
+    return replayWithSourceQuotes(body, init);
   };
 }
 
@@ -608,7 +609,7 @@ function routingFetch(routes: Array<[match: string, fixture: string]>): typeof f
     const hit = routes.find(([m]) => raw.includes(m));
     const fixture = hit ? hit[1] : "approved";
     const body: unknown = JSON.parse(readFileSync(join(FIXTURES, `${fixture}.json`), "utf8"));
-    return replayCompletion(body, init);
+    return replayWithSourceQuotes(body, init);
   };
 }
 
@@ -1372,7 +1373,7 @@ function recordingRoutingFetch(
     const fixtureBody: unknown = JSON.parse(
       readFileSync(join(FIXTURES, `${fixture}.json`), "utf8"),
     );
-    return replayCompletion(fixtureBody, init);
+    return replayWithSourceQuotes(fixtureBody, init);
   };
 }
 

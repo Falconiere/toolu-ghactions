@@ -219,7 +219,21 @@ export async function reviewAndValidate(input: ReviewCallInput): Promise<ReviewC
   // Findings are validated against the SHRUNK diff: a finding on a path the model
   // never saw (a collapsed pattern member, a dropped stratum) is a hallucination
   // by construction — pattern findings are reported once, on the exemplar.
-  const { stamped, selfNegating } = validate(result, distillation.review_diff, inputs);
+  const { stamped, selfNegating, unsupportedPaths } = validate(
+    result,
+    distillation.review_diff,
+    inputs,
+  );
+  for (const path of unsupportedPaths) {
+    coverage.set(path, { status: "unreviewed", reason: "unsupported-source-evidence" });
+  }
+  if (unsupportedPaths.length > 0) {
+    const evidenceError =
+      "Review findings lacked valid source evidence; affected files remain unreviewed.";
+    result.error = [result.error, evidenceError].filter(Boolean).join(" ");
+    result.partial = true;
+    if (stamped.length === 0) result.verdict = "error";
+  }
   return {
     result,
     stamped,
@@ -255,6 +269,7 @@ function modelOptions(input: ReviewCallInput): ReviewOptions {
     model: input.inputs.model,
     apiKey: input.inputs.apiKey,
     timeoutMs: input.inputs.requestTimeoutMs,
+    wallDeadline: input.wallDeadline,
     ...(input.fetch ? { fetch: input.fetch } : {}),
   };
 }
@@ -274,7 +289,7 @@ function validate(
   result: ProviderResult,
   diff: DiffData,
   inputs: ActionInputs,
-): { stamped: StampedFinding[]; selfNegating: number } {
+): { stamped: StampedFinding[]; selfNegating: number; unsupportedPaths: string[] } {
   const changedLinesByPath = new Map<string, number[]>(
     diff.files.map((f) => [f.path, f.changed_lines]),
   );
@@ -289,9 +304,11 @@ function validate(
     changedLinesByPath,
     inputs.minConfidence,
     lineTextByPath,
+    { requireQuote: true },
   );
   return {
     stamped: anchored.findings.map((f) => ({ ...f, fp: fingerprint(f) })),
     selfNegating: anchored.selfNegating,
+    unsupportedPaths: anchored.unsupportedPaths,
   };
 }

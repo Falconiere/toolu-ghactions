@@ -3,8 +3,25 @@
 // these pin the two edges reviews of this very PR surfaced: a finding concluding
 // "no defect" (the pattern the original list missed — caught by the bot's own
 // self-negating finding on this file), and the degenerate wrapper case.
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { z } from "zod";
 import { describe, expect, it } from "vitest";
 import { isSelfNegating } from "@/review/selfNegating.js";
+
+const TEST_DIR = dirname(fileURLToPath(import.meta.url));
+const PR175_EVIDENCE = z
+  .object({
+    comments: z.array(z.object({ id: z.number(), text: z.string() })),
+  })
+  .parse(JSON.parse(readFileSync(join(TEST_DIR, "fixtures", "pr175-evidence.json"), "utf8")));
+
+function commentText(id: number): string {
+  const comment = PR175_EVIDENCE.comments.find((entry) => entry.id === id);
+  if (comment === undefined) throw new Error(`missing recorded PR 175 comment ${id}`);
+  return comment.text;
+}
 
 describe("isSelfNegating — verbatim reviewer texts", () => {
   it("drops the bot's own self-negating finding on this module (ends 'no defect')", () => {
@@ -28,5 +45,11 @@ describe("isSelfNegating — verbatim reviewer texts", () => {
     expect(isSelfNegating("**No issue.**")).toBe(true);
     expect(isSelfNegating("**X**")).toBe(false);
     expect(isSelfNegating("****")).toBe(false);
+  });
+
+  it("drops a recorded reviewer retraction even when it pivots to another claim", () => {
+    // GitHub PR #175 comment 4058954936: the reviewer explicitly retracts the
+    // inline claim, then tries to redirect this finding to a different location.
+    expect(isSelfNegating(commentText(4058954936))).toBe(true);
   });
 });

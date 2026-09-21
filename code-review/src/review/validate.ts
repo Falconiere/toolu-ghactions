@@ -11,12 +11,13 @@
 //      Purely structural gates never catch this: the finding is anchored and can
 //      carry high confidence, it just says nothing is wrong. Runs BEFORE the
 //      confidence gate so a high-confidence "No issue." cannot survive it.
-//   3. Confidence gate — keep blocker/high severity regardless; otherwise the
-//      finding's confidence must meet MIN_CONFIDENCE (high floor keeps high
-//      only; medium floor keeps high or medium). Missing confidence is "low".
-//   4. Suggestion strip — keep `suggestion` only when confidence is high AND the
-//      whole [line..end_line] span is inside the diff; else strip it (the
-//      finding survives, only the unsafe-to-apply patch is removed).
+//   3. Confidence gate — every severity must meet MIN_CONFIDENCE (high floor
+//      keeps high only; medium floor keeps high or medium). Missing confidence
+//      is "low".
+//   4. Suggestion strip — keep `suggestion` only when confidence is high, the
+//      whole [line..end_line] span is inside the diff, it changes that full span,
+//      and it is not a recorded imperative-prose payload. A bad patch never drops
+//      its finding.
 // Then dedup by (path|line|end_line|normalized-text) fingerprint, keeping the
 // max severity within each group.
 import type { Finding } from "@/llm/schema.js";
@@ -35,6 +36,16 @@ export type MinConfidence = "high" | "medium";
 export interface ValidateFindingsResult {
   findings: Finding[];
   selfNegating: number;
+  /** LLM findings rejected because their required source evidence was absent or invalid. */
+  unsupportedEvidence: number;
+  /** Changed paths with unsupported LLM evidence, unique in first-rejection order. */
+  unsupportedPaths: string[];
+}
+
+/** Options for {@link validateFindings}. Legacy callers keep optional quotes;
+ * fresh live model responses set `requireQuote` and must provide one. */
+export interface ValidateFindingsOptions {
+  requireQuote?: boolean;
 }
 
 /**
@@ -45,6 +56,9 @@ export interface ValidateFindingsResult {
  *   the diff for that path (from ShapedFile.changed_lines). A path with no entry
  *   has no anchorable lines, so all its findings are unanchored and dropped.
  * @param minConfidence - the MIN_CONFIDENCE floor (high|medium).
+ * @param lineTextByPath - post-change source lines, used for quote and suggestion checks.
+ * @param options - fresh live calls require a non-empty source-matching quote;
+ * legacy recorded responses may omit one.
  * @returns the kept findings (deduped, in input order — dedup keeps the first
  *   occurrence of each fingerprint, upgraded to the group's max severity) and the
  *   self-negating drop count.
@@ -54,6 +68,7 @@ export function validateFindings(
   changedLinesByPath: Map<string, number[]>,
   minConfidence: MinConfidence,
   lineTextByPath?: Map<string, Map<number, string>>,
+  options: ValidateFindingsOptions = {},
 ): ValidateFindingsResult {
   // Build each path's changed-line Set once, not once per finding: the Set depends
   // only on f.path, and N findings can span far fewer files than N.
@@ -65,11 +80,22 @@ export function validateFindings(
 
   const kept: Finding[] = [];
   let selfNegating = 0;
+  let unsupportedEvidence = 0;
+  const unsupportedPaths = new Set<string>();
   for (const f of findings) {
     const changedSet = changedSetByPath.get(f.path) ?? EMPTY_CHANGED;
 
     // 1. Anchored: the cited line must be a real changed line in the diff.
     if (!changedSet.has(f.line)) continue;
+
+    // 2. Self-negation: the finding's own text concludes there is no defect
+    // ("No issue.", "This is acceptable. No violation."). Runs before source
+    // evidence validation so an explicit retraction is recorded as self-negating
+    // noise, not as an unsupported-evidence failure.
+    if (isSelfNegating(f.text)) {
+      selfNegating++;
+      continue;
+    }
 
     // 1b. Quote-anchored (LLM findings only): if the finding quotes a line, it
     // must match the real new-file text at the cited line. The motivating case is
@@ -81,25 +107,15 @@ export function validateFindings(
     // supplied a quote AND we have the line's text; mechanical scanners (which
     // anchor exactly) are exempt.
     const isLlm = f.source === undefined || f.source === "llm";
-    if (isLlm && f.quoted_line !== undefined && lineTextByPath !== undefined) {
-      const actual = lineTextByPath.get(f.path)?.get(f.line);
-      if (actual !== undefined && !quotesMatch(actual, f.quoted_line)) continue;
-    }
-
-    // 2. Self-negation: the finding's own text concludes there is no defect
-    // ("No issue.", "This is acceptable. No violation."). Runs before the
-    // confidence gate — a "No issue." emitted at high confidence must not survive
-    // it just because the model was confident there was nothing to say.
-    if (isSelfNegating(f.text)) {
-      selfNegating++;
+    if (isLlm && !quoteIsValid(f, lineTextByPath, options.requireQuote === true)) {
+      unsupportedEvidence++;
+      unsupportedPaths.add(f.path);
       continue;
     }
 
     // 3. Confidence gate. Missing confidence is treated as below medium ("low").
     const c = f.confidence ?? "low";
     const keep =
-      f.severity === "blocker" ||
-      f.severity === "high" ||
       (minConfidence === "high" && c === "high") ||
       (minConfidence === "medium" && (c === "high" || c === "medium"));
     if (!keep) continue;
@@ -107,7 +123,7 @@ export function validateFindings(
     // 4. Suggestion strip: keep it only when high-confidence AND the whole span
     // is in the diff; otherwise drop just the suggestion, keep the finding.
     const spanInDiff = spanIsInDiff(f, changedSet);
-    if (f.suggestion !== undefined && !(f.confidence === "high" && spanInDiff)) {
+    if (f.suggestion !== undefined && !suggestionIsSafe(f, lineTextByPath, spanInDiff)) {
       const { suggestion: _dropped, ...rest } = f;
       kept.push(rest);
     } else {
@@ -118,23 +134,35 @@ export function validateFindings(
   if (selfNegating > 0) {
     process.stdout.write(`  Dropped ${selfNegating} self-negating finding(s)\n`);
   }
-  return { findings: dedup(kept), selfNegating };
+  return {
+    findings: dedup(kept),
+    selfNegating,
+    unsupportedEvidence,
+    unsupportedPaths: [...unsupportedPaths],
+  };
 }
 
 /**
- * Tolerant comparison between a finding's `quoted_line` and the real new-file
- * line at the cited number. Whitespace-normalized; either string may be a
- * substring of the other (the model often quotes only the salient part of a
- * long line, or joins a short span). Returns false only when the two share no
- * containment — i.e. the quote does not come from the cited line at all.
+ * Validate an LLM finding's source quote. A supplied quote is always non-empty
+ * and must be contained in its cited source line; only legacy callers may omit it.
  */
-function quotesMatch(actual: string, quoted: string): boolean {
+function quoteIsValid(
+  finding: Finding,
+  lineTextByPath: Map<string, Map<number, string>> | undefined,
+  requireQuote: boolean,
+): boolean {
+  if (finding.quoted_line === undefined) return !requireQuote;
+  if (lineTextByPath === undefined) return !requireQuote;
+  const actual = lineTextByPath.get(finding.path)?.get(finding.line);
+  return actual !== undefined && quoteMatches(actual, finding.quoted_line);
+}
+
+/** Whitespace-normalized one-way containment: the quote comes FROM source. */
+function quoteMatches(actual: string, quoted: string): boolean {
   const norm = (s: string): string => s.replace(/\s+/g, " ").trim();
   const a = norm(actual);
   const q = norm(quoted);
-  if (q === "") return true; // model quoted nothing — cannot disprove, keep.
-  if (a === "") return false; // cited line is blank but a quote was given — mismatch.
-  return a.includes(q) || q.includes(a);
+  return q !== "" && a.includes(q);
 }
 
 /**
@@ -147,6 +175,48 @@ function spanIsInDiff(f: Finding, changedSet: Set<number>): boolean {
     if (!changedSet.has(l)) return false;
   }
   return true;
+}
+
+/** Whether a suggested replacement is safe to render as a committable patch. */
+function suggestionIsSafe(
+  finding: Finding,
+  lineTextByPath: Map<string, Map<number, string>> | undefined,
+  spanInDiff: boolean,
+): boolean {
+  if (finding.confidence !== "high" || !spanInDiff || finding.suggestion === undefined) {
+    return false;
+  }
+  const source = sourceSpan(finding, lineTextByPath);
+  if (source === undefined) return lineTextByPath === undefined;
+  if (finding.suggestion === source) return false;
+  return !isProseInstruction(finding.suggestion);
+}
+
+/** Read the exact post-change source text the suggestion would replace. */
+function sourceSpan(
+  finding: Finding,
+  lineTextByPath: Map<string, Map<number, string>> | undefined,
+): string | undefined {
+  const lines = lineTextByPath?.get(finding.path);
+  if (lines === undefined) return undefined;
+  const source: string[] = [];
+  for (let line = finding.line; line <= (finding.end_line ?? finding.line); line++) {
+    const text = lines.get(line);
+    if (text === undefined) return undefined;
+    source.push(text);
+  }
+  return source.join("\n");
+}
+
+/**
+ * Reject only the imperative prose shape observed in recorded GitHub comments.
+ * This deliberately does not try to parse a language-specific replacement: the
+ * action reviews many languages and a JavaScript parser would reject valid Rust,
+ * TypeScript, JSX, or partial-line replacements. The exact-span no-op check above
+ * remains the deterministic safety boundary for every language.
+ */
+function isProseInstruction(suggestion: string): boolean {
+  return /^(?:Add|Call|Change|Ensure|Remove|Update|Use|Wire)\s/.test(suggestion.trim());
 }
 
 /**

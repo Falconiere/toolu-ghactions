@@ -74,6 +74,7 @@ describe("scenario 4 — an incremental push (AC-15.4)", () => {
                 confidence: "high",
                 category: "correctness",
                 text: BUG_TEXT,
+                quoted_line: "return a - b;",
               },
             ])
           : { ok: APPROVED },

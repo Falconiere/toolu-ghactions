@@ -81,9 +81,10 @@ The available review dimensions are:
   finding that treats removed (`L---:`) content as if it still exists, and never
   suggest removing a line that the diff already removes. Review the post-change
   state only.
-- For every finding, set `quoted_line` to the verbatim text of the cited `Lnnn:`
-  line (without the `Lnnn:` prefix). A finding whose `quoted_line` does not match
-  the cited line is discarded.
+- Every LLM finding MUST include a non-empty `quoted_line`: text copied from the
+  cited `Lnnn:` line, without the `Lnnn:` prefix or leading diff `+` marker. The
+  quote must be contained in the cited post-change source line; a missing, blank,
+  or mismatched quote is discarded.
 - `suggestion` is OPTIONAL and is replacement CODE only — the exact source text
   to substitute for the cited line(s). GitHub renders it as a committable
   "Suggested change", so it must be literal, directly-applicable code. Never put

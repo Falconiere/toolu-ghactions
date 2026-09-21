@@ -85,6 +85,7 @@ describe("scenario 6 — the wall clock, then @toolu resume (AC-15.6)", () => {
             confidence: "high",
             category: "error-handling",
             text: FINDING_TEXT,
+            quoted_line: "export const a = 1;",
           },
         ]),
     });

@@ -1,0 +1,32 @@
+{
+  "repository": "CodaSignal/comemory.io",
+  "pull": 175,
+  "commit": "52c493c269225e8df9dcf9a1ca3734371a45c47b",
+  "source": {
+    "path": "apps/console/src/features/projects/screens/charter-essentials-fields.tsx",
+    "lines": {
+      "106": "            onChange={(event) => {",
+      "141": "              onChange={(event) => {",
+      "142": "                onKeyPrefixEdited();"
+    }
+  },
+  "comments": [
+    {
+      "id": 4058954931,
+      "path": "apps/console/src/features/projects/screens/charter-essentials-fields.tsx",
+      "line": 106,
+      "severity": "high",
+      "confidence": "high",
+      "text": "The onChange handler at L106-111 derives the key prefix from the name whenever keyPrefixAuto is true, but nothing in the diff ever sets keyPrefixAuto to false when the operator edits the prefix field. The test at L69-74 expects that after typing 'eng' into the prefix, a subsequent name change does NOT overwrite it — but the code as written WILL overwrite it, because keyPrefixAuto is still true. The CharterEssentialsFieldsProps includes onKeyPrefixEdited but the diff never shows it being called from the prefix field's onChange. This is a real bug: the operator's explicit prefix choice is silently discarded on the next name edit. The fix is to call onKeyPrefixEdited() from the prefix field's onChange (which flips keyPrefixAuto false), and the test at L73-74 is asserting exactly this behavior — but the implementation doesn't do it.",
+      "suggestion": "Call onKeyPrefixEdited() in the prefix field's onChange handler so that editing the prefix flips keyPrefixAuto false, and the name field stops deriving. The current code derives on every name change while keyPrefixAuto is true, but never turns it off on manual prefix edit."
+    },
+    {
+      "id": 4058954936,
+      "path": "apps/console/src/features/projects/screens/charter-essentials-fields.tsx",
+      "line": 76,
+      "severity": "medium",
+      "confidence": "high",
+      "text": "The lead field's 'Change' button only renders when lead.sessionLabel is defined, but the test at L92-104 expects that after clicking 'Change', the lead field becomes a text input with the lead's id. The CharterLeadField component at L45-63 returns early when lead.sessionLabel is defined and !lead.overriding, showing the session label and a 'Change' button. But the test at L96 clicks 'Change' and then expects a text input labeled 'lead (workspace member id)' to appear — which means the lead.overriding flag must flip to true on click. The diff shows the button's onClick is lead.onOverride. Wait — re-reading: the early return at L46 is `if (lead.sessionLabel !== undefined && !lead.overriding)`, so when overriding is true, it skips the early return and renders the text input. That's correct. I was wrong — the component is correct. The actual bug is in the key prefix derivation, which I already flagged. Let me re-examine: the test at L69-74 expects that after typing 'eng' into the prefix, a name change does NOT overwrite it. But the code at L106-111 derives the prefix on every name change while keyPrefixAuto is true, and nothing sets keyPrefixAuto false on prefix edit. The test at L73-74 would fail because the name change at L73 re-derives the prefix to 'SDL', overwriting the operator's 'eng'. This is the real bug. The fix is to call onKeyPrefixEdited() from the prefix field's onChange, which flips keyPrefixAuto false."
+    }
+  ]
+}
