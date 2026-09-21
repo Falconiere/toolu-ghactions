@@ -99,8 +99,6 @@ export async function enhance(input: EnhancementInput): Promise<{
   changesRequested?: boolean;
 }> {
   if (!input.enabled) return { findings: input.findings };
-  if (input.options.provider !== "openrouter")
-    throw new Error("JEV_ENABLED requires PROVIDER=openrouter");
   const started = Date.now();
   const summary: EnhancementSummary = {
     assessed: 0,

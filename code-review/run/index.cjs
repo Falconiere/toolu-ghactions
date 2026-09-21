@@ -40128,8 +40128,6 @@ function validateAdditional(findings, input) {
 }
 async function enhance(input) {
   if (!input.enabled) return { findings: input.findings };
-  if (input.options.provider !== "openrouter")
-    throw new Error("JEV_ENABLED requires PROVIDER=openrouter");
   const started = Date.now();
   const summary2 = {
     assessed: 0,

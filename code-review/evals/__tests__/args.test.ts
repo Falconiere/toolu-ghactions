@@ -123,7 +123,7 @@ describe("usage", () => {
 
 it("paired Jev evaluation rejects native providers", () => {
   expect(() => parseArgs(["--compare-jev", "--provider", "deepseek"])).toThrow(
-    /Unsupported provider/i,
+    /is not supported \(openrouter\)/,
   );
 });
 

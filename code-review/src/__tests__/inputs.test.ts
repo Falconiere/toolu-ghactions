@@ -276,6 +276,6 @@ describe("Jev opt-in", () => {
   it("rejects explicitly enabled native providers", () => {
     setInput("JEV_ENABLED", "true");
     setInput("PROVIDER", "deepseek");
-    expect(() => readInputs()).toThrow(/Unsupported PROVIDER/);
+    expect(() => readInputs()).toThrow(/is not supported \(supported: openrouter\)/);
   });
 });
