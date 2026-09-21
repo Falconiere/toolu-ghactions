@@ -32,10 +32,13 @@ export interface ReviewBody {
   /** Provider error detail shown under the verdict when the review errored ("" → omit). */
   errorDetail: string;
   /**
-   * True ONLY when the resolved verdict is "error" (the LLM abstained — no judgment).
-   * NOT derivable from errorDetail: a recovered truncation / partly-failed chunked
-   * review sets errorDetail while still delivering findings and a real verdict, and
-   * rendering "LLM judgment unavailable" over a findings list is a lie.
+   * True ONLY when the LLM abstained — it delivered no review plan, no other-checks
+   * blurb and no findings. NOT derivable from errorDetail: a recovered truncation /
+   * partly-failed chunked review sets errorDetail while still delivering findings and a
+   * real verdict. NOT derivable from the resolved verdict alone either: the
+   * source-evidence gate and the coverage degrade force verdict "error" on a review the
+   * provider answered in full. Rendering "LLM judgment unavailable" above the model's
+   * own review plan, or over a findings list, is a lie either way.
    */
   llmErrored: boolean;
   /** The header line ("**AI Code Review finished …** —— [View job](url)"). */

@@ -43147,9 +43147,14 @@ function formatVerdict(result, opts) {
     // Surface the real error + the model's finish_reason when present, so a parse
     // failure ("could not parse") is distinguishable from output truncation ("length").
     errorDetail: result.error !== void 0 && result.error !== "" ? result.error + (result.finishReason ? ` [finish_reason: ${result.finishReason}]` : "") : "",
-    // "LLM judgment unavailable" keys off the RESOLVED verdict, not errorDetail: a
-    // recovered truncation sets `error` while still delivering findings + a verdict.
-    llmErrored: verdict === "error",
+    // "LLM judgment unavailable" means the model produced NOTHING. It keys off the
+    // resolved verdict AND the absence of model-authored content — never errorDetail:
+    // a recovered truncation sets `error` while still delivering findings + a verdict.
+    // The verdict alone is not enough either: the source-evidence gate
+    // (pipeline/reviewCall.ts) and the coverage degrade (pipeline/settle.ts) both force
+    // "error" on a review the provider answered in full, whose review plan and
+    // other-checks blurb this very body goes on to render.
+    llmErrored: verdict === "error" && !deliveredJudgment(result, findings),
     header,
     branch: opts.branch ?? "unknown",
     jobUrl: opts.jobUrl ?? "https://github.com",
@@ -43173,6 +43178,9 @@ function formatVerdict(result, opts) {
   };
   const rendered = fitToSizeLimit(body, marker17, opts.ledgerSummary ?? "");
   return { body: rendered, label };
+}
+function deliveredJudgment(result, findings) {
+  return (result.review_plan ?? "") !== "" || (result.other_checks ?? "") !== "" || findings.length > 0;
 }
 function fitToSizeLimit(body, marker17, ledgerSummary) {
   let current = body;
