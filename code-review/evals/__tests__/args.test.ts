@@ -70,9 +70,28 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["--provider", "anthropic"])).toThrow(/--model "anthropic\/<model>"/);
   });
 
-  it("rejects the REMOVED native vendor providers, which now ride OpenRouter model ids", () => {
-    for (const removed of ["deepseek", "minimax", "kimi", "moonshot"]) {
+  it("rejects the REMOVED native vendor providers, naming the vendor's OpenRouter slug", () => {
+    // The suggested --model uses the vendor's OPENROUTER AUTHOR SLUG, not the --provider
+    // spelling: Kimi publishes under "moonshotai", so "kimi/<model>" would be an id
+    // OpenRouter does not serve. The raw spelling is also lowercased, like every id.
+    const suggested: Record<string, string> = {
+      deepseek: "deepseek",
+      minimax: "minimax",
+      kimi: "moonshotai",
+      MoonShot: "moonshotai",
+    };
+    for (const [removed, namespace] of Object.entries(suggested)) {
       expect(() => parseArgs(["--provider", removed])).toThrow(ArgError);
+      expect(() => parseArgs(["--provider", removed])).toThrow(
+        new RegExp(`--model "${namespace}/<model>"`),
+      );
+    }
+  });
+
+  it("treats an EMPTY flag value as missing, naming the starved flag", () => {
+    // `--model ""` used to resolve to an empty model id and only fail at the model call.
+    for (const flag of ["--pr", "--provider", "--model", "--out"]) {
+      expect(() => parseArgs([flag, ""])).toThrow(new RegExp(`${flag} requires a value`));
     }
   });
 

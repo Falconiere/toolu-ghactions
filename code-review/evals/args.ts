@@ -6,6 +6,7 @@ import {
   DEFAULT_MODEL,
   PROVIDER_ID,
   canonicalProviderId,
+  openRouterNamespaceFor,
   type ProviderId,
 } from "@/llm/providers.js";
 
@@ -83,10 +84,12 @@ Example:
 /** Read the next argv slot as a flag's value, or throw a clear ArgError. A
  *  value starting with "--" is treated as the NEXT flag, not this one's value
  *  (so `--pr --provider openrouter` reports `--pr` as missing its value instead
- *  of silently swallowing "--provider" as the PR ref). */
+ *  of silently swallowing "--provider" as the PR ref). An EMPTY value is missing
+ *  too: `--model ""` used to slip through and send an empty model id to
+ *  OpenRouter for a 400 mid-run, instead of failing here with the flag named. */
 function requireValue(argv: readonly string[], index: number, flag: string): string {
   const value = argv[index];
-  if (value === undefined || value.startsWith("--")) {
+  if (value === undefined || value === "" || value.startsWith("--")) {
     throw new ArgError(`${flag} requires a value.`);
   }
   return value;
@@ -148,7 +151,8 @@ export function parseArgs(argv: readonly string[]): EvalArgs {
         if (id === undefined) {
           throw new ArgError(
             `--provider "${raw}" is not supported (${PROVIDER_ID}). ` +
-              `Route a vendor's models through OpenRouter with --model "${raw}/<model>".`,
+              `Route a vendor's models through OpenRouter with ` +
+              `--model "${openRouterNamespaceFor(raw)}/<model>".`,
           );
         }
         provider = id;

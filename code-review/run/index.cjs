@@ -30481,6 +30481,14 @@ var DEFAULT_MODEL = "deepseek/deepseek-v4-pro";
 function canonicalProviderId(raw) {
   return raw.trim().toLowerCase() === PROVIDER_ID ? PROVIDER_ID : void 0;
 }
+var OPENROUTER_NAMESPACE = /* @__PURE__ */ new Map([
+  ["kimi", "moonshotai"],
+  ["moonshot", "moonshotai"]
+]);
+function openRouterNamespaceFor(rawProvider) {
+  const p = rawProvider.trim().toLowerCase();
+  return OPENROUTER_NAMESPACE.get(p) ?? p;
+}
 var OPENROUTER_EXTRA_BODY = {
   // Disable reasoning so the model spends max_tokens on the answer, not hidden thinking.
   // "none" is not in the SDK's typed reasoning-effort union, so it rides in extraBody.
@@ -30614,13 +30622,21 @@ function resolveProviderId(raw) {
   const id = canonicalProviderId(p);
   if (id !== void 0) return id;
   throw new Error(
-    `PROVIDER "${p}" is not supported (supported: ${PROVIDER_ID}). To use "${p}" models, set PROVIDER:"openrouter" and MODEL_ID:"${p}/<model>" to route through OpenRouter.`
+    `PROVIDER "${p}" is not supported (supported: ${PROVIDER_ID}). To use "${p}" models, set PROVIDER:"openrouter" and MODEL_ID:"${openRouterNamespaceFor(p)}/<model>" to route through OpenRouter.`
   );
+}
+function warnBareModelId(model) {
+  if (!model.includes("/")) {
+    warning(
+      `MODEL_ID "${model}" is not namespaced (no "/"); OpenRouter model ids are "<vendor>/<model>" and it will reject this one. If it is a native vendor id left over from the removed deepseek/minimax/kimi backends, prefix it with the vendor's OpenRouter slug \u2014 e.g. "${DEFAULT_MODEL}".`
+    );
+  }
 }
 function readInputs() {
   const provider = resolveProviderId(getInput("PROVIDER"));
   const jevEnabled = readBool("JEV_ENABLED", false);
   const model = getInput("MODEL_ID").trim() || DEFAULT_MODEL;
+  warnBareModelId(model);
   const apiKey = getInput("API_KEY").trim();
   if (apiKey === "") {
     throw new Error(`API_KEY is required (the ${provider} API key).`);

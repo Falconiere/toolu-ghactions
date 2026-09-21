@@ -16,6 +16,7 @@ import {
   DEFAULT_MODEL,
   PROVIDER_ID,
   canonicalProviderId,
+  openRouterNamespaceFor,
 } from "./llm/providers.js";
 import { parseFailOn, type BlockableVerdict } from "./review/gate.js";
 import { splitGlobs } from "./git/globs.js";
@@ -223,16 +224,41 @@ function readMinTriggerPermission(): "write" | "admin" {
  * OpenRouter for a 401 mid-review.
  */
 function resolveProviderId(raw: string): ProviderId {
-  // Normalized exactly once, here: the empty-default check and the error message need the
-  // normalized text, so the lookup gets it already trimmed and lowercased.
+  // Normalized here because the empty-default check and the error message both need the
+  // normalized text; canonicalProviderId normalizes on its own too, so it is safe either
+  // way — this local copy exists for the two reads below, not for the lookup.
   const p = raw.trim().toLowerCase();
   if (p === "") return PROVIDER_ID;
   const id = canonicalProviderId(p);
   if (id !== undefined) return id;
+  // The suggested MODEL_ID uses the vendor's OpenRouter AUTHOR SLUG, which is not always
+  // the PROVIDER spelling: "kimi"/"moonshot" publish under "moonshotai". Suggesting
+  // "kimi/<model>" would hand the reader an id OpenRouter does not serve.
   throw new Error(
     `PROVIDER "${p}" is not supported (supported: ${PROVIDER_ID}). ` +
-      `To use "${p}" models, set PROVIDER:"openrouter" and MODEL_ID:"${p}/<model>" to route through OpenRouter.`,
+      `To use "${p}" models, set PROVIDER:"openrouter" and ` +
+      `MODEL_ID:"${openRouterNamespaceFor(p)}/<model>" to route through OpenRouter.`,
   );
+}
+
+/**
+ * Warn when MODEL_ID carries no "/" — OpenRouter ids are namespaced `<vendor>/<model>`
+ * and it rejects a bare one. The way to land here is a half-done migration off a removed
+ * native backend: PROVIDER flipped to "openrouter" (or dropped, since it is the default)
+ * while MODEL_ID stayed on the vendor's own bare id ("deepseek-v4-flash", "MiniMax-M3",
+ * "kimi-k2.7-code"). Without this the run reaches the model call and 400s mid-review.
+ * A warning, not a throw: OpenRouter's catalog is the authority on what it serves, and
+ * this action must not be the thing that blocks a newly-added id shape.
+ */
+function warnBareModelId(model: string): void {
+  if (!model.includes("/")) {
+    core.warning(
+      `MODEL_ID "${model}" is not namespaced (no "/"); OpenRouter model ids are ` +
+        `"<vendor>/<model>" and it will reject this one. If it is a native vendor id left ` +
+        `over from the removed deepseek/minimax/kimi backends, prefix it with the vendor's ` +
+        `OpenRouter slug — e.g. "${DEFAULT_MODEL}".`,
+    );
+  }
 }
 
 /**
@@ -246,6 +272,7 @@ export function readInputs(): ActionInputs {
   const provider = resolveProviderId(core.getInput("PROVIDER"));
   const jevEnabled = readBool("JEV_ENABLED", false);
   const model = core.getInput("MODEL_ID").trim() || DEFAULT_MODEL;
+  warnBareModelId(model);
 
   const apiKey = core.getInput("API_KEY").trim();
   if (apiKey === "") {

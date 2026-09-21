@@ -242,13 +242,21 @@ describe("provider contract (PROVIDER / MODEL_ID / API_KEY)", () => {
   it("throws on a REMOVED native provider instead of silently routing its key to OpenRouter", () => {
     // A workflow still pinned to a native vendor carries THAT vendor's key; accepting the
     // input and sending it to OpenRouter would 401 mid-review. The error names the
-    // OpenRouter id to switch to instead.
-    for (const removed of ["deepseek", "minimax", "kimi", "moonshot"]) {
+    // OpenRouter id to switch to instead — under the vendor's OPENROUTER AUTHOR SLUG,
+    // which is not always the PROVIDER spelling: Kimi publishes as "moonshotai", so
+    // suggesting "kimi/<model>" would hand the reader an id OpenRouter does not serve.
+    const suggested: Record<string, string> = {
+      deepseek: "deepseek",
+      minimax: "minimax",
+      kimi: "moonshotai",
+      moonshot: "moonshotai",
+    };
+    for (const [removed, namespace] of Object.entries(suggested)) {
       setInput("PROVIDER", removed);
       expect(() => readInputs()).toThrow(
         new RegExp(`PROVIDER "${removed}" is not supported \\(supported: openrouter\\)`),
       );
-      expect(() => readInputs()).toThrow(new RegExp(`MODEL_ID:"${removed}/<model>"`));
+      expect(() => readInputs()).toThrow(new RegExp(`MODEL_ID:"${namespace}/<model>"`));
     }
   });
 
@@ -256,6 +264,23 @@ describe("provider contract (PROVIDER / MODEL_ID / API_KEY)", () => {
     setInput("MODEL_ID", "moonshotai/kimi-k2");
     const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
     readInputs();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("warns on a BARE MODEL_ID — a half-done migration off a removed native backend", () => {
+    // PROVIDER flipped to the default but MODEL_ID left on the vendor's own bare id is
+    // the shape every migrating workflow starts from, and OpenRouter rejects it. Warn
+    // at input-read time rather than letting the run 400 at the first model call.
+    setInput("MODEL_ID", "deepseek-v4-flash");
+    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+    expect(readInputs().model).toBe("deepseek-v4-flash");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('is not namespaced (no "/")'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("deepseek/deepseek-v4-pro"));
+  });
+
+  it("never warns for the DEFAULT model id, which is namespaced", () => {
+    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+    expect(readInputs().model).toBe("deepseek/deepseek-v4-pro");
     expect(warn).not.toHaveBeenCalled();
   });
 });
