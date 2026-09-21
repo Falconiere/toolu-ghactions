@@ -469,3 +469,96 @@ describe("reviewAndValidate — wallDeadline pass-through (MAX_WALL_MS, s13)", (
     expect(out.ledger.entries["src/db.ts"]?.status).toBe("unreviewed");
   });
 });
+
+describe("reviewAndValidate — the source-evidence gate's coverage consequence", () => {
+  /** A model server that answers every package call with `findings`. */
+  function serverWith(findings: unknown[]): typeof fetch {
+    return async (_url, init) => {
+      const body: RequestBody = JSON.parse(typeof init?.body === "string" ? init.body : "{}");
+      const messages = body.messages ?? [];
+      const call: CapturedCall = {
+        system: messages.find((m) => m.role === "system")?.content ?? "",
+        user: messages.find((m) => m.role === "user")?.content ?? "",
+      };
+      if (isCartographer(call)) return chatResponse(VALID_BRIEF, init);
+      return chatResponse(
+        {
+          review_plan: "Reviewed the package.",
+          verdict: "changes",
+          findings,
+          other_checks: "",
+          top_must_fix: [],
+        },
+        init,
+      );
+    };
+  }
+
+  const BASE = { "src/util.ts": "export const keep = 0;\n" };
+  const FEATURE = {
+    "src/util.ts": "export const keep = 0;\nexport const a = 1;\nexport const b = 2;\n",
+  };
+
+  it("keeps a path reviewed when one of its findings is mis-quoted but another survives", async () => {
+    const dir = repoWith(FEATURE, BASE);
+    const out = await reviewAndValidate({
+      inputs: baseInputs(),
+      diff: diffOf(dir),
+      event: EVENT,
+      priorThreads: [],
+      reviewHead: "HEAD",
+      cwd: dir,
+      fetch: serverWith([
+        {
+          path: "src/util.ts",
+          line: 2,
+          quoted_line: "export const a = 1;",
+          severity: "high",
+          confidence: "high",
+          text: "Unnamed constant.",
+        },
+        {
+          path: "src/util.ts",
+          line: 3,
+          quoted_line: "export const NOPE = 99;",
+          severity: "high",
+          confidence: "high",
+          text: "Quote is not the cited line.",
+        },
+      ]),
+    });
+    // The mis-quoted finding is still dropped — only the file's COVERAGE is spared.
+    expect(out.stamped).toHaveLength(1);
+    expect(out.stamped[0]?.line).toBe(2);
+    expect(out.ledger.entries["src/util.ts"]?.status).toBe("reviewed");
+    // No file is unreviewed, so the "affected files remain unreviewed" note must not fire.
+    expect(out.result.partial).not.toBe(true);
+    expect(out.result.error ?? "").not.toContain("lacked valid source evidence");
+  });
+
+  it("still condemns a path when NOTHING the model said about it survived the gate", async () => {
+    const dir = repoWith(FEATURE, BASE);
+    const out = await reviewAndValidate({
+      inputs: baseInputs(),
+      diff: diffOf(dir),
+      event: EVENT,
+      priorThreads: [],
+      reviewHead: "HEAD",
+      cwd: dir,
+      fetch: serverWith([
+        {
+          path: "src/util.ts",
+          line: 3,
+          quoted_line: "export const NOPE = 99;",
+          severity: "high",
+          confidence: "high",
+          text: "Quote is not the cited line.",
+        },
+      ]),
+    });
+    expect(out.stamped).toHaveLength(0);
+    expect(out.ledger.entries["src/util.ts"]?.status).toBe("unreviewed");
+    expect(out.result.partial).toBe(true);
+    expect(out.result.error ?? "").toContain("lacked valid source evidence");
+  });
+});

@@ -42145,7 +42145,8 @@ function validateFindings(findings, changedLinesByPath, minConfidence, lineTextB
   const EMPTY_CHANGED = /* @__PURE__ */ new Set();
   const kept = [];
   let selfNegating = 0;
-  let unsupportedEvidence = 0;
+  let missingQuote = 0;
+  let unverifiedQuote = 0;
   const unsupportedPaths = /* @__PURE__ */ new Set();
   for (const f of findings) {
     const changedSet = changedSetByPath.get(f.path) ?? EMPTY_CHANGED;
@@ -42155,8 +42156,10 @@ function validateFindings(findings, changedLinesByPath, minConfidence, lineTextB
       continue;
     }
     const isLlm = f.source === void 0 || f.source === "llm";
-    if (isLlm && !quoteIsValid(f, lineTextByPath, options.requireQuote === true)) {
-      unsupportedEvidence++;
+    const failure = isLlm ? quoteFailure(f, lineTextByPath, options.requireQuote === true) : null;
+    if (failure !== null) {
+      if (failure === "missing") missingQuote++;
+      else unverifiedQuote++;
       unsupportedPaths.add(f.path);
       continue;
     }
@@ -42175,18 +42178,27 @@ function validateFindings(findings, changedLinesByPath, minConfidence, lineTextB
     process.stdout.write(`  Dropped ${selfNegating} self-negating finding(s)
 `);
   }
+  if (missingQuote + unverifiedQuote > 0) {
+    process.stdout.write(
+      `  Dropped ${missingQuote + unverifiedQuote} finding(s) lacking source evidence (${missingQuote} with no quoted_line, ${unverifiedQuote} whose quote did not match the cited line)
+`
+    );
+  }
   return {
     findings: dedup(kept),
     selfNegating,
-    unsupportedEvidence,
+    unsupportedEvidence: missingQuote + unverifiedQuote,
+    missingQuote,
+    unverifiedQuote,
     unsupportedPaths: [...unsupportedPaths]
   };
 }
-function quoteIsValid(finding, lineTextByPath, requireQuote) {
-  if (finding.quoted_line === void 0) return !requireQuote;
-  if (lineTextByPath === void 0) return !requireQuote;
+function quoteFailure(finding, lineTextByPath, requireQuote) {
+  if (finding.quoted_line === void 0) return requireQuote ? "missing" : null;
+  if (lineTextByPath === void 0) return requireQuote ? "unverified" : null;
   const actual = lineTextByPath.get(finding.path)?.get(finding.line);
-  return actual !== void 0 && quoteMatches(actual, finding.quoted_line);
+  if (actual !== void 0 && quoteMatches(actual, finding.quoted_line)) return null;
+  return "unverified";
 }
 function quoteMatches(actual, quoted) {
   const norm = (s) => s.replace(/\s+/g, " ").trim();
@@ -42875,10 +42887,12 @@ async function reviewAndValidate(input) {
     distillation.review_diff,
     inputs
   );
-  for (const path of unsupportedPaths) {
+  const pathsWithSurvivors = new Set(stamped.map((f) => f.path));
+  const condemned = unsupportedPaths.filter((path) => !pathsWithSurvivors.has(path));
+  for (const path of condemned) {
     coverage.set(path, { status: "unreviewed", reason: "unsupported-source-evidence" });
   }
-  if (unsupportedPaths.length > 0) {
+  if (condemned.length > 0) {
     const evidenceError = "Review findings lacked valid source evidence; affected files remain unreviewed.";
     result.error = [result.error, evidenceError].filter(Boolean).join(" ");
     result.partial = true;

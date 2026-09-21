@@ -38,6 +38,14 @@ export interface ValidateFindingsResult {
   selfNegating: number;
   /** LLM findings rejected because their required source evidence was absent or invalid. */
   unsupportedEvidence: number;
+  /** Of {@link unsupportedEvidence}, the ones that carried NO `quoted_line` at all. */
+  missingQuote: number;
+  /** Of {@link unsupportedEvidence}, the ones whose quote could not be matched to the
+   *  cited source line. Split from {@link missingQuote} because the two mean different
+   *  things: a model that never emits quotes is a prompt/schema problem, a model whose
+   *  quotes do not match is misreading the diff. Without the split a run where the gate
+   *  rejects everything is undebuggable from the log. */
+  unverifiedQuote: number;
   /** Changed paths with unsupported LLM evidence, unique in first-rejection order. */
   unsupportedPaths: string[];
 }
@@ -80,7 +88,8 @@ export function validateFindings(
 
   const kept: Finding[] = [];
   let selfNegating = 0;
-  let unsupportedEvidence = 0;
+  let missingQuote = 0;
+  let unverifiedQuote = 0;
   const unsupportedPaths = new Set<string>();
   for (const f of findings) {
     const changedSet = changedSetByPath.get(f.path) ?? EMPTY_CHANGED;
@@ -107,8 +116,10 @@ export function validateFindings(
     // supplied a quote AND we have the line's text; mechanical scanners (which
     // anchor exactly) are exempt.
     const isLlm = f.source === undefined || f.source === "llm";
-    if (isLlm && !quoteIsValid(f, lineTextByPath, options.requireQuote === true)) {
-      unsupportedEvidence++;
+    const failure = isLlm ? quoteFailure(f, lineTextByPath, options.requireQuote === true) : null;
+    if (failure !== null) {
+      if (failure === "missing") missingQuote++;
+      else unverifiedQuote++;
       unsupportedPaths.add(f.path);
       continue;
     }
@@ -134,27 +145,47 @@ export function validateFindings(
   if (selfNegating > 0) {
     process.stdout.write(`  Dropped ${selfNegating} self-negating finding(s)\n`);
   }
+  // The sibling of the self-negating line above. Without it a run where the gate
+  // rejects every finding reports only its downstream effect (a degraded verdict over
+  // "unreviewed" files) and the cause is unrecoverable from the log.
+  if (missingQuote + unverifiedQuote > 0) {
+    process.stdout.write(
+      `  Dropped ${missingQuote + unverifiedQuote} finding(s) lacking source evidence ` +
+        `(${missingQuote} with no quoted_line, ${unverifiedQuote} whose quote did not ` +
+        `match the cited line)\n`,
+    );
+  }
   return {
     findings: dedup(kept),
     selfNegating,
-    unsupportedEvidence,
+    unsupportedEvidence: missingQuote + unverifiedQuote,
+    missingQuote,
+    unverifiedQuote,
     unsupportedPaths: [...unsupportedPaths],
   };
 }
 
+/** Why an LLM finding's source quote failed the gate. */
+type QuoteFailure = "missing" | "unverified";
+
 /**
- * Validate an LLM finding's source quote. A supplied quote is always non-empty
- * and must be contained in its cited source line; only legacy callers may omit it.
+ * Validate an LLM finding's source quote, naming the failure so the caller can count
+ * the two cases apart. A supplied quote is always non-empty and must be contained in
+ * its cited source line; only legacy callers may omit it. `null` means the quote is
+ * valid (or not required). A quote that was supplied but could not be checked against
+ * the source is "unverified" alongside one that simply did not match — both mean the
+ * model's claim is ungrounded, and neither is a missing quote.
  */
-function quoteIsValid(
+function quoteFailure(
   finding: Finding,
   lineTextByPath: Map<string, Map<number, string>> | undefined,
   requireQuote: boolean,
-): boolean {
-  if (finding.quoted_line === undefined) return !requireQuote;
-  if (lineTextByPath === undefined) return !requireQuote;
+): QuoteFailure | null {
+  if (finding.quoted_line === undefined) return requireQuote ? "missing" : null;
+  if (lineTextByPath === undefined) return requireQuote ? "unverified" : null;
   const actual = lineTextByPath.get(finding.path)?.get(finding.line);
-  return actual !== undefined && quoteMatches(actual, finding.quoted_line);
+  if (actual !== undefined && quoteMatches(actual, finding.quoted_line)) return null;
+  return "unverified";
 }
 
 /** Whitespace-normalized one-way containment: the quote comes FROM source. */
