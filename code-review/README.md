@@ -184,28 +184,29 @@ The native vendor backends this action used to ship — `deepseek`
 (`api.moonshot.ai`) — are **gone**. Every model they serve is reachable through
 OpenRouter under a `<vendor>/<model>` id, so the migration is one input pair:
 
-| Removed | Nearest OpenRouter id |
-|---|---|
-| `PROVIDER: deepseek` + `MODEL_ID: deepseek-v4-flash` | `deepseek/deepseek-v4-flash` |
-| `PROVIDER: minimax` + `MODEL_ID: MiniMax-M3` | `minimax/minimax-m3` |
-| `PROVIDER: kimi` + `MODEL_ID: kimi-k2.7-code` | `moonshotai/kimi-k2` |
+| Removed | Vendor on OpenRouter | Starting point — **verify before pinning** |
+|---|---|---|
+| `PROVIDER: deepseek` + `MODEL_ID: deepseek-v4-flash` | `deepseek` | `deepseek/deepseek-v4-flash` |
+| `PROVIDER: minimax` + `MODEL_ID: MiniMax-M3` | `minimax` | `minimax/minimax-m3` |
+| `PROVIDER: kimi` + `MODEL_ID: kimi-k2.7-code` | `moonshotai` (**not** `kimi`) | `moonshotai/kimi-k2` |
 
-Set the right-hand id as `MODEL_ID`.
-
-These are the **nearest** ids, not guaranteed byte-identical checkpoints — a
-vendor does not always publish every native model to OpenRouter under the same
-name (Kimi's line-up is namespaced `moonshotai/`, not `kimi/`, and
-`kimi-k2.7-code` has no exact OpenRouter twin). Check
-[openrouter.ai/models](https://openrouter.ai/models) for the current id before
-pinning, and prefer one with reliable JSON structured output.
+**Look every one of these up at [openrouter.ai/models](https://openrouter.ai/models)
+before you pin it.** The right-hand column is a starting point, not a verified id:
+two of the three were composed by the same vendor-name-plus-model rule the action
+itself refuses to trust, and the Kimi row proves why — its namespace is
+`moonshotai/`, and `kimi-k2.7-code` (code-specialised) has no exact OpenRouter
+twin, so `moonshotai/kimi-k2` is a general-purpose substitute that will review
+differently. Prefer a model with reliable JSON structured output.
 
 …plus an `API_KEY` that is now your **OpenRouter** key, not the vendor's. A
-`PROVIDER` still pinned to a removed vendor fails the action with an error naming
-the OpenRouter id to use — it is never silently rerouted, because the vendor key
-in `API_KEY` would only 401 mid-review.
+`PROVIDER` still pinned to a removed vendor fails the action, pointing you at the
+catalog to find the id — it is never silently rerouted, because the vendor key in
+`API_KEY` would only 401 mid-review.
 
 `openrouter` is the only implemented backend; any other `PROVIDER` value fails the
-action with that same error (`PROVIDER: "openrouter"`, `MODEL_ID: "<vendor>/<model>"`).
+action with that same error. It names [openrouter.ai/models](https://openrouter.ai/models)
+rather than composing an id from the value you typed: that composition is precisely
+what produced the unusable `kimi/…` advice this action used to print.
 
 **Half-done migrations warn.** Flipping `PROVIDER` but leaving `MODEL_ID` on the
 vendor's bare native id (`deepseek-v4-flash`, `MiniMax-M3`, `kimi-k2.7-code`) is
@@ -722,7 +723,7 @@ resolution without posting the note again.
 
 | Input | Required | Default | Description |
 |---|---|---|---|
-| `PROVIDER` | no | `openrouter` | Backend to call. `openrouter` is the only supported value — any OpenAI-compatible model via OpenRouter. Any other value, including the removed native vendor backends, fails the action with an error suggesting `PROVIDER: "openrouter"` + `MODEL_ID: "<vendor>/<model>"`. See [Native vendor APIs (removed)](#native-vendor-apis-removed). |
+| `PROVIDER` | no | `openrouter` | Backend to call. `openrouter` is the only supported value — any OpenAI-compatible model via OpenRouter. Any other value, including the removed native vendor backends, fails the action with an error telling you to set `PROVIDER: "openrouter"` and to look the model's id up at [openrouter.ai/models](https://openrouter.ai/models) — it never guesses an id for you, because a vendor's OpenRouter namespace is not always its name. See [Native vendor APIs (removed)](#native-vendor-apis-removed). |
 | `MODEL_ID` | no | `deepseek/deepseek-v4-pro` | OpenRouter model id, namespaced `<vendor>/<model>`. The default has a 1M-token context and 384k max output, so large diffs and verbose reviews rarely truncate. Pick one with reliable JSON structured output. |
 | `API_KEY` | **yes** | — | OpenRouter API key. **Required** — an empty value fails the action. Pass via a step-level `env:`/`secrets` reference for secret hygiene. |
 | `MAX_TOKENS` | no | `8192` | Max completion-token budget per request (always sent — omitting it makes OpenRouter reserve the model's full output window against your credits and can 402-reject). A response truncated at this limit (`finish_reason: length`) is retried with a doubled budget up to the 131072 ceiling (escalations don't consume hang retries); whatever the outcome, the findings completed before a cut are salvaged. |
@@ -825,7 +826,7 @@ than assuming a pure input rename.
 
 | What changed | Detail |
 |---|---|
-| `PROVIDER` values | `deepseek`, `minimax`, `kimi` and `moonshot` are **rejected**. The action fails with a config error naming the OpenRouter model id to switch to — it never silently reroutes, because the vendor key in `API_KEY` would only 401 mid-review. `openrouter` (the default) is the only accepted value. |
+| `PROVIDER` values | `deepseek`, `minimax`, `kimi` and `moonshot` are **rejected**. The action fails with a config error pointing you at [openrouter.ai/models](https://openrouter.ai/models) to find the model's id — it never composes one for you, and never silently reroutes, because the vendor key in `API_KEY` would only 401 mid-review. `openrouter` (the default) is the only accepted value. |
 | `MODEL_ID` | Must be an OpenRouter id, namespaced `<vendor>/<model>`. A bare native id now **warns** at input-read time, naming `MODEL_ID` as the likely cause; the run still proceeds and still fails at the first model call if the id is wrong. See [Native vendor APIs (removed)](#native-vendor-apis-removed) for the id mapping. |
 | `API_KEY` | Now always your **OpenRouter** key. Workflows passing `secrets.DEEPSEEK_API_KEY` / `MINIMAX_API_KEY` / `KIMI_API_KEY` must swap in `secrets.OPENROUTER_API_KEY`. |
 | Empty-budget retries | A response that burned the whole `MAX_TOKENS` budget on hidden reasoning and returned **no content** is no longer retried at a doubled budget — reasoning is off on OpenRouter (`reasoning: {effort: "none"}`), so that shape means the chosen model ignored the switch and a larger budget only buys more of it. A truncation that **did** produce partial output still escalates exactly as before. If you pin a model that reasons unconditionally, raise `MAX_TOKENS` or lower `MAX_CHUNK_LINES` yourself. |

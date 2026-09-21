@@ -9,7 +9,8 @@
 // bought nothing but per-vendor reasoning switches, sampling gates and empty-cut recovery
 // rules to keep working. PROVIDER survives as an input and still accepts only
 // "openrouter": a workflow pinned to a removed vendor must fail loudly with a config
-// error naming the OpenRouter id to use, not silently send that vendor's key here.
+// error, not silently send that vendor's key here. That error names the CATALOG, never a
+// composed model id — see OPENROUTER_MODELS_URL below for why guessing one is a bug.
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { LanguageModel } from "ai";
 

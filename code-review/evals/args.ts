@@ -87,14 +87,16 @@ Example:
  *  of silently swallowing "--provider" as the PR ref). A BLANK value is missing
  *  too — empty or whitespace-only: `--model ""` (or `--model "  "`) used to slip
  *  through and send a blank model id to OpenRouter for a 400 mid-run, instead of
- *  failing here with the flag named. The trimmed value is what's returned, so no
- *  caller has to trim again. */
+ *  failing here with the flag named. Every check runs on the TRIMMED value and the
+ *  trimmed value is what's returned: " --pr" must still read as the next flag rather
+ *  than slip past the guard on its leading space, and no caller has to trim again
+ *  (a padded "--pr" ref now parses instead of failing parsePrRef's regex). */
 function requireValue(argv: readonly string[], index: number, flag: string): string {
-  const value = argv[index];
-  if (value === undefined || value.startsWith("--") || value.trim() === "") {
+  const value = argv[index]?.trim();
+  if (value === undefined || value === "" || value.startsWith("--")) {
     throw new ArgError(`${flag} requires a value.`);
   }
-  return value.trim();
+  return value;
 }
 
 /** Read the next argv slot as a non-negative integer, or throw a clear
