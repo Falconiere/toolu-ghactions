@@ -30481,14 +30481,7 @@ var DEFAULT_MODEL = "deepseek/deepseek-v4-pro";
 function canonicalProviderId(raw) {
   return raw.trim().toLowerCase() === PROVIDER_ID ? PROVIDER_ID : void 0;
 }
-var OPENROUTER_NAMESPACE = /* @__PURE__ */ new Map([
-  ["kimi", "moonshotai"],
-  ["moonshot", "moonshotai"]
-]);
-function openRouterNamespaceFor(rawProvider) {
-  const p = rawProvider.trim().toLowerCase();
-  return OPENROUTER_NAMESPACE.get(p) ?? p;
-}
+var OPENROUTER_MODELS_URL = "https://openrouter.ai/models";
 var OPENROUTER_EXTRA_BODY = {
   // Disable reasoning so the model spends max_tokens on the answer, not hidden thinking.
   // "none" is not in the SDK's typed reasoning-effort union, so it rides in extraBody.
@@ -30622,13 +30615,13 @@ function resolveProviderId(raw) {
   const id = canonicalProviderId(p);
   if (id !== void 0) return id;
   throw new Error(
-    `PROVIDER "${p}" is not supported (supported: ${PROVIDER_ID}). To use "${p}" models, set PROVIDER:"openrouter" and MODEL_ID:"${openRouterNamespaceFor(p)}/<model>" to route through OpenRouter.`
+    `PROVIDER "${p}" is not supported (supported: ${PROVIDER_ID}). Set PROVIDER:"openrouter" (or omit it) and put the model's OpenRouter id in MODEL_ID \u2014 look it up at ${OPENROUTER_MODELS_URL}, since a vendor's OpenRouter namespace is not always its name.`
   );
 }
 function warnBareModelId(model) {
   if (!model.includes("/")) {
     warning(
-      `MODEL_ID "${model}" is not namespaced (no "/"); OpenRouter model ids are "<vendor>/<model>" and it will reject this one. If it is a native vendor id left over from the removed deepseek/minimax/kimi backends, prefix it with the vendor's OpenRouter slug \u2014 e.g. "${DEFAULT_MODEL}".`
+      `MODEL_ID "${model}" is not namespaced (no "/"); OpenRouter model ids are "<vendor>/<model>" and it will reject this one, failing the review at the first model call. If it is a native vendor id left over from the removed deepseek/minimax/kimi backends, find its OpenRouter id at ${OPENROUTER_MODELS_URL} \u2014 the namespace is not always the vendor's name.`
     );
   }
 }

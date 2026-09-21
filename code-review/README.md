@@ -186,9 +186,11 @@ OpenRouter under a `<vendor>/<model>` id, so the migration is one input pair:
 
 | Removed | Nearest OpenRouter id |
 |---|---|
-| `PROVIDER: deepseek` + `MODEL_ID: deepseek-v4-flash` | `MODEL_ID: deepseek/deepseek-v4-flash` |
-| `PROVIDER: minimax` + `MODEL_ID: MiniMax-M3` | `MODEL_ID: minimax/minimax-m3` |
-| `PROVIDER: kimi` + `MODEL_ID: kimi-k2.7-code` | `MODEL_ID: moonshotai/kimi-k2` |
+| `PROVIDER: deepseek` + `MODEL_ID: deepseek-v4-flash` | `deepseek/deepseek-v4-flash` |
+| `PROVIDER: minimax` + `MODEL_ID: MiniMax-M3` | `minimax/minimax-m3` |
+| `PROVIDER: kimi` + `MODEL_ID: kimi-k2.7-code` | `moonshotai/kimi-k2` |
+
+Set the right-hand id as `MODEL_ID`.
 
 These are the **nearest** ids, not guaranteed byte-identical checkpoints — a
 vendor does not always publish every native model to OpenRouter under the same
@@ -208,8 +210,10 @@ action with that same error (`PROVIDER: "openrouter"`, `MODEL_ID: "<vendor>/<mod
 **Half-done migrations warn.** Flipping `PROVIDER` but leaving `MODEL_ID` on the
 vendor's bare native id (`deepseek-v4-flash`, `MiniMax-M3`, `kimi-k2.7-code`) is
 the common slip: OpenRouter ids are namespaced `<vendor>/<model>` and it rejects a
-bare one. The action logs a warning naming the fix at input-read time rather than
-letting the run 400 at the first model call.
+bare one. The action logs a warning at input-read time naming `MODEL_ID` as the
+likely cause. It is a warning, not a hard failure — the run still proceeds and
+still fails at the first model call if the id really is wrong, but the log says
+why instead of leaving you with a bare 400.
 
 ### Removed in v4 (migration)
 
@@ -813,19 +817,24 @@ The gate governs the verdict only; a thrown infra error fails the job regardless
 ## v8 migration
 
 `@v8` is a **breaking change**: the three native vendor backends are removed and
-`PROVIDER` accepts only `openrouter` (its default). Nothing else about the review
-changes — same pipeline, same comment shape, same inputs otherwise.
+`PROVIDER` accepts only `openrouter` (its default). The review itself is unchanged
+— same pipeline, same checklist, same comment shape, same input names — but two
+behaviors move with the backends: the `API_KEY` a workflow must supply, and how an
+empty budget-cut response is retried. Both are in the table below; read it rather
+than assuming a pure input rename.
 
 | What changed | Detail |
 |---|---|
 | `PROVIDER` values | `deepseek`, `minimax`, `kimi` and `moonshot` are **rejected**. The action fails with a config error naming the OpenRouter model id to switch to — it never silently reroutes, because the vendor key in `API_KEY` would only 401 mid-review. `openrouter` (the default) is the only accepted value. |
-| `MODEL_ID` | Must be an OpenRouter id, namespaced `<vendor>/<model>`. A bare native id now **warns** at input-read time instead of 400ing at the first model call. See [Native vendor APIs (removed)](#native-vendor-apis-removed) for the id mapping. |
+| `MODEL_ID` | Must be an OpenRouter id, namespaced `<vendor>/<model>`. A bare native id now **warns** at input-read time, naming `MODEL_ID` as the likely cause; the run still proceeds and still fails at the first model call if the id is wrong. See [Native vendor APIs (removed)](#native-vendor-apis-removed) for the id mapping. |
 | `API_KEY` | Now always your **OpenRouter** key. Workflows passing `secrets.DEEPSEEK_API_KEY` / `MINIMAX_API_KEY` / `KIMI_API_KEY` must swap in `secrets.OPENROUTER_API_KEY`. |
 | Empty-budget retries | A response that burned the whole `MAX_TOKENS` budget on hidden reasoning and returned **no content** is no longer retried at a doubled budget — reasoning is off on OpenRouter (`reasoning: {effort: "none"}`), so that shape means the chosen model ignored the switch and a larger budget only buys more of it. A truncation that **did** produce partial output still escalates exactly as before. If you pin a model that reasons unconditionally, raise `MAX_TOKENS` or lower `MAX_CHUNK_LINES` yourself. |
 
-To adopt `@v8`: bump the pinned ref, drop any `PROVIDER` line naming a removed
-vendor (or set it to `openrouter`), namespace `MODEL_ID`, and point `API_KEY` at
-your OpenRouter key.
+To adopt `@v8`: bump the pin to
+`falconiere/toolu-ghactions/code-review@v8`, drop any `PROVIDER` line naming a
+removed vendor (or set it to `openrouter`), namespace `MODEL_ID`, and point
+`API_KEY` at your OpenRouter key. The copy-pasteable examples above still pin `@v4`; swap in
+`@v8` when you copy one.
 
 ## v7 migration
 

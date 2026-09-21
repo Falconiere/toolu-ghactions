@@ -67,32 +67,40 @@ describe("parseArgs", () => {
   it("rejects an unsupported --provider, naming the supported id and the workaround", () => {
     expect(() => parseArgs(["--provider", "anthropic"])).toThrow(ArgError);
     expect(() => parseArgs(["--provider", "anthropic"])).toThrow(/\(openrouter\)/);
-    expect(() => parseArgs(["--provider", "anthropic"])).toThrow(/--model "anthropic\/<model>"/);
+    expect(() => parseArgs(["--provider", "anthropic"])).toThrow(/--model <id>/);
+    expect(() => parseArgs(["--provider", "anthropic"])).toThrow(
+      /https:\/\/openrouter\.ai\/models/,
+    );
   });
 
-  it("rejects the REMOVED native vendor providers, naming the vendor's OpenRouter slug", () => {
-    // The suggested --model uses the vendor's OPENROUTER AUTHOR SLUG, not the --provider
-    // spelling: Kimi publishes under "moonshotai", so "kimi/<model>" would be an id
-    // OpenRouter does not serve. The raw spelling is also lowercased, like every id.
-    const suggested: Record<string, string> = {
-      deepseek: "deepseek",
-      minimax: "minimax",
-      kimi: "moonshotai",
-      MoonShot: "moonshotai",
-    };
-    for (const [removed, namespace] of Object.entries(suggested)) {
+  it("rejects the REMOVED native vendor providers, pointing at the OpenRouter catalog", () => {
+    // The advice never composes an id from the --provider spelling: a vendor's OpenRouter
+    // namespace is not always its name (Kimi publishes under "moonshotai"), so
+    // "kimi/<model>" would be an id OpenRouter does not serve.
+    for (const removed of ["deepseek", "minimax", "kimi", "MoonShot"]) {
       expect(() => parseArgs(["--provider", removed])).toThrow(ArgError);
-      expect(() => parseArgs(["--provider", removed])).toThrow(
-        new RegExp(`--model "${namespace}/<model>"`),
+      expect(() => parseArgs(["--provider", removed])).toThrow(/https:\/\/openrouter\.ai\/models/);
+      expect(() => parseArgs(["--provider", removed])).not.toThrow(
+        new RegExp(`--model "${removed}/`),
       );
     }
   });
 
-  it("treats an EMPTY flag value as missing, naming the starved flag", () => {
-    // `--model ""` used to resolve to an empty model id and only fail at the model call.
-    for (const flag of ["--pr", "--provider", "--model", "--out"]) {
-      expect(() => parseArgs([flag, ""])).toThrow(new RegExp(`${flag} requires a value`));
+  it("treats a BLANK flag value as missing, naming the starved flag", () => {
+    // `--model ""` used to resolve to an empty model id and only fail at the model call;
+    // whitespace-only slipped through the same way. --max-wall-ms reaches the same guard
+    // through requireInt, so its blank error is the flag-name one too.
+    for (const flag of ["--pr", "--provider", "--model", "--out", "--max-wall-ms"]) {
+      for (const blank of ["", "   "]) {
+        expect(() => parseArgs([flag, blank])).toThrow(new RegExp(`${flag} requires a value`));
+      }
     }
+  });
+
+  it("trims a flag value, so a padded id never reaches the model call", () => {
+    expect(parseArgs(["--model", "  anthropic/claude-sonnet-4-5  "]).model).toBe(
+      "anthropic/claude-sonnet-4-5",
+    );
   });
 
   it("resolves --provider case-insensitively and defaults --model to the action's own", () => {

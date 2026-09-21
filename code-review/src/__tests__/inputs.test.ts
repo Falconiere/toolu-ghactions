@@ -5,6 +5,7 @@ import * as core from "@actions/core";
 // in a spy that vi.spyOn can then redirect. Nothing about the logger is faked.
 vi.mock(import("@actions/core"), { spy: true });
 import { readInputs } from "@/inputs.js";
+import { DEFAULT_MODEL } from "@/llm/providers.js";
 
 /** Set an action input as @actions/core reads it (process.env.INPUT_<NAME>). */
 function setInput(name: string, value: string): void {
@@ -236,33 +237,32 @@ describe("provider contract (PROVIDER / MODEL_ID / API_KEY)", () => {
   it("AC-6: an unsupported PROVIDER throws, naming the supported set and the workaround", () => {
     setInput("PROVIDER", "openai");
     expect(() => readInputs()).toThrow(/is not supported \(supported: openrouter\)/);
-    expect(() => readInputs()).toThrow(/MODEL_ID:"openai\/<model>"/);
+    expect(() => readInputs()).toThrow(/PROVIDER:"openrouter"/);
+    expect(() => readInputs()).toThrow(/https:\/\/openrouter\.ai\/models/);
   });
 
   it("throws on a REMOVED native provider instead of silently routing its key to OpenRouter", () => {
     // A workflow still pinned to a native vendor carries THAT vendor's key; accepting the
-    // input and sending it to OpenRouter would 401 mid-review. The error names the
-    // OpenRouter id to switch to instead — under the vendor's OPENROUTER AUTHOR SLUG,
-    // which is not always the PROVIDER spelling: Kimi publishes as "moonshotai", so
-    // suggesting "kimi/<model>" would hand the reader an id OpenRouter does not serve.
-    const suggested: Record<string, string> = {
-      deepseek: "deepseek",
-      minimax: "minimax",
-      kimi: "moonshotai",
-      moonshot: "moonshotai",
-    };
-    for (const [removed, namespace] of Object.entries(suggested)) {
+    // input and sending it to OpenRouter would 401 mid-review. The error points at the
+    // CATALOG rather than a composed id: a vendor's OpenRouter namespace is not always
+    // the PROVIDER spelling (Kimi publishes as "moonshotai"), so interpolating the
+    // spelling would hand the reader an id OpenRouter does not serve.
+    for (const removed of ["deepseek", "minimax", "kimi", "moonshot"]) {
       setInput("PROVIDER", removed);
       expect(() => readInputs()).toThrow(
         new RegExp(`PROVIDER "${removed}" is not supported \\(supported: openrouter\\)`),
       );
-      expect(() => readInputs()).toThrow(new RegExp(`MODEL_ID:"${namespace}/<model>"`));
+      expect(() => readInputs()).toThrow(/https:\/\/openrouter\.ai\/models/);
+      // Never a guessed namespace built from the spelling the user typed.
+      expect(() => readInputs()).not.toThrow(new RegExp(`MODEL_ID:"${removed}/`));
     }
   });
 
   it("never warns about a namespaced MODEL_ID — OpenRouter ids are namespaced by design", () => {
-    setInput("MODEL_ID", "moonshotai/kimi-k2");
     const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+    // The action's own default is namespaced, so the untouched config must stay silent…
+    expect(readInputs().model).toBe(DEFAULT_MODEL);
+    setInput("MODEL_ID", "moonshotai/kimi-k2");
     readInputs();
     expect(warn).not.toHaveBeenCalled();
   });
@@ -275,13 +275,8 @@ describe("provider contract (PROVIDER / MODEL_ID / API_KEY)", () => {
     const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
     expect(readInputs().model).toBe("deepseek-v4-flash");
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('is not namespaced (no "/")'));
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("deepseek/deepseek-v4-pro"));
-  });
-
-  it("never warns for the DEFAULT model id, which is namespaced", () => {
-    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
-    expect(readInputs().model).toBe("deepseek/deepseek-v4-pro");
-    expect(warn).not.toHaveBeenCalled();
+    // Points at the catalog, not a guessed id for some other vendor.
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("https://openrouter.ai/models"));
   });
 });
 

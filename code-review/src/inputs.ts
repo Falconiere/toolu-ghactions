@@ -14,9 +14,9 @@ import * as core from "@actions/core";
 import {
   type ProviderId,
   DEFAULT_MODEL,
+  OPENROUTER_MODELS_URL,
   PROVIDER_ID,
   canonicalProviderId,
-  openRouterNamespaceFor,
 } from "./llm/providers.js";
 import { parseFailOn, type BlockableVerdict } from "./review/gate.js";
 import { splitGlobs } from "./git/globs.js";
@@ -224,20 +224,21 @@ function readMinTriggerPermission(): "write" | "admin" {
  * OpenRouter for a 401 mid-review.
  */
 function resolveProviderId(raw: string): ProviderId {
-  // Normalized here because the empty-default check and the error message both need the
-  // normalized text; canonicalProviderId normalizes on its own too, so it is safe either
-  // way — this local copy exists for the two reads below, not for the lookup.
+  // Normalized once, here: the empty-default check and the error text both read it.
+  // canonicalProviderId normalizes again on its own, so passing it either spelling is
+  // safe — it is not relying on this call to have done the work.
   const p = raw.trim().toLowerCase();
   if (p === "") return PROVIDER_ID;
   const id = canonicalProviderId(p);
   if (id !== undefined) return id;
-  // The suggested MODEL_ID uses the vendor's OpenRouter AUTHOR SLUG, which is not always
-  // the PROVIDER spelling: "kimi"/"moonshot" publish under "moonshotai". Suggesting
-  // "kimi/<model>" would hand the reader an id OpenRouter does not serve.
+  // The advice names the CATALOG, never a composed id. A vendor's OpenRouter namespace is
+  // not always its name — suggesting "${p}/<model>" is how `MODEL_ID:"kimi/<model>"`
+  // shipped, an id OpenRouter does not serve (it publishes Kimi under "moonshotai").
   throw new Error(
     `PROVIDER "${p}" is not supported (supported: ${PROVIDER_ID}). ` +
-      `To use "${p}" models, set PROVIDER:"openrouter" and ` +
-      `MODEL_ID:"${openRouterNamespaceFor(p)}/<model>" to route through OpenRouter.`,
+      `Set PROVIDER:"openrouter" (or omit it) and put the model's OpenRouter id in ` +
+      `MODEL_ID — look it up at ${OPENROUTER_MODELS_URL}, since a vendor's OpenRouter ` +
+      `namespace is not always its name.`,
   );
 }
 
@@ -246,17 +247,20 @@ function resolveProviderId(raw: string): ProviderId {
  * and it rejects a bare one. The way to land here is a half-done migration off a removed
  * native backend: PROVIDER flipped to "openrouter" (or dropped, since it is the default)
  * while MODEL_ID stayed on the vendor's own bare id ("deepseek-v4-flash", "MiniMax-M3",
- * "kimi-k2.7-code"). Without this the run reaches the model call and 400s mid-review.
- * A warning, not a throw: OpenRouter's catalog is the authority on what it serves, and
- * this action must not be the thing that blocks a newly-added id shape.
+ * "kimi-k2.7-code"). Without this the run reaches the model call and 400s with nothing
+ * pointing at MODEL_ID as the cause. A warning, NOT a throw — so the run still proceeds
+ * and still fails at the model call if the id is genuinely wrong; the warning only names
+ * the likely cause up front. It cannot throw: OpenRouter's catalog is the authority on
+ * what it serves, and this action must not block a newly-added id shape.
  */
 function warnBareModelId(model: string): void {
   if (!model.includes("/")) {
     core.warning(
       `MODEL_ID "${model}" is not namespaced (no "/"); OpenRouter model ids are ` +
-        `"<vendor>/<model>" and it will reject this one. If it is a native vendor id left ` +
-        `over from the removed deepseek/minimax/kimi backends, prefix it with the vendor's ` +
-        `OpenRouter slug — e.g. "${DEFAULT_MODEL}".`,
+        `"<vendor>/<model>" and it will reject this one, failing the review at the first ` +
+        `model call. If it is a native vendor id left over from the removed ` +
+        `deepseek/minimax/kimi backends, find its OpenRouter id at ${OPENROUTER_MODELS_URL} ` +
+        `— the namespace is not always the vendor's name.`,
     );
   }
 }
