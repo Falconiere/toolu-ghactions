@@ -19,8 +19,6 @@
   "dependencies": {
     "@actions/core": "^3.0.1",
     "@actions/github": "^9.1.1",
-    "@ai-sdk/deepseek": "0.2.16",
-    "@ai-sdk/openai-compatible": "0.2.16",
     "@octokit/auth-app": "^8.3.1",
     "@openrouter/ai-sdk-provider": "^0.7.0",
     "ai": "^4.3.0",

@@ -34,7 +34,7 @@ jobs:
           # v4 flat contract. PROVIDER is written out rather than left to
           # action.yml's default: this step runs the LOCAL action, so editing that
           # default would silently move this repo's own review along with it.
-          # MODEL_ID still rides the per-provider default (openrouter ->
-          # deepseek/deepseek-v4-pro) and carries the same exposure.
+          # MODEL_ID still rides the action's default (deepseek/deepseek-v4-pro)
+          # and carries the same exposure.
           PROVIDER: openrouter
           API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

@@ -305,10 +305,9 @@ function roundLedger(
   });
 }
 
-/** The provider options every model call in this phase shares. */
+/** The model options every model call in this phase shares. */
 function modelOptions(input: ReviewCallInput): ReviewOptions {
   return {
-    provider: input.inputs.provider,
     model: input.inputs.model,
     apiKey: input.inputs.apiKey,
     timeoutMs: input.inputs.requestTimeoutMs,

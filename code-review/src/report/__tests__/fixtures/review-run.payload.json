@@ -17,8 +17,8 @@
     "verdict": "changes",
     "capped": false,
     "fullReview": true,
-    "provider": "deepseek",
-    "modelId": "deepseek-v4-flash",
+    "provider": "openrouter",
+    "modelId": "deepseek/deepseek-v4-flash",
     "durationMs": 42318,
     "startedAt": 1782001200000
   },

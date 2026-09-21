@@ -213,17 +213,9 @@ describe("provider contract (PROVIDER / MODEL_ID / API_KEY)", () => {
     expect(inputs.model).toBe("deepseek/deepseek-v4-pro");
   });
 
-  it("AC-4: PROVIDER=deepseek without MODEL_ID defaults to deepseek-v4-flash", () => {
-    setInput("PROVIDER", "deepseek");
-    const inputs = readInputs();
-    expect(inputs.provider).toBe("deepseek");
-    expect(inputs.model).toBe("deepseek-v4-flash");
-  });
-
-  it("honors an explicit MODEL_ID over the per-provider default", () => {
-    setInput("PROVIDER", "deepseek");
-    setInput("MODEL_ID", "deepseek-v4-pro");
-    expect(readInputs().model).toBe("deepseek-v4-pro");
+  it("honors an explicit MODEL_ID over the default", () => {
+    setInput("MODEL_ID", "anthropic/claude-sonnet-4-5");
+    expect(readInputs().model).toBe("anthropic/claude-sonnet-4-5");
   });
 
   it("reads the API_KEY input", () => {
@@ -236,59 +228,31 @@ describe("provider contract (PROVIDER / MODEL_ID / API_KEY)", () => {
     expect(() => readInputs()).toThrow(/API_KEY is required/);
   });
 
-  it("PROVIDER=minimax without MODEL_ID defaults to MiniMax-M3", () => {
-    setInput("PROVIDER", "minimax");
-    const inputs = readInputs();
-    expect(inputs.provider).toBe("minimax");
-    expect(inputs.model).toBe("MiniMax-M3");
-  });
-
-  it("PROVIDER=kimi without MODEL_ID defaults to kimi-k2.7-code", () => {
-    setInput("PROVIDER", "kimi");
-    const inputs = readInputs();
-    expect(inputs.provider).toBe("kimi");
-    expect(inputs.model).toBe("kimi-k2.7-code");
-  });
-
-  it("accepts PROVIDER=moonshot as an alias of kimi (the vendor's former branding)", () => {
-    setInput("PROVIDER", "moonshot");
-    const inputs = readInputs();
-    expect(inputs.provider).toBe("kimi");
-    expect(inputs.model).toBe("kimi-k2.7-code");
+  it("resolves PROVIDER=openrouter case-insensitively, whitespace and all", () => {
+    setInput("PROVIDER", "  OpenRouter ");
+    expect(readInputs().provider).toBe("openrouter");
   });
 
   it("AC-6: an unsupported PROVIDER throws, naming the supported set and the workaround", () => {
     setInput("PROVIDER", "openai");
-    expect(() => readInputs()).toThrow(
-      /is not supported \(supported: openrouter, deepseek, minimax, kimi\)/,
-    );
-    expect(() => readInputs()).toThrow(/PROVIDER:"openrouter"/);
+    expect(() => readInputs()).toThrow(/is not supported \(supported: openrouter\)/);
+    expect(() => readInputs()).toThrow(/MODEL_ID:"openai\/<model>"/);
   });
 
-  it("resolves PROVIDER case-insensitively", () => {
-    setInput("PROVIDER", "DeepSeek");
-    expect(readInputs().provider).toBe("deepseek");
+  it("throws on a REMOVED native provider instead of silently routing its key to OpenRouter", () => {
+    // A workflow still pinned to a native vendor carries THAT vendor's key; accepting the
+    // input and sending it to OpenRouter would 401 mid-review. The error names the
+    // OpenRouter id to switch to instead.
+    for (const removed of ["deepseek", "minimax", "kimi", "moonshot"]) {
+      setInput("PROVIDER", removed);
+      expect(() => readInputs()).toThrow(
+        new RegExp(`PROVIDER "${removed}" is not supported \\(supported: openrouter\\)`),
+      );
+      expect(() => readInputs()).toThrow(new RegExp(`MODEL_ID:"${removed}/<model>"`));
+    }
   });
 
-  it("warns when a deepseek MODEL_ID looks like an OpenRouter id (slash namespace)", () => {
-    setInput("PROVIDER", "deepseek");
-    setInput("MODEL_ID", "deepseek/deepseek-v4-pro");
-    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
-    readInputs();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("looks like an OpenRouter id"));
-  });
-
-  it("warns for the other native providers too, naming that provider's own default id", () => {
-    setInput("PROVIDER", "kimi");
-    setInput("MODEL_ID", "moonshotai/kimi-k2");
-    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
-    readInputs();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('PROVIDER is "kimi"'));
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('"kimi-k2.7-code"'));
-  });
-
-  it("never warns about a slash for openrouter, whose ids are namespaced by design", () => {
-    setInput("PROVIDER", "openrouter");
+  it("never warns about a namespaced MODEL_ID — OpenRouter ids are namespaced by design", () => {
     setInput("MODEL_ID", "moonshotai/kimi-k2");
     const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
     readInputs();

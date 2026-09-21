@@ -37,7 +37,7 @@ function replayFetch(body: unknown): typeof fetch {
 }
 
 /** Reproduces exactly what `fixtures/README.md` documents: parse the recorded
- *  DeepSeek completion (genuine, per deepseek.test.ts's header), validate +
+ *  DeepSeek completion (genuine — recorded live, never hand-faked), validate +
  *  fingerprint its one finding, partition it as a first-round new finding, and
  *  build the payload `review-run.payload.json` was generated from. */
 async function buildFixturePayload(): Promise<ReviewRunPayload> {
@@ -49,8 +49,7 @@ async function buildFixturePayload(): Promise<ReviewRunPayload> {
       enforce_json_schema: true,
     },
     {
-      provider: "deepseek",
-      model: "deepseek-v4-flash",
+      model: "deepseek/deepseek-v4-flash",
       apiKey: "sk-test",
       maxRetries: 0,
       fetch: replayFetch(DEEPSEEK_SUCCESS),
@@ -76,7 +75,7 @@ async function buildFixturePayload(): Promise<ReviewRunPayload> {
     baseBranch: "main",
     authorLogin: "octocat",
     context: { runId: 18453927061, runAttempt: 1 },
-    inputs: { provider: "deepseek", model: "deepseek-v4-flash" },
+    inputs: { provider: "openrouter", model: "deepseek/deepseek-v4-flash" },
     verdict: result.verdict,
     capped: false,
     fullReview: true,

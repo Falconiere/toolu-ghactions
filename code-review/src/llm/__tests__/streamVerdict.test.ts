@@ -37,7 +37,6 @@ function stream(
 ): Promise<StreamVerdictResult> {
   return streamVerdict({
     model: resolveModel({
-      provider: "openrouter",
       model: "deepseek/deepseek-v4-flash",
       apiKey: "sk-test",
       fetch: fetchImpl,

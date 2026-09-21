@@ -1,23 +1,17 @@
-// llm/reviewWithModel.ts — the provider-agnostic review LLM call, via the Vercel AI SDK.
-// One model, structured output (the Zod Verdict schema), temperature 0. Review calls
-// STREAM (streamVerdict.ts), so a response cut at max_tokens comes back as a returned
-// outcome carrying the findings completed before the cut instead of a thrown parse
-// failure; the cartographer's raw-JSON call stays on generateObject. The backend is
-// chosen by resolveModel() (providers.ts), the budget policy and salvage wording live in
-// budget.ts, and this file owns only the LOOP (timeout/abort, hang retries, budget
-// escalation, salvage, abstain). The export is reviewWithModel().
+// llm/reviewWithModel.ts — the review LLM call, via the Vercel AI SDK. One model,
+// structured output (the Zod Verdict schema), temperature 0. Review calls STREAM
+// (streamVerdict.ts), so a response cut at max_tokens comes back as a returned outcome
+// carrying the findings completed before the cut instead of a thrown parse failure; the
+// cartographer's raw-JSON call stays on generateObject. The backend client is built by
+// resolveModel() (providers.ts), the budget policy and salvage wording live in budget.ts,
+// and this file owns only the LOOP (timeout/abort, hang retries, budget escalation,
+// salvage, abstain). The export is reviewWithModel().
 //
-// REASONING-OFF: every provider that offers a switch has hidden reasoning DISABLED,
-// because reasoning tokens are billed against max_tokens — a thinking model spends the
-// whole budget before emitting a byte of JSON and returns finish_reason "length" with
-// empty content. Each backend spells it differently and every spelling lives in
+// REASONING-OFF: hidden reasoning is DISABLED, because reasoning tokens are billed
+// against max_tokens — a thinking model spends the whole budget before emitting a byte of
+// JSON and returns finish_reason "length" with empty content. The spelling lives in
 // providers.ts: OpenRouter's `reasoning:{effort:"none"}` (plus require_parameters) is
-// baked into the client via OPENROUTER_EXTRA_BODY, while native DeepSeek's and MiniMax's
-// `thinking:{type:"disabled"}` ride on the CALL via providerOptionsFor(). Kimi offers no
-// switch on its current models, so for it (and for MiniMax's M2.x ids, which ignore the
-// switch) providers.ts marks an EMPTY length cut as budget-recoverable instead — see
-// escalatesEmptyCut() and the catch below. Per-provider proofs: request-shape.test.ts,
-// deepseek.test.ts, minimax.test.ts, kimi.test.ts.
+// baked into the client via OPENROUTER_EXTRA_BODY. Wire proof: request-shape.test.ts.
 //
 // RECOVER-THEN-ABSTAIN: the call throws on empty content, a JSON parse or schema
 // validation failure, or an API error (after retries). We CATCH every throw; recover()
@@ -26,12 +20,7 @@
 // Never throw to the caller, never return a null verdict: a failed call abstains, it
 // does not block.
 import { generateObject } from "ai";
-import {
-  escalatesEmptyCut,
-  providerOptionsFor,
-  resolveModel,
-  type ProviderId,
-} from "./providers.js";
+import { resolveModel } from "./providers.js";
 import type { Finding } from "./schema.js";
 import {
   abstain,
@@ -74,13 +63,11 @@ export const REQUEST_TIMEOUT_MS = 180_000;
  */
 export const MAX_ATTEMPTS = 3;
 
-/** Options for {@link reviewWithModel}: the provider, model id, API key, and test seams. */
+/** Options for {@link reviewWithModel}: the model id, API key, and test seams. */
 export interface ReviewOptions {
-  /** Backend provider; defaults to "openrouter" when omitted (preserves legacy callers). */
-  provider?: ProviderId;
-  /** Model id for the chosen provider (e.g. "deepseek-v4-flash" or "deepseek/deepseek-v4-pro"). */
+  /** OpenRouter model id (e.g. "deepseek/deepseek-v4-pro"). */
   model: string;
-  /** Provider API key (Authorization: Bearer). */
+  /** OpenRouter API key (Authorization: Bearer). */
   apiKey: string;
   /** Custom fetch — injected by tests to replay recorded responses; real fetch in prod. */
   fetch?: typeof fetch;
@@ -146,10 +133,9 @@ export interface ProviderResult {
 }
 
 /**
- * Run one structured code review against the configured provider's model. Delegates the
- * call to {@link streamVerdict} (schema + temperature 0); the backend client (and any
- * provider-specific request-body extras) comes from {@link resolveModel} — OpenRouter
- * sends the reasoning-off + require_parameters extras, native DeepSeek sends neither.
+ * Run one structured code review against the configured model. Delegates the call to
+ * {@link streamVerdict} (schema + temperature 0); the backend client, carrying the
+ * reasoning-off + require_parameters extras, comes from {@link resolveModel}.
  * NEVER throws: any failure after retries (empty content, parse/validation error, API
  * error) is caught and returned as a verdict:"error" abstention.
  */
@@ -157,18 +143,11 @@ export async function reviewWithModel(
   envelope: Envelope,
   opts: ReviewOptions,
 ): Promise<ProviderResult> {
-  const provider = opts.provider ?? "openrouter";
   const model = resolveModel({
-    provider,
     model: opts.model,
     apiKey: opts.apiKey,
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
-  // Per-CALL request-body extras (native DeepSeek's and MiniMax's reasoning switch);
-  // OpenRouter's equivalent is baked into the client by resolveModel, so it is undefined
-  // there, and Kimi has none (its temperature gate is a model middleware, also in
-  // resolveModel).
-  const providerOptions = providerOptionsFor(provider);
   const perAttemptMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
   const maxAttempts = opts.maxAttempts ?? MAX_ATTEMPTS;
 
@@ -210,7 +189,6 @@ export async function reviewWithModel(
         maxTokens: budget,
         maxRetries: opts.maxRetries ?? 2,
         abortSignal: controller.signal,
-        providerOptions,
       };
 
       // Raw-JSON mode (the cartographer — see ReviewOptions.rawJson): no schema is
@@ -279,16 +257,13 @@ export async function reviewWithModel(
       }
       // The UNSALVAGEABLE truncations — nothing completed before the cut, so streamVerdict
       // let the SDK's own NoObjectGeneratedError through instead of returning a prefix.
-      // With partial output present the cut landed mid-JSON before the first finding
-      // closed: a doubled budget can still finish it, same as above. Empty content +
-      // finish_reason "length" depends on the provider: where reasoning is switched off
-      // it is the hidden-reasoning bug — the model burned the budget thinking and emitted
-      // nothing, a larger budget only buys MORE reasoning, so it is neither escalated nor
-      // recoverable (the fix is providers.ts's reasoning-off). Where the vendor offers no
-      // switch (Kimi, MiniMax's M2.x ids) the same shape is an honest overrun that a
-      // doubled budget clears, and providers.ts says so via escalatesEmptyCut — per
-      // provider, since on a model whose switch holds the shape cannot occur at all.
-      if (isLengthTruncation(err) && (hasPartialOutput(err) || escalatesEmptyCut(provider))) {
+      // Escalated only WITH partial output: the cut landed mid-JSON before the first
+      // finding closed, so a doubled budget can still finish it, same as above. Empty
+      // content + finish_reason "length" is the hidden-reasoning bug instead — the model
+      // burned the budget thinking and emitted nothing, and a larger budget only buys
+      // MORE reasoning, so that shape is neither escalated nor recoverable (the fix is
+      // providers.ts's reasoning-off).
+      if (isLengthTruncation(err) && hasPartialOutput(err)) {
         const next = nextBudget(budget, escalations);
         if (next !== null) {
           budget = next;

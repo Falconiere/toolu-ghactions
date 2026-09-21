@@ -12,7 +12,7 @@ Developers integrating AI code review into their CI/CD pipeline. They discover t
 
 Publishable GitHub Actions that bring the toolu review methodology to any repository. The code-review action replaces the private `Falconiere/workflows` reusable workflow with a first-class, marketplace-discoverable Docker action. The monorepo structure allows future actions (claude-mention, etc.) to share conventions and utilities.
 
-Success: a developer pastes 10 lines of YAML, adds their LLM provider key (OpenRouter, or native DeepSeek / MiniMax / Kimi), and gets structured AI code review on every PR — complete with a review plan, targeted findings per dimension, and a machine-readable verdict that `pr-babysit` / `parse-verdict.sh` can act on.
+Success: a developer pastes 10 lines of YAML, adds their OpenRouter API key, and gets structured AI code review on every PR — complete with a review plan, targeted findings per dimension, and a machine-readable verdict that `pr-babysit` / `parse-verdict.sh` can act on.
 
 ## Brand Personality
 
