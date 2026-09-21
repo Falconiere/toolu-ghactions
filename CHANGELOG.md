@@ -1,5 +1,12 @@
 # Changelog
 
+## [7.3.2](https://github.com/Falconiere/toolu-ghactions/compare/v7.3.1...v7.3.2) (2026-09-21)
+
+
+### Bug Fixes
+
+* **code-review:** ground large PR reviews in repository evidence ([2c87938](https://github.com/Falconiere/toolu-ghactions/commit/2c8793834271a49a5af4f6f0b3a5d77dda956480))
+
 ## [7.3.1](https://github.com/Falconiere/toolu-ghactions/compare/v7.3.0...v7.3.1) (2026-09-21)
 
 
