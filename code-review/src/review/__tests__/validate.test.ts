@@ -285,7 +285,46 @@ describe("validateFindings", () => {
     });
     expect(strict.findings).toHaveLength(0);
     expect(strict.unsupportedEvidence).toBe(1);
+    // The recorded finding carries no quote at all — counted apart from a quote that
+    // was supplied and could not be verified.
+    expect(strict.missingQuote).toBe(1);
+    expect(strict.unverifiedQuote).toBe(0);
     expect(strict.unsupportedPaths).toEqual([path]);
+  });
+
+  it("counts a supplied-but-unmatchable quote apart from a missing one, and logs both", () => {
+    // Without this split, a run where the gate rejects everything cannot be told apart
+    // from a run where the model never emitted quotes — the PR #109 debugging dead end.
+    const sourceLine = PR175_EVIDENCE.source.lines["142"];
+    if (sourceLine === undefined) throw new Error("missing recorded PR 175 source line 142");
+    const path = PR175_EVIDENCE.source.path;
+    const lineText = new Map<string, Map<number, string>>([[path, new Map([[142, sourceLine]])]]);
+    const findings: Finding[] = [
+      { path, line: 142, severity: "high", text: "no quote at all", confidence: "high" },
+      {
+        path,
+        line: 142,
+        severity: "high",
+        text: "quote from somewhere else",
+        confidence: "high",
+        quoted_line: "const thisTextIsNotOnLine142 = true;",
+      },
+    ];
+
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const strict = validateFindings(findings, new Map([[path, [142]]]), "high", lineText, {
+      requireQuote: true,
+    });
+    expect(write).toHaveBeenCalledWith(
+      "  Dropped 2 finding(s) lacking source evidence (1 with no quoted_line, " +
+        "1 whose quote did not match the cited line)\n",
+    );
+    write.mockRestore();
+
+    expect(strict.findings).toHaveLength(0);
+    expect(strict.unsupportedEvidence).toBe(2);
+    expect(strict.missingQuote).toBe(1);
+    expect(strict.unverifiedQuote).toBe(1);
   });
 
   it("strips the recorded prose suggestion without discarding its anchored finding", () => {

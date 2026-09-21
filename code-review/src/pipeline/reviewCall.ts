@@ -224,10 +224,20 @@ export async function reviewAndValidate(input: ReviewCallInput): Promise<ReviewC
     distillation.review_diff,
     inputs,
   );
-  for (const path of unsupportedPaths) {
+  // A rejected quote condemns its path only when NOTHING of the model's work on that
+  // path survived. A file the model read and reported on — two findings anchored and
+  // quoted, one mis-quoted and dropped — was reviewed; calling it "unreviewed" over the
+  // dropped one is false, and via settleVerdict's degradeOnCoverage that single bad
+  // quote would turn the whole review into a "Review incomplete" error verdict.
+  const pathsWithSurvivors = new Set(stamped.map((f) => f.path));
+  const condemned = unsupportedPaths.filter((path) => !pathsWithSurvivors.has(path));
+  for (const path of condemned) {
     coverage.set(path, { status: "unreviewed", reason: "unsupported-source-evidence" });
   }
-  if (unsupportedPaths.length > 0) {
+  // Keyed on `condemned`, not on every rejection: the sentence claims files remain
+  // unreviewed, so it must only appear when some file actually does. A rejection on a
+  // path that kept its coverage is recorded by validateFindings' own log line.
+  if (condemned.length > 0) {
     const evidenceError =
       "Review findings lacked valid source evidence; affected files remain unreviewed.";
     result.error = [result.error, evidenceError].filter(Boolean).join(" ");
