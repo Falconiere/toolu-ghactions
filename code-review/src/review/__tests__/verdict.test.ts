@@ -181,7 +181,7 @@ describe("formatVerdict — verbosity (compact vs full) + dedup", () => {
     expect(body).not.toContain("Reviewed 3-file diff");
   });
 
-  it("omits empty Review Plan / Other checks sections without filler", () => {
+  it("omits empty plan/check sections but renders Top-N for a surviving finding", () => {
     const bare: ProviderResult = {
       verdict: "changes",
       findings: [{ path: "src/a.ts", line: 1, severity: "high", text: "bug", confidence: "high" }],

@@ -157,6 +157,10 @@ describe("validateFindings", () => {
       },
     ];
     expect(validateFindings(findings, changed, "high", lineText).findings).toHaveLength(1);
+    const strict = validateFindings(findings, changed, "high", lineText, { requireQuote: true });
+    expect(strict.findings).toEqual(findings);
+    expect(strict.unsupportedEvidence).toBe(0);
+    expect(strict.unsupportedPaths).toEqual([]);
   });
 
   it("skips the quote check when no line text is supplied (backward compatible)", () => {

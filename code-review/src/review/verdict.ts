@@ -82,6 +82,8 @@ export class VerdictIntegrityError extends Error {
 
 /**
  * Format the verdict comment body and its PR label.
+ * Model `top_must_fix` is retained in the provider schema for compatibility but
+ * ignored here: Top-N is derived only from the surviving `findings`.
  *
  * @param result - the review result (verdict, findings, review_plan,
  *   other_checks). A null/empty verdict defaults to "approved"
