@@ -175,7 +175,8 @@ describe("scenario 1 — PR-72 replay (AC-15.1)", () => {
     const sentLines = packages.reduce((n, c) => n + diffPaths(c).length, 0);
     expect(sentLines).toBe(reviewed.size);
     const sentDiffLines = packages.reduce(
-      (n, c) => n + (c.user.slice(c.user.indexOf("\n\n## Diff\n")).split("\n").length - 1),
+      (n, c) =>
+        n + (c.user.split("## Diff\n```diff\n")[1]?.split("\n```\n")[0] ?? "").split("\n").length,
       0,
     );
     expect(sentDiffLines).toBeLessThan(rawLines * 0.2);

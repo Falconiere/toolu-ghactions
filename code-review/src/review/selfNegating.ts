@@ -47,7 +47,11 @@ const NEGATION_PATTERNS: readonly RegExp[] = [
 
 /** "acceptable"/"fine" alone are common concession words — they only mean
  *  no-defect when they are the LAST sentence (nothing follows to contradict them). */
-const FINAL_ONLY_PATTERNS: readonly RegExp[] = [/^acceptable$/i, /^fine$/i];
+const FINAL_ONLY_PATTERNS: readonly RegExp[] = [
+  /^acceptable$/i,
+  /^fine$/i,
+  /^a theoretical edge case, not a practical concern$/i,
+];
 
 /** An explicit first-person retraction invalidates the entire finding, even when
  * the model tries to pivot that same response to a different claim afterwards. */

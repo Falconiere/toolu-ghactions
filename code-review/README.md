@@ -233,6 +233,8 @@ The noise filter (each dropped file is reported in the comment) covers:
   (`*.bundle.js`), plus any file flagged `@generated`/`DO NOT EDIT` by content.
 - **Repo-marked generated** — any path with `linguist-generated` in
   `.gitattributes` (the same signal GitHub's diff UI uses).
+- **Drizzle metadata** — numbered `meta/*_snapshot.json` and `meta/_journal.json`
+  under `drizzle/` or `migrations/`. SQL migrations and source schemas stay in review.
 - **Your own globs** — anything matched by the `EXCLUDE_GLOBS` input.
 
 Migrations (`migrations/`) and snapshot tests (`*.snap`) are **kept** for review
@@ -240,6 +242,17 @@ by default — add them to `EXCLUDE_GLOBS` if you'd rather skip them.
 
 **2 — Gather rules.** Reads the repo's own convention files from the base ref and
 folds them into the prompt (see [Project conventions](#project-conventions)).
+
+Each review package also receives read-only evidence from the exact reviewed Git
+tree: a bounded repository file inventory, nearby tests, package export maps,
+and supporting source reached through relative imports and workspace exports.
+Common `@/` imports supply candidate files from the owning package's `src/`;
+these candidates are context, not a replacement for TypeScript's resolver.
+Supporting imports are followed for two additional hops. Source context is capped
+at 16 KiB per file and 32 KiB per package; the inventory is capped at 16 KiB.
+Omissions are explicit, and the checklist forbids inferring missing code or tests
+from incomplete context. Source already fully visible in the diff is not attached
+again. Context cannot expand the changed lines on which findings may be reported.
 
 **3 — Review.** Builds the system + user prompt and calls the configured model (the
 `PROVIDER` backend — OpenRouter or a native vendor API) via
@@ -272,6 +285,14 @@ is anchored to a real changed line. Fresh LLM findings must quote source text fr
 their cited line; missing or mismatched evidence leaves the affected coverage
 unreviewed rather than turning an unsupported claim into a clean approval. Existing
 stored findings remain compatible. Top-N recommendations use only surviving findings.
+Settled findings are removed as whole repeated-finding groups before source
+validation, so their stale quotes cannot make a completed review incomplete.
+Dismissed threads retain their corrective explanations in the prompt. Repeated
+findings in the summary use only surviving groups; free-form model “Other checks”
+are omitted because they can repeat claims that validation or dismissal rejected.
+Local source-evidence and coverage failures are identified separately from provider
+errors. Logs include up to five rejected quote locations and any matching lines,
+without copying the source text into the log.
 
 **5 — Post.** A summary verdict comment (machine-readable label for `pr-babysit`),
 plus — when `INLINE_COMMENTS` is on — per-line review comments with committable
@@ -564,6 +585,12 @@ When `MAX_WALL_MS` cuts a run short mid-review, the sticky comment says so, and 
 `@toolu resume` never re-reviews files that already reached complete coverage, and never clears memory or `reviewed_tree`. Contrast with `@toolu review`, which is still a **full** re-review — it clears `reviewed_tree` and both exception lists and starts over. If there is nothing left to resume (no exception paths recorded — e.g. a run that never actually paused), `@toolu resume` falls back to a full review rather than silently doing nothing.
 
 ## Review memory
+
+If a push rewrites history and the stored review tree is missing locally, the
+action attempts one bounded fetch of the previously reviewed commit from
+`origin`, without moving the checkout or `FETCH_HEAD`. If the server no longer
+provides that object, it falls back to a full review; it never assumes missing
+history means unchanged code.
 
 With `REVIEW_MEMORY: true` (default), each review recaps what changed since the
 last pass instead of starting from scratch:

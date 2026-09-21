@@ -18,6 +18,8 @@ import { reviewAndValidate } from "@/pipeline/reviewCall.js";
 import { fetchDiff } from "@/git/diff.js";
 import type { DiffData } from "@/git/diff.js";
 import { splitDiffByFile } from "@/git/chunk.js";
+import { fingerprint } from "@/state.js";
+import { thread } from "@/review/__tests__/reconcile-helpers.js";
 import type { ActionInputs } from "@/inputs.js";
 import type { EventResolution } from "@/github/event.js";
 import type { BlockableVerdict } from "@/review/gate.js";
@@ -189,8 +191,33 @@ function diffOf(dir: string): DiffData {
 /** The `## Diff` fenced block of a captured envelope — the ONLY place a reviewer
  *  reads code; the changed-files list above it names every path either way. */
 function diffBlock(call: CapturedCall): string {
-  return call.user.slice(call.user.indexOf("\n\n## Diff\n"));
+  return call.user.split("## Diff\n```diff\n")[1]?.split("\n```\n")[0] ?? "";
 }
+
+it("supplies unchanged schema and test evidence to the package model request", async () => {
+  const dir = repoWith(
+    { "src/service.ts": "import { schema } from './schema';\nexport const value = schema;\n" },
+    {
+      "src/schema.ts": "export const schema = { approvedAt: 'default timestamp' };\n",
+      "src/__tests__/service.test.ts": "test('refresh preserves other installations', () => {});\n",
+    },
+  );
+  const calls: CapturedCall[] = [];
+  const server = modelServer(calls, VALID_BRIEF);
+  await reviewAndValidate({
+    inputs: baseInputs(),
+    diff: diffOf(dir),
+    event: EVENT,
+    priorThreads: [],
+    reviewHead: "HEAD",
+    cwd: dir,
+    fetch: server.fetch,
+  });
+  const request = calls.find((c) => !isCartographer(c));
+  expect(request?.user).toContain("default timestamp");
+  expect(request?.user).toContain("refresh preserves other installations");
+  expect(diffBlock(request!)).not.toContain("default timestamp");
+});
 
 describe("reviewAndValidate — Layer 0 (distill) runs before chunking", () => {
   it("collapses a pattern group to its exemplar in the reviewed diff and ledgers the members", async () => {
@@ -498,6 +525,70 @@ describe("reviewAndValidate — the source-evidence gate's coverage consequence"
   const FEATURE = {
     "src/util.ts": "export const keep = 0;\nexport const a = 1;\nexport const b = 2;\n",
   };
+
+  it("does not mark a file unreviewed for a misquoted claim that was already dismissed", async () => {
+    const dir = repoWith(FEATURE, BASE);
+    const finding = {
+      path: "src/util.ts",
+      line: 3,
+      quoted_line: "stale source",
+      severity: "high" as const,
+      confidence: "high",
+      text: "This export is a barrel.",
+    };
+    const out = await reviewAndValidate({
+      inputs: baseInputs(),
+      diff: diffOf(dir),
+      event: EVENT,
+      priorThreads: [
+        thread({
+          path: finding.path,
+          line: finding.line,
+          fp: fingerprint(finding),
+          isResolved: true,
+        }),
+      ],
+      reviewHead: "HEAD",
+      cwd: dir,
+      fetch: serverWith([finding]),
+    });
+    expect(out.stamped).toEqual([]);
+    expect(out.ledger.entries["src/util.ts"]?.status).toBe("reviewed");
+    expect(out.result.partial).not.toBe(true);
+    expect(out.settledBeforeValidation).toBe(1);
+  });
+
+  it("settles all members of a dismissed pattern before quote validation", async () => {
+    const paths = ["src/a.ts", "src/b.ts", "src/c.ts"];
+    const dir = repoWith(
+      Object.fromEntries(paths.map((path, i) => [path, `export const value${i} = ${i};\n`])),
+    );
+    const findings = paths.map((path) => ({
+      path,
+      line: 1,
+      quoted_line: "stale source",
+      severity: "high",
+      confidence: "high",
+      text: "This export is a barrel.",
+    }));
+    const first = findings[0]!;
+    const out = await reviewAndValidate({
+      inputs: baseInputs(),
+      diff: diffOf(dir),
+      event: EVENT,
+      priorThreads: [
+        thread({ path: first.path, line: 1, fp: fingerprint(first), isResolved: true }),
+      ],
+      reviewHead: "HEAD",
+      cwd: dir,
+      fetch: serverWith(findings),
+    });
+    expect(out.settledBeforeValidation).toBe(3);
+    expect(out.stamped).toEqual([]);
+    expect(Object.values(out.ledger.entries).every((entry) => entry.status === "reviewed")).toBe(
+      true,
+    );
+  });
 
   it("keeps a path reviewed when one of its findings is mis-quoted but another survives", async () => {
     const dir = repoWith(FEATURE, BASE);

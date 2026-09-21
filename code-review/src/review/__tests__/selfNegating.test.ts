@@ -24,6 +24,18 @@ function commentText(id: number): string {
 }
 
 describe("isSelfNegating — verbatim reviewer texts", () => {
+  it("drops a theoretical finding that explicitly concludes it is not a practical concern", () => {
+    expect(
+      isSelfNegating(
+        "The keys would collide. This is a theoretical edge case, not a practical concern.",
+      ),
+    ).toBe(true);
+    expect(
+      isSelfNegating(
+        "This is a theoretical edge case, not a practical concern. The real defect is the missing await.",
+      ),
+    ).toBe(false);
+  });
   it("drops the bot's own self-negating finding on this module (ends 'no defect')", () => {
     // Verbatim from the PR #102 dogfood review of selfNegating.ts:90.
     expect(isSelfNegating("The logic is sound; no defect.")).toBe(false); // semicolon: one sentence, not a standalone conclusion

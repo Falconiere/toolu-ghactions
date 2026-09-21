@@ -100,7 +100,7 @@ export function formatVerdict(
 ): { body: string; label: string } {
   const findings = result.findings ?? [];
   const verdict = resolveVerdict(result.verdict, findings.length);
-  const { label, badge } = labelAndBadge(verdict);
+  const { label, badge } = labelAndBadge(verdict, result.failure);
 
   const header = buildHeader(opts.duration, opts.jobUrl ?? "https://github.com");
   const marker = opts.historyMarker ?? "";
@@ -257,11 +257,20 @@ export function resolveVerdict(
 }
 
 /** Map the verdict to its PR label slug + human badge (the parity-critical table). */
-function labelAndBadge(verdict: ProviderResult["verdict"]): { label: string; badge: string } {
+function labelAndBadge(
+  verdict: ProviderResult["verdict"],
+  failure?: ProviderResult["failure"],
+): { label: string; badge: string } {
   if (verdict === "approved") {
     return { label: "merge-approved", badge: "✅ Approved" };
   }
   if (verdict === "error") {
+    if (failure === "evidence" || failure === "coverage") {
+      return {
+        label: "request-changes",
+        badge: `🚫 Review incomplete — ${failure === "evidence" ? "source evidence" : "coverage incomplete"}`,
+      };
+    }
     return { label: "request-changes", badge: "🚫 Review incomplete — provider error" };
   }
   return { label: "request-changes", badge: "⚠️ Changes requested" };

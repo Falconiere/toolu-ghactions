@@ -63,7 +63,10 @@ export function noiseReason(path: string, readBlob: ReadBlob, blobSize: BlobSize
     return "build-output";
   }
 
-  if (isGeneratedCode(path)) {
+  if (
+    isGeneratedCode(path) ||
+    /(?:^|\/)(?:drizzle|migrations)\/meta\/(?:\d+_snapshot|_journal)\.json$/.test(path)
+  ) {
     return "generated";
   }
 

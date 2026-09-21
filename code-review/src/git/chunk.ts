@@ -20,6 +20,19 @@ export interface FileSegment {
   lines: number;
 }
 
+/** Whether a primed file segment already contains every line of the given source. */
+export function containsFullFile(diff: string, content: string): boolean {
+  const visible = new Map<number, string>();
+  for (const line of diff.split("\n")) {
+    const match = /^L(\d+): [ +](.*)$/.exec(line);
+    if (match) visible.set(Number(match[1]), match[2] ?? "");
+  }
+  return content
+    .replace(/\n$/, "")
+    .split("\n")
+    .every((line, i) => visible.get(i + 1) === line);
+}
+
 /** Result of {@link packChunks}: chunks to review + files dropped by the cap. */
 export interface PackResult {
   /** Each chunk's segments, in path-sorted order; concat their `.diff` for the prompt. */

@@ -69,6 +69,29 @@ function scopeRound(
 }
 
 describe("resolveTreeScope — path spelling agreement with fetchDiff", () => {
+  it("recovers a missing reviewed tree from the old commit after a rewritten branch", () => {
+    const origin = baseRepo({ "src/a.ts": "zero\n", "src/b.ts": "zero\n" });
+    const reviewedTree = commitReturningTree(origin, { "src/a.ts": "one\n", "src/b.ts": "one\n" });
+    const reviewedSha = git(origin, "rev-parse", "HEAD").trim();
+    git(origin, "reset", "--hard", "main");
+    commitReturningTree(origin, { "src/a.ts": "one\n", "src/b.ts": "two\n" });
+    const runner = setupGitRepo();
+    repos.push(runner);
+    git(runner, "remote", "add", "origin", origin);
+    git(runner, "fetch", "--no-tags", "origin", "feature");
+    git(runner, "checkout", "--detach", "FETCH_HEAD");
+    const fetchHead = git(runner, "rev-parse", "FETCH_HEAD").trim();
+    expect(() => git(runner, "cat-file", "-e", reviewedTree)).toThrow();
+    const scope = resolveTreeScope({
+      prior: { ...priorWithTree(reviewedTree), reviewed_sha: reviewedSha },
+      mode: "incremental",
+      reviewHead: "HEAD",
+      cwd: runner,
+    });
+    expect([...(scope?.inScope ?? [])]).toEqual(["src/b.ts"]);
+    expect(git(runner, "rev-parse", "FETCH_HEAD").trim()).toBe(fetchHead);
+    expect(git(runner, "rev-parse", "HEAD").trim()).toBe(fetchHead);
+  });
   // Regression: `treeDiffPaths` read `git diff-tree -z` (raw bytes) while
   // `changed_files` came from a non-`-z` `git diff --name-only`, which C-quotes
   // any non-ASCII path under git's default core.quotepath. `日本語.txt` was

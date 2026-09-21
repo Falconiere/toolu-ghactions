@@ -55,6 +55,22 @@ export function objectExists(object: string, cwd: string): boolean {
   return gitOrNull(["cat-file", "-e", `${object}^{tree}`], cwd) !== null;
 }
 
+/** Recover an obsolete reviewed commit without moving the checkout or FETCH_HEAD.
+ * Missing/unadvertised objects are normal after a force-push: fail open, bounded. */
+export function recoverReviewedCommit(sha: string | undefined, cwd: string): void {
+  if (sha === undefined || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i.test(sha)) return;
+  try {
+    execFileSync("git", ["fetch", "--no-tags", "--no-write-fetch-head", "origin", sha], {
+      cwd,
+      stdio: "ignore",
+      timeout: 10_000,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    });
+  } catch {
+    // The caller rechecks the exact tree, preserving full review on failure.
+  }
+}
+
 /**
  * The paths differing between two TREE objects (`git diff-tree -r --name-only`),
  * or null when the command fails (the caller then fails open to a full review).

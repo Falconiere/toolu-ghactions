@@ -14,7 +14,7 @@
 // `reviewed`, `unreviewed` (attempted and failed, incl. the MAX_CHUNKS spill) or
 // `pending` (wall clock ran out before it was attempted) — so the coverage ledger
 // (review/ledger.ts) can account for the whole diff with no silent skips.
-import { splitDiffByFile, packGroups } from "@/git/chunk.js";
+import { splitDiffByFile, packGroups, containsFullFile } from "@/git/chunk.js";
 import type { FileSegment } from "@/git/chunk.js";
 import { groupRelatedSegments } from "@/git/relate.js";
 import { countLines } from "@/git/diff.js";
@@ -203,6 +203,9 @@ function contextFilesFor(
     if (seg.path === "") continue;
     const content = readFile(seg.path);
     if (content === null) continue;
+    // If every source line is already visible, attaching it again adds no
+    // context (especially expensive for newly added snapshots or large files).
+    if (containsFullFile(seg.diff, content)) continue;
     if (countLines(content) > MAX_CONTEXT_FILE_LINES) {
       process.stderr.write(
         `  Note: ${seg.path} exceeds ${MAX_CONTEXT_FILE_LINES} lines; ` +

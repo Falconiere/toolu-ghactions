@@ -407,7 +407,7 @@ describe("buildPrompt — prior review threads (accept-or-argue)", () => {
     expect(env.user).not.toContain("## Prior review threads");
   });
 
-  it("does NOT attach replies to resolved/explicit dismissals (no exception to inform)", () => {
+  it("preserves the corrective evidence for resolved and explicitly dismissed claims", () => {
     const env = buildPrompt({
       diff: sampleDiff(),
       checklistPath: CHECKLIST_PATH,
@@ -431,8 +431,8 @@ describe("buildPrompt — prior review threads (accept-or-argue)", () => {
     });
     expect(env.user).toContain("resolved concern");
     expect(env.user).toContain("explicitly dismissed concern");
-    expect(env.user).not.toContain("resolved rationale");
-    expect(env.user).not.toContain("explicit rationale");
+    expect(env.user).toContain("resolved rationale");
+    expect(env.user).toContain("explicit rationale");
   });
 
   it("sanitizes the dismissed finding text (injection cannot ride a resolved thread)", () => {

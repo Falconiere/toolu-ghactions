@@ -142,7 +142,7 @@ export interface ProviderResult {
    * retries, DNS/connection errors): an APICallError or a bare fetch failure, never
    * NoObjectGeneratedError.
    */
-  failure?: "schema" | "transport" | "timeout";
+  failure?: "schema" | "transport" | "timeout" | "evidence" | "coverage";
 }
 
 /**

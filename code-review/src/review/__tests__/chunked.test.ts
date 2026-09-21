@@ -54,6 +54,29 @@ function recordingEnvelope(calls: Array<{ paths: string[]; mech: string[] }>) {
 }
 
 describe("reviewChunked", () => {
+  it("does not duplicate a fully visible new file as oversized-file context", async () => {
+    const diff = diffWithFiles([{ path: "src/new.ts", lines: 30 }]);
+    const content =
+      Array.from({ length: 30 }, (_, n) => `export const src_new_ts_${n} = ${n}`).join("\n") + "\n";
+    const seen: DiffData[] = [];
+    await reviewChunked({
+      diff,
+      maxChunkLines: 10,
+      maxChunks: 0,
+      mechanical: [],
+      brief: null,
+      onCoverage: () => {},
+      buildEnvelope: (d) => {
+        seen.push(d);
+        return STUB_ENVELOPE;
+      },
+      review: async () => APPROVED,
+      readFile: () => content,
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.diff).toContain("src_new_ts_29");
+    expect(seen[0]?.context_files ?? []).toEqual([]);
+  });
   it("fast path: a within-budget diff is one review call", async () => {
     const diff = diffWithFiles([{ path: "src/a.ts", lines: 3 }]);
     let calls = 0;
@@ -204,6 +227,10 @@ describe("reviewChunked", () => {
       Array.from({ length: 20 }, (_, n) => `pub fn ${tag}${n}() {}`).join("\n");
     // A multi-line raw string whose closing delimiter sits far from its opener.
     const content = `${filler("a")}\nconst BODY: &str = r#"\n${filler("b")}\n"#;\n${filler("c")}\n`;
+    writeFile(dir, "tests/live_e2e.rs", content.replace("pub fn b0() {}", "pub fn previous() {}"));
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "base raw string", "--quiet");
+    git(dir, "branch", "-f", "main", "HEAD");
     writeFile(dir, "tests/live_e2e.rs", content);
     git(dir, "add", "-A");
     git(dir, "commit", "-m", "c", "--quiet");
