@@ -30629,11 +30629,11 @@ function readInputs() {
   const provider = resolveProviderId(getInput("PROVIDER"));
   const jevEnabled = readBool("JEV_ENABLED", false);
   const model = getInput("MODEL_ID").trim() || DEFAULT_MODEL;
-  warnBareModelId(model);
   const apiKey = getInput("API_KEY").trim();
   if (apiKey === "") {
     throw new Error(`API_KEY is required (the ${provider} API key).`);
   }
+  warnBareModelId(model);
   const maxTokens = validateTokenBudget(intInput("MAX_TOKENS", DEFAULT_MAX_TOKENS), "MAX_TOKENS");
   return {
     provider,

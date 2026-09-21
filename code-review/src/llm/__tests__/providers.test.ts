@@ -3,13 +3,11 @@
 // OpenRouter request shape (reasoning off, require_parameters, streaming) is proven in
 // request-shape.test.ts.
 import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_MODEL,
-  OPENROUTER_MODELS_URL,
-  PROVIDER_ID,
-  canonicalProviderId,
-  resolveModel,
-} from "@/llm/providers.js";
+// OPENROUTER_MODELS_URL is not asserted here: a test that restates the constant proves
+// nothing. It is pinned where it MATTERS — inputs.test.ts and evals/args.test.ts assert
+// the literal URL reaches the rejected-PROVIDER error and the bare-MODEL_ID warning, and
+// that neither message contains an id composed from the spelling the user typed.
+import { DEFAULT_MODEL, PROVIDER_ID, canonicalProviderId, resolveModel } from "@/llm/providers.js";
 
 describe("model factory", () => {
   it("exposes the default model id", () => {
@@ -26,13 +24,6 @@ describe("model factory", () => {
     for (const removed of ["deepseek", "minimax", "kimi", "moonshot", "openai", ""]) {
       expect(canonicalProviderId(removed)).toBeUndefined();
     }
-  });
-
-  it("points migration advice at the catalog rather than composing a model id", () => {
-    // The action cannot query OpenRouter from an input-validation path, and a vendor's
-    // namespace is not always its name (Kimi publishes under "moonshotai"), so every
-    // "that id is wrong" message names this URL instead of guessing an id.
-    expect(OPENROUTER_MODELS_URL).toBe("https://openrouter.ai/models");
   });
 
   it("builds an AI SDK model carrying the requested id", () => {

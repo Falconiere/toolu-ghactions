@@ -218,10 +218,10 @@ function readMinTriggerPermission(): "write" | "admin" {
 /**
  * Resolve and validate the PROVIDER input. Defaults to "openrouter" when omitted and
  * THROWS on every other value — including the native vendor backends this action used to
- * wire ("deepseek", "minimax", "kimi"/"moonshot"), whose models are reachable as
- * OpenRouter "<vendor>/<model>" ids. A workflow still pinned to one of them must fail
- * loud here, with the id to use, rather than silently sending that vendor's key to
- * OpenRouter for a 401 mid-review.
+ * wire ("deepseek", "minimax", "kimi"/"moonshot"), whose models are reachable through
+ * OpenRouter under the vendor's own namespace. A workflow still pinned to one of them
+ * must fail loud here, pointed at the catalog, rather than silently sending that vendor's
+ * key to OpenRouter for a 401 mid-review.
  */
 function resolveProviderId(raw: string): ProviderId {
   // Normalized once, here: the empty-default check and the error text both read it.
@@ -252,6 +252,12 @@ function resolveProviderId(raw: string): ProviderId {
  * and still fails at the model call if the id is genuinely wrong; the warning only names
  * the likely cause up front. It cannot throw: OpenRouter's catalog is the authority on
  * what it serves, and this action must not block a newly-added id shape.
+ *
+ * KNOWN GAP: shape-only. A NAMESPACED id that OpenRouter does not serve passes silently —
+ * including "kimi/<model>", which is exactly what this action's own error advised before
+ * the catalog rewrite. Closing that needs the hint attached to the model-call 400 instead,
+ * where every rejected id lands regardless of shape; this check stays because it is free
+ * and fires before a token is spent.
  */
 function warnBareModelId(model: string): void {
   if (!model.includes("/")) {
@@ -276,12 +282,15 @@ export function readInputs(): ActionInputs {
   const provider = resolveProviderId(core.getInput("PROVIDER"));
   const jevEnabled = readBool("JEV_ENABLED", false);
   const model = core.getInput("MODEL_ID").trim() || DEFAULT_MODEL;
-  warnBareModelId(model);
 
   const apiKey = core.getInput("API_KEY").trim();
   if (apiKey === "") {
     throw new Error(`API_KEY is required (the ${provider} API key).`);
   }
+  // AFTER the API_KEY guard: a run that is about to die on a missing key must not first
+  // post a ::warning annotation blaming MODEL_ID, which would outlive the throw on the
+  // run summary and point the reader at the wrong input.
+  warnBareModelId(model);
 
   // MAX_TOKENS must be a positive budget; MAX_TOKENS="0"/"-1" is a typo that would
   // 400 → silent abstain, so clamp it to the default with a warning.

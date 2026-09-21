@@ -101,6 +101,16 @@ describe("parseArgs", () => {
     expect(parseArgs(["--model", "  anthropic/claude-sonnet-4-5  "]).model).toBe(
       "anthropic/claude-sonnet-4-5",
     );
+    // The trim runs BEFORE parsePrRef, whose regex has no room for whitespace, so a
+    // padded --pr ref now parses instead of being rejected for its padding.
+    const padded = parseArgs(["--pr", "  acme/widgets#9  "]);
+    expect([padded.owner, padded.repo, padded.prNumber]).toEqual(["acme", "widgets", 9]);
+  });
+
+  it("reads a padded next flag as a missing value, not as this flag's value", () => {
+    // The next-flag guard runs on the TRIMMED value: " --pr" must not slip past it on a
+    // leading space and become the model id.
+    expect(() => parseArgs(["--model", " --pr"])).toThrow(/--model requires a value/);
   });
 
   it("resolves --provider case-insensitively and defaults --model to the action's own", () => {

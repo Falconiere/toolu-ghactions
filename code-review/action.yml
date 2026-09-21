@@ -14,7 +14,7 @@ branding:
 
 inputs:
   PROVIDER:
-    description: 'LLM backend. "openrouter" (the default) is the only supported value — any OpenAI-compatible model reachable through OpenRouter. The native vendor backends ("deepseek", "minimax", "kimi"/"moonshot") were REMOVED: route those models through OpenRouter with MODEL_ID:"<vendor>/<model>" instead. Any other value fails with an error.'
+    description: 'LLM backend. "openrouter" (the default) is the only supported value — any OpenAI-compatible model reachable through OpenRouter. The native vendor backends ("deepseek", "minimax", "kimi"/"moonshot") were REMOVED: route those models through OpenRouter by putting the model''s OpenRouter id in MODEL_ID — look it up at https://openrouter.ai/models, since a vendor''s OpenRouter namespace is not always its name (Kimi publishes under "moonshotai"). Any other value fails with an error.'
     required: false
     default: 'openrouter'
   MODEL_ID:
