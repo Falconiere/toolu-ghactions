@@ -5,7 +5,7 @@
 # bundled Node runtime for node-type actions.
 #
 # Inputs arrive as INPUT_* environment variables set on the invoking step (the
-# composite maps them explicitly), so none are declared here; the three outputs
+# composite maps them explicitly, including JEV_ENABLED and JEV_MODEL_ID), so none are declared here; the three outputs
 # ARE declared so the composite's `steps.review.outputs.*` mapping resolves.
 name: 'Toolu Code Review — run (internal)'
 description: 'Internal node entry for the Toolu code-review composite. Use the parent action, not this one.'

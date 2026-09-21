@@ -259,3 +259,23 @@ describe("provider contract (PROVIDER / MODEL_ID / API_KEY)", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 });
+
+describe("Jev opt-in", () => {
+  it("defaults off with a pinned OpenRouter model", () => {
+    expect(readInputs()).toMatchObject({ jevEnabled: false, jevModel: "typesafe/jev-1.13" });
+  });
+  it("reuses API_KEY and accepts a model override", () => {
+    setInput("JEV_ENABLED", "true");
+    setInput("JEV_MODEL_ID", "typesafe/jev-1.13");
+    expect(readInputs()).toMatchObject({
+      jevEnabled: true,
+      apiKey: "sk-test",
+      jevModel: "typesafe/jev-1.13",
+    });
+  });
+  it("rejects explicitly enabled native providers", () => {
+    setInput("JEV_ENABLED", "true");
+    setInput("PROVIDER", "deepseek");
+    expect(() => readInputs()).toThrow(/Unsupported PROVIDER/);
+  });
+});

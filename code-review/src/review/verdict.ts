@@ -1,3 +1,4 @@
+import { enhancementNote } from "@/jev/enhance.js";
 // review/verdict.ts — render the markdown verdict comment and its label. Port of
 // format-verdict.sh: maps the verdict to its PR label + badge, assembles the body
 // (via render.ts), and enforces GitHub's comment-size ceiling by shrinking the
@@ -106,6 +107,7 @@ export function formatVerdict(
   const marker = opts.historyMarker ?? "";
 
   const body: ReviewBody = {
+    enhancementNote: result.enhancement ? enhancementNote(result.enhancement) : "",
     verdictLabel: `\`${label}\``,
     verdictBadge: badge,
     // Surface the real error + the model's finish_reason when present, so a parse

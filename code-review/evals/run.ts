@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { compareJev } from "./compare.js";
 // evals/run.ts — the eval harness entry point (AC-16, spec §Eval harness). Run
 // with `bun evals/run.ts --help` (or `bun run eval -- --help`) — exits 0 with
 // no env/key/network. A live run calls the SAME `runReview()` (src/pipeline.ts)
@@ -226,6 +227,13 @@ async function main(argv: readonly string[]): Promise<number> {
   }
 
   try {
+    if (args.compareJev) {
+      const comparison = await compareJev(args, apiKey);
+      const rendered = JSON.stringify(comparison, null, 2) + "\n";
+      process.stdout.write(rendered);
+      if (args.out !== null) writeFileSync(args.out, rendered);
+      return 0;
+    }
     const scorecard = await runLive(args, apiKey);
     process.stdout.write(`\n${renderTable(scorecard)}`);
     if (args.out !== null) {

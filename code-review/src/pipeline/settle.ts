@@ -103,7 +103,8 @@ export function settleVerdict(
     suppressed.length +
     scoped.dropped.length +
     input.selfNegating +
-    (input.settledBeforeValidation ?? 0);
+    (input.settledBeforeValidation ?? 0) +
+    (input.result.enhancement?.dismissed ?? 0);
   if (verdict === "changes" && findings.length === 0 && removed > 0) {
     // Every concrete finding was either settled on its thread (resolved or
     // dismissed by the author), out of the incremental scope, or dropped as

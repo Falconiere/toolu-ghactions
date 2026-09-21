@@ -150,6 +150,7 @@ function settle(opts: {
   priorFindings?: StoredFinding[];
   /** Count `validateFindings` dropped as self-negating (default 0). */
   selfNegating?: number;
+  jevDismissed?: number;
 }) {
   const ledger = ledgerOf(opts.reviewed, opts.unreviewed, opts.carried ?? []);
   const prior: ReviewState = {
@@ -179,7 +180,21 @@ function settle(opts: {
       truncated: false,
       base_sha: "base123",
     },
-    result: { verdict: opts.resultVerdict ?? "changes", findings: opts.findings },
+    result: {
+      verdict: opts.resultVerdict ?? "changes",
+      findings: opts.findings,
+      enhancement: {
+        assessed: 1,
+        rechecked: 1,
+        dismissed: opts.jevDismissed ?? 0,
+        additionalReviews: 0,
+        unavailable: 0,
+        skipped: 0,
+        calls: 2,
+        elapsedMs: 1,
+        assessments: [],
+      },
+    },
     stamped: opts.findings,
     selfNegating: opts.selfNegating ?? 0,
     priorThreads: [],
@@ -441,4 +456,51 @@ describe("settleVerdict — the self-negation flip (AC-8)", () => {
     expect(settled.verdict).toBe("error");
     expect(settled.validated.error).toContain("1 file(s) were not reviewed this run");
   });
+});
+
+describe("Jev dismissal accounting", () => {
+  it("clears stale changes only after confirmed dismissal, preserving coverage degradation", () => {
+    const opts = {
+      findings: [],
+      reviewed: ["src/a.ts"],
+      unreviewed: [],
+      maxRounds: 0,
+      priorRounds: 0,
+      jevDismissed: 1,
+    };
+    expect(settle(opts).verdict).toBe("approved");
+    expect(settle({ ...opts, jevDismissed: 0 }).verdict).toBe("changes");
+    expect(settle({ ...opts, unreviewed: ["src/b.ts"] }).verdict).toBe("error");
+  });
+});
+
+it("Jev dismissal accounting does not clear scanner or carried findings", () => {
+  const scanner = {
+    ...stamp("src/scan.ts", "high", "Scanner evidence remains."),
+    source: "opengrep" as const,
+  };
+  expect(
+    settle({
+      findings: [scanner],
+      reviewed: ["src/scan.ts"],
+      unreviewed: [],
+      maxRounds: 0,
+      priorRounds: 0,
+      jevDismissed: 1,
+    }).verdict,
+  ).toBe("changes");
+  const historical = stamp("src/carried.ts", "high", "Historical defect remains.");
+  const out = settle({
+    findings: [],
+    reviewed: ["src/new.ts"],
+    unreviewed: [],
+    carried: ["src/carried.ts"],
+    priorFindings: [historical],
+    maxRounds: 0,
+    priorRounds: 1,
+    resultVerdict: "changes",
+    jevDismissed: 1,
+  });
+  expect(out.findings.map((f) => f.fp)).toContain(historical.fp);
+  expect(out.verdict).toBe("changes");
 });

@@ -31,6 +31,10 @@ export interface ActionInputs {
   model: string;
   /** OpenRouter API key (Authorization: Bearer); required, validated non-empty. */
   apiKey: string;
+  /** Optional OpenRouter-only assessments; omitted means disabled. */
+  jevEnabled?: boolean;
+  /** Pinned System One model, independent of the generative reviewer. */
+  jevModel?: string;
   /** Max completion tokens per request. */
   maxTokens: number;
   /** Confidence floor for keeping findings. */
@@ -240,6 +244,7 @@ function resolveProviderId(raw: string): ProviderId {
  */
 export function readInputs(): ActionInputs {
   const provider = resolveProviderId(core.getInput("PROVIDER"));
+  const jevEnabled = readBool("JEV_ENABLED", false);
   const model = core.getInput("MODEL_ID").trim() || DEFAULT_MODEL;
 
   const apiKey = core.getInput("API_KEY").trim();
@@ -255,6 +260,8 @@ export function readInputs(): ActionInputs {
     provider,
     model,
     apiKey,
+    jevEnabled,
+    jevModel: core.getInput("JEV_MODEL_ID").trim() || "typesafe/jev-1.13",
     maxTokens,
     // The single-model path always enforces the JSON schema; no longer an input.
     enforceJsonSchema: true,

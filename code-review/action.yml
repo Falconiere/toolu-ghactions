@@ -23,6 +23,14 @@ inputs:
   API_KEY:
     description: 'OpenRouter API key (Authorization: Bearer). Required. Prefer passing via a step-level env: block for better secret hygiene.'
     required: true
+  JEV_ENABLED:
+    description: 'Opt in to Jev finding assessment and risk routing. Requires PROVIDER=openrouter; reuses API_KEY and the shared review deadline.'
+    required: false
+    default: 'false'
+  JEV_MODEL_ID:
+    description: 'OpenRouter System One model for optional assessments.'
+    required: false
+    default: 'typesafe/jev-1.13'
   MAX_TOKENS:
     description: 'Max completion tokens per request. Always sent — omitting it makes the provider reserve the model''s full output capacity against your credit budget. A truncated (finish_reason "length") chunk is retried with a DOUBLED budget, up to 4 times and never past the 131072 ceiling (8192 -> 16384 -> 32768 -> 65536 -> 131072); those escalations are counted separately from the hang/timeout retries, so neither eats the other. When the budget still runs out, the findings completed before the cut are kept (a partial review) instead of the chunk being lost, and the comment says whether raising this value or lowering MAX_CHUNK_LINES is the fix.'
     required: false
@@ -256,6 +264,8 @@ runs:
         # process.env.INPUT_* directly (@actions/core.getInput), so the composite
         # maps each of its inputs onto the step's env explicitly.
         INPUT_PROVIDER: ${{ inputs.PROVIDER }}
+        INPUT_JEV_ENABLED: ${{ inputs.JEV_ENABLED }}
+        INPUT_JEV_MODEL_ID: ${{ inputs.JEV_MODEL_ID }}
         INPUT_MODEL_ID: ${{ inputs.MODEL_ID }}
         INPUT_API_KEY: ${{ inputs.API_KEY }}
         INPUT_MAX_TOKENS: ${{ inputs.MAX_TOKENS }}
