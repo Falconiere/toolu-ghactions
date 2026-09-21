@@ -36,28 +36,15 @@ export function canonicalProviderId(raw: string): ProviderId | undefined {
 }
 
 /**
- * Vendor spellings whose OpenRouter AUTHOR SLUG differs from the spelling itself.
- * Kimi's models are published under Moonshot AI's slug ("moonshotai/kimi-k2"), so a
- * workflow migrating off PROVIDER:"kimi"/"moonshot" must be pointed at
- * "moonshotai/<model>" — "kimi/<model>" is not an id OpenRouter serves, and an error
- * that suggested it would send the reader straight into a 400.
+ * Where a reader looks up the OpenRouter id for a model. Quoted in every "that PROVIDER
+ * is gone / that MODEL_ID is not namespaced" message instead of a COMPOSED id: a vendor's
+ * OpenRouter namespace is not always its name (Kimi publishes under "moonshotai/", not
+ * "kimi/"), the catalog is external and changes continuously, and this action cannot
+ * query it from an input-validation path that must not touch the network. Advice built by
+ * interpolating the spelling the user typed is how `MODEL_ID:"kimi/<model>"` shipped — a
+ * suggestion that 400s. Point at the catalog; never guess an id.
  */
-const OPENROUTER_NAMESPACE: ReadonlyMap<string, string> = new Map([
-  ["kimi", "moonshotai"],
-  ["moonshot", "moonshotai"],
-]);
-
-/**
- * The OpenRouter model-id namespace to suggest for a REJECTED provider spelling: the
- * vendor's author slug on OpenRouter, which is not always the spelling itself (see
- * {@link OPENROUTER_NAMESPACE}). Trimmed and lowercased, because OpenRouter ids are.
- * The one place the "PROVIDER x is gone, use MODEL_ID y" advice is composed, shared by
- * the action inputs and the eval CLI so the two never suggest different ids.
- */
-export function openRouterNamespaceFor(rawProvider: string): string {
-  const p = rawProvider.trim().toLowerCase();
-  return OPENROUTER_NAMESPACE.get(p) ?? p;
-}
+export const OPENROUTER_MODELS_URL = "https://openrouter.ai/models";
 
 /**
  * OpenRouter request-body extras, forwarded verbatim on every call.

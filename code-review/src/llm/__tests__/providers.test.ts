@@ -5,9 +5,9 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_MODEL,
+  OPENROUTER_MODELS_URL,
   PROVIDER_ID,
   canonicalProviderId,
-  openRouterNamespaceFor,
   resolveModel,
 } from "@/llm/providers.js";
 
@@ -28,16 +28,11 @@ describe("model factory", () => {
     }
   });
 
-  it("maps a rejected spelling to the vendor's OpenRouter author slug, not the spelling", () => {
-    // Kimi's models are published under Moonshot AI's slug, so the migration advice must
-    // say "moonshotai/kimi-k2" — "kimi/…" and "moonshot/…" are not ids OpenRouter serves.
-    expect(openRouterNamespaceFor("kimi")).toBe("moonshotai");
-    expect(openRouterNamespaceFor("  MoonShot ")).toBe("moonshotai");
-    // Everything else already spells its own slug; the result is still normalized,
-    // because OpenRouter ids are lowercase.
-    expect(openRouterNamespaceFor("deepseek")).toBe("deepseek");
-    expect(openRouterNamespaceFor("MiniMax")).toBe("minimax");
-    expect(openRouterNamespaceFor("anthropic")).toBe("anthropic");
+  it("points migration advice at the catalog rather than composing a model id", () => {
+    // The action cannot query OpenRouter from an input-validation path, and a vendor's
+    // namespace is not always its name (Kimi publishes under "moonshotai"), so every
+    // "that id is wrong" message names this URL instead of guessing an id.
+    expect(OPENROUTER_MODELS_URL).toBe("https://openrouter.ai/models");
   });
 
   it("builds an AI SDK model carrying the requested id", () => {

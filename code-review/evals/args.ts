@@ -4,9 +4,9 @@
 // tests never need a key, gh, or a network.
 import {
   DEFAULT_MODEL,
+  OPENROUTER_MODELS_URL,
   PROVIDER_ID,
   canonicalProviderId,
-  openRouterNamespaceFor,
   type ProviderId,
 } from "@/llm/providers.js";
 
@@ -84,15 +84,17 @@ Example:
 /** Read the next argv slot as a flag's value, or throw a clear ArgError. A
  *  value starting with "--" is treated as the NEXT flag, not this one's value
  *  (so `--pr --provider openrouter` reports `--pr` as missing its value instead
- *  of silently swallowing "--provider" as the PR ref). An EMPTY value is missing
- *  too: `--model ""` used to slip through and send an empty model id to
- *  OpenRouter for a 400 mid-run, instead of failing here with the flag named. */
+ *  of silently swallowing "--provider" as the PR ref). A BLANK value is missing
+ *  too — empty or whitespace-only: `--model ""` (or `--model "  "`) used to slip
+ *  through and send a blank model id to OpenRouter for a 400 mid-run, instead of
+ *  failing here with the flag named. The trimmed value is what's returned, so no
+ *  caller has to trim again. */
 function requireValue(argv: readonly string[], index: number, flag: string): string {
   const value = argv[index];
-  if (value === undefined || value === "" || value.startsWith("--")) {
+  if (value === undefined || value.startsWith("--") || value.trim() === "") {
     throw new ArgError(`${flag} requires a value.`);
   }
-  return value;
+  return value.trim();
 }
 
 /** Read the next argv slot as a non-negative integer, or throw a clear
@@ -149,10 +151,13 @@ export function parseArgs(argv: readonly string[]): EvalArgs {
         const raw = requireValue(argv, ++i, "--provider");
         const id = canonicalProviderId(raw);
         if (id === undefined) {
+          // Names the CATALOG, never a composed id — same reason as inputs.ts: a
+          // vendor's OpenRouter namespace is not always its name, so interpolating the
+          // spelling the user typed suggests ids OpenRouter does not serve.
           throw new ArgError(
             `--provider "${raw}" is not supported (${PROVIDER_ID}). ` +
-              `Route a vendor's models through OpenRouter with ` +
-              `--model "${openRouterNamespaceFor(raw)}/<model>".`,
+              `Route a vendor's models through OpenRouter with --model <id>, ` +
+              `looked up at ${OPENROUTER_MODELS_URL}.`,
           );
         }
         provider = id;
