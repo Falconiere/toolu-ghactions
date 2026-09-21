@@ -120,3 +120,17 @@ describe("usage", () => {
     expect(text).toContain("API_KEY");
   });
 });
+
+it("paired Jev evaluation rejects native providers", () => {
+  expect(() => parseArgs(["--compare-jev", "--provider", "deepseek"])).toThrow(
+    /Unsupported provider/i,
+  );
+});
+
+it("enables paired evaluation with pinned revision overrides", () => {
+  expect(parseArgs(["--compare-jev", "--head-sha", "abc", "--base-sha", "def"])).toMatchObject({
+    compareJev: true,
+    headSha: "abc",
+    baseSha: "def",
+  });
+});

@@ -27,6 +27,8 @@ const TOP_MUST_FIX_MAX = 3;
 export interface ReviewBody {
   /** Resolved verdict label markdown, e.g. "`merge-approved`". */
   verdictLabel: string;
+  /** Deterministic optional-enhancement counts. */
+  enhancementNote?: string;
   /** Verdict badge text, e.g. "✅ Approved". */
   verdictBadge: string;
   /** Provider error detail shown under the verdict when the review errored ("" → omit). */
@@ -112,6 +114,7 @@ export function renderBody(body: ReviewBody, findingsSection: string): string {
   // The MAX_ROUNDS surrender is a verdict override — say so right under the verdict
   // so an auto-approved round is never mistaken for a clean review.
   if (body.capNote !== "") main += `\n\n> 🔁 **Round cap:** ${body.capNote}`;
+  if (body.enhancementNote) main += `\n\n${body.enhancementNote}`;
   parts.push(main);
 
   if (body.recap !== "") parts.push(`\n${body.recap}\n`);

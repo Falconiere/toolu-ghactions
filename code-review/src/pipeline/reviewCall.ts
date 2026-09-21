@@ -1,31 +1,17 @@
-// pipeline/reviewCall.ts — the model-facing phase of a review run: gather the
-// trusted context (project rules, deterministic SARIF findings, the bot's prior
-// threads), run the four review layers, then validate + fingerprint-stamp the
-// findings. Split out of pipeline.ts so the orchestrator stays lean.
-//
-// LAYER ORDER (spec §Architecture), all wired here:
-//   0. distill()  — deterministic, zero-token: strata, pattern groups, and a
-//      SHRUNK review diff (src/git/distill.ts). Runs BEFORE any model call.
-//   1. mapPr()    — one small, fail-open cartographer call over the MANIFEST
-//      (never diff text) yielding the shared brief (src/review/cartographer.ts).
-//      It goes through reviewWithModel's RAW-JSON mode: the brief does not fit the
-//      Verdict schema (whose `other_checks` caps at 600 chars) and enforcing it
-//      would silently truncate the brief away.
-//   2. reviewChunked() — bounded package reviewers, packaged from the brief's
-//      hints (src/pipeline/packages.ts) with the module-coupling fallback.
-// Every path either layer touched lands in the coverage ledger (spec §Coverage
-// ledger), which is this phase's other output: publish() renders it, degrades a
-// would-be approval from it, and carries findings forward on it.
+// Baseline package review and validation, followed by optional deadline-bounded Jev work.
+import { enhance, enhancementNote } from "@/jev/enhance.js";
+import { capturePackages } from "@/jev/packages.js";
 import { gatherRules } from "@/rules.js";
 import { buildPrompt } from "@/prompt.js";
-import type { PriorThreadContext } from "@/prompt.js";
+import { buildThreadContexts } from "./threadContext.js";
+export { buildThreadContexts, cleanFindingBody } from "./threadContext.js";
 import { gatherMechanical } from "@/mechanical/gather.js";
 import type { MechanicalFinding } from "@/mechanical/sarif.js";
 import { reviewWithModel } from "@/llm/reviewWithModel.js";
 import type { ProviderResult, ReviewOptions } from "@/llm/reviewWithModel.js";
 import type { Finding } from "@/llm/schema.js";
 import { reviewChunked } from "@/review/chunked.js";
-import { validateFindings } from "@/review/validate.js";
+import { validate } from "./validate.js";
 import { distill, type Distillation } from "@/git/distill.js";
 import { mapPr, type Brief } from "@/review/cartographer.js";
 import { buildRoundLedger, type CoverageEntry, type CoverageLedger } from "@/review/ledger.js";
@@ -45,14 +31,7 @@ import { clusterFindings } from "@/review/cluster.js";
 /** A validated finding with its state fingerprint attached. */
 export type StampedFinding = Finding & { fp: string };
 
-/**
- * Path globs whose changed files make the BASE-ref project rules stale — the
- * tiers `gatherRules` reads (src/rules.ts), expressed as globs. `*` matches any
- * run INCLUDING `/` (git/globs.ts), so `*CLAUDE.md` covers both the root file and
- * every nested one. Used ONLY to compute `rules_changed` for the trusted
- * rules-changed notice; the user's own RULES_GLOB is appended by
- * {@link rulesPathGlobs}.
- */
+/** Built-in rule paths used to detect a potentially stale base-ref convention. */
 const RULES_PATH_GLOBS: readonly string[] = [
   "*CLAUDE.md",
   "*AGENTS.md",
@@ -106,39 +85,7 @@ export interface ReviewCallOutput {
   brief: Brief | null;
 }
 
-/**
- * Map the bot's prior threads to the prompt's context block: accept-or-argue for
- * still-live threads, DISMISSED (settled, do not re-raise or reword) for those the
- * author resolved on GitHub or dismissed in a reply (see review/dismissal.ts).
- */
-export function buildThreadContexts(priorThreads: PriorThread[]): PriorThreadContext[] {
-  return priorThreads.map((t) => ({
-    path: t.path,
-    line: t.line,
-    finding: cleanFindingBody(t.rootBody),
-    replies: t.replies,
-    resolved: t.isResolved,
-    ...(t.dismissal !== undefined ? { dismissal: t.dismissal } : {}),
-  }));
-}
-
-/** Strip the hidden fp marker and any ```suggestion block from a stored finding body,
- *  leaving the human-readable finding text for the accept-or-argue prompt block. */
-export function cleanFindingBody(body: string): string {
-  return body
-    .replace(/<!-- toolu-fp:[0-9a-f]+ -->/g, "")
-    .replace(/```suggestion[\s\S]*?```/g, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-/**
- * Run the model review for the diff (chunking when it exceeds the per-chunk
- * budget — see review/chunked.ts), then validate findings against the diff's
- * changed lines (anti-hallucination, confidence gate, suggestion strip, dedup)
- * and stamp each survivor with its state fingerprint. On an error abstain the
- * validation runs over the (empty) findings — the flow stays uniform.
- */
+/** Review and validate the complete baseline before optional enhancement work. */
 export async function reviewAndValidate(input: ReviewCallInput): Promise<ReviewCallOutput> {
   const { inputs, diff, event, cwd, reviewHead } = input;
 
@@ -194,6 +141,7 @@ export async function reviewAndValidate(input: ReviewCallInput): Promise<ReviewC
   // Layer 2 — bounded package reviewers over the shrunk diff.
   const coverage = new Map<string, CoverageEntry>();
   const repositoryContext = createRepositoryContext(reviewHead, cwd);
+  const captured = capturePackages(inputs.jevEnabled === true);
   const result: ProviderResult = await reviewChunked({
     diff: distillation.review_diff,
     maxChunkLines: inputs.maxChunkLines,
@@ -203,32 +151,35 @@ export async function reviewAndValidate(input: ReviewCallInput): Promise<ReviewC
     onCoverage: (path, entry) => coverage.set(path, entry),
     wallDeadline: input.wallDeadline,
     groupSegments: (segments) => groupByBrief(segments, brief, inputs.maxChunkLines),
-    buildEnvelope: (subDiff, chunkMechanical, chunkBrief) =>
-      buildPrompt({
-        diff: subDiff,
-        repositoryContext: repositoryContext(subDiff.changed_files, subDiff.diff),
-        checklistPath: resolveChecklistPath(),
-        maxTokens: inputs.maxTokens,
-        enforceJsonSchema: inputs.enforceJsonSchema,
-        reviewPromptFile: inputs.reviewPromptFile,
-        codebaseOverview: inputs.codebaseOverview,
-        reviewInstruction: event.instruction ?? "",
+    buildEnvelope: (subDiff, chunkMechanical, chunkBrief) => {
+      const context = repositoryContext(subDiff.changed_files, subDiff.diff);
+      return captured.capture(
+        buildPrompt({
+          diff: subDiff,
+          repositoryContext: context,
+          checklistPath: resolveChecklistPath(),
+          maxTokens: inputs.maxTokens,
+          enforceJsonSchema: inputs.enforceJsonSchema,
+          reviewPromptFile: inputs.reviewPromptFile,
+          codebaseOverview: inputs.codebaseOverview,
+          reviewInstruction: event.instruction ?? "",
+          projectRules,
+          githubWorkspace: cwd,
+          mechanicalFindings: chunkMechanical,
+          priorThreads: priorThreadContexts,
+          ...(chunkBrief !== null ? { brief: chunkBrief } : {}),
+          rulesChanged: distillation.rules_changed,
+        }),
+        subDiff,
+        context,
         projectRules,
-        githubWorkspace: cwd,
-        mechanicalFindings: chunkMechanical,
-        priorThreads: priorThreadContexts,
-        ...(chunkBrief !== null ? { brief: chunkBrief } : {}),
-        rulesChanged: distillation.rules_changed,
-      }),
-    review: (envelope) => reviewWithModel(envelope, modelOptions(input)),
+      );
+    },
+    review: (envelope) => captured.review(envelope, (e) => reviewWithModel(e, modelOptions(input))),
     readFile: readFileAt(reviewHead, cwd),
   });
 
-  // Findings are validated against the SHRUNK diff: a finding on a path the model
-  // never saw (a collapsed pattern member, a dropped stratum) is a hallucination
-  // by construction — pattern findings are reported once, on the exemplar.
-  // A dismissed claim is not a new review obligation. Remove it before its
-  // stale quote can condemn coverage; unresolved candidates still face the gate.
+  // Suppress settled claims before validating against the exact reviewed diff.
   const clusters = clusterFindings(
     result.findings.map((f) => ({ ...f, fp: fingerprint(f) })),
     input.priorClusters,
@@ -265,9 +216,7 @@ export async function reviewAndValidate(input: ReviewCallInput): Promise<ReviewC
   for (const path of condemned) {
     coverage.set(path, { status: "unreviewed", reason: "unsupported-source-evidence" });
   }
-  // Keyed on `condemned`, not on every rejection: the sentence claims files remain
-  // unreviewed, so it must only appear when some file actually does. A rejection on a
-  // path that kept its coverage is recorded by validateFindings' own log line.
+  // Report incomplete evidence only for paths with no surviving finding.
   if (condemned.length > 0) {
     const evidenceError =
       "Review findings lacked valid source evidence; affected files remain unreviewed.";
@@ -276,13 +225,37 @@ export async function reviewAndValidate(input: ReviewCallInput): Promise<ReviewC
     result.partial = true;
     if (stamped.length === 0) result.verdict = "error";
   }
+  const ledger = roundLedger(input, distillation, coverage);
+  const enhanced = await enhance({
+    enabled: inputs.jevEnabled === true,
+    model: inputs.jevModel ?? "typesafe/jev-1.13",
+    options: modelOptions(input),
+    packages: captured.completed(),
+    findings: stamped,
+    diff: distillation.review_diff,
+    minConfidence: inputs.minConfidence,
+    complete:
+      result.verdict !== "error" &&
+      !result.partial &&
+      !diff.truncated &&
+      Object.values(ledger.entries).every(
+        (entry) => entry.status !== "unreviewed" && entry.status !== "pending",
+      ),
+  });
+  if (enhanced.changesRequested && result.verdict === "approved") result.verdict = "changes";
+  if (enhanced.summary) {
+    result.enhancement = enhanced.summary;
+    process.stdout.write(`  ${enhancementNote(enhanced.summary)}\n`);
+    for (const metadata of enhanced.summary.assessments)
+      process.stdout.write(`  Jev metadata: ${JSON.stringify(metadata)}\n`);
+  }
   return {
     result,
-    stamped,
+    stamped: enhanced.findings,
     selfNegating,
     settledBeforeValidation,
     mechanical,
-    ledger: roundLedger(input, distillation, coverage),
+    ledger,
     brief,
   };
 }
@@ -322,35 +295,4 @@ function modelOptions(input: ReviewCallInput): ReviewOptions {
 function rulesPathGlobs(inputs: ActionInputs): string[] {
   if (!inputs.checkProjectRules) return [];
   return [...RULES_PATH_GLOBS, ...splitGlobs(inputs.rulesGlob)];
-}
-
-/** Validate findings against the diff's changed lines and stamp fingerprints;
- *  also surfaces the self-negation drop count for {@link reviewAndValidate} to
- *  carry forward (settleVerdict's `removed` — see {@link ReviewCallOutput}). */
-function validate(
-  result: ProviderResult,
-  diff: DiffData,
-  inputs: ActionInputs,
-): { stamped: StampedFinding[]; selfNegating: number; unsupportedPaths: string[] } {
-  const changedLinesByPath = new Map<string, number[]>(
-    diff.files.map((f) => [f.path, f.changed_lines]),
-  );
-  const lineTextByPath = new Map<string, Map<number, string>>(
-    diff.files.map((f) => [
-      f.path,
-      new Map(Object.entries(f.line_text).map(([n, text]) => [Number(n), text])),
-    ]),
-  );
-  const anchored = validateFindings(
-    result.findings,
-    changedLinesByPath,
-    inputs.minConfidence,
-    lineTextByPath,
-    { requireQuote: true },
-  );
-  return {
-    stamped: anchored.findings.map((f) => ({ ...f, fp: fingerprint(f) })),
-    selfNegating: anchored.selfNegating,
-    unsupportedPaths: anchored.unsupportedPaths,
-  };
 }

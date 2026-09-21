@@ -18,6 +18,83 @@ Audits the diff against an 8-dimension checklist — correctness, security, perf
 
 ---
 
+## Optional Jev assessments (OpenRouter only)
+
+Set `JEV_ENABLED: 'true'` with `PROVIDER: openrouter`. Jev reuses `API_KEY`;
+`JEV_MODEL_ID` defaults to `typesafe/jev-1.13`. The generative reviewer still uses
+`MODEL_ID`. Enabling Jev with a native provider fails input validation.
+
+```yaml
+with:
+  PROVIDER: openrouter
+  API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+  JEV_ENABLED: 'true'
+  JEV_MODEL_ID: typesafe/jev-1.13
+```
+
+Requests use [OpenRouter's System One endpoint](https://openrouter.ai/docs/guides/community/typesafe-sdk),
+never a direct TypeSafe API or separate credential. Baseline package review and
+source validation finish first. Incomplete baseline coverage skips enhancements.
+Every enhancement request, retry and recheck shares the original `MAX_WALL_MS`
+deadline. Runtime defaults, package cap, concurrency and resume behavior remain unchanged.
+
+Jev assesses fresh LLM findings as supported, contradicted or insufficient evidence.
+A challenge alone cannot remove a finding: the configured generative reviewer must
+explicitly dismiss its exact identity with an explanation and a quote verified against
+supplied source. Missing/invalid answers, uncertainty, failures and expired deadlines
+retain baseline findings. Scanner findings and carried historical findings cannot be
+automatically dismissed. Revised/additional findings undergo the normal quote,
+anchor, confidence, suggestion and deduplication checks.
+
+After rechecks, at most two packages classified high risk with confidence ≥0.8 receive
+one additional generative review each. Candidates are ordered by high-risk probability,
+then original package order. This is an initial routing threshold, not an accuracy guarantee.
+No enhancement recursively starts another pass or claims additional baseline coverage.
+
+Evidence is captured from the exact reviewed tree: package diff, bounded nearby
+source/tests and the same project rules as the baseline. Repository text is evidence,
+never instructions. Independent questions are batched; oversized question sets are
+split without truncating evidence. Requests use bounded byte estimates (90k state-plus-question / 180k total bytes)
+for Jev's documented 32k / 64k token limits. Tokenization varies: oversized evidence
+or a server context-limit rejection is reported unavailable, never retried with
+truncated source. The comment summarizes completed,
+unavailable and skipped work; logs record resolved Jev model, returned usage/cost and
+timing, without source or credentials.
+
+### Prompt efficiency and evaluation
+
+The default checklist keeps eight dimensions and source-grounding rules in under
+4,400 UTF-8 bytes. It requests empty `other_checks` and `top_must_fix` because those
+fields are discarded or derived from validated findings. Package prompts retain a
+cache-friendly shared prefix; source is bounded and duplicate full-file context is
+omitted. The manifest-only cartographer cannot establish runtime behavior. Focused
+rechecks send one finding identity and essential claim fields; extra reviews receive
+only existing findings in their package. Custom `REVIEW_PROMPT_FILE` content remains
+user-controlled and is not covered by the default-checklist size budget.
+
+Run a paired comparison on a real PR without posting to GitHub:
+
+```bash
+cd code-review
+API_KEY=... bun evals/run.ts --compare-jev --pr owner/repo#123 \
+  --model deepseek/deepseek-v4-flash --max-wall-ms 600000 --out comparison.json
+```
+
+`--base-sha` and `--head-sha` pin historical revisions. Both variants use the same
+real Git tree, including unchanged supporting files. Baseline responses are replayed
+with their measured request latency for the enhanced variant, preserving its budget.
+Incomplete baseline coverage skips the paired enhanced run.
+The report includes exact revisions, coverage, findings, model calls, returned usage,
+cost and runtime. Replayed baseline calls incur no second API charge; measured enhanced
+wall time includes their replayed latency.
+
+`--expectations labels.json` accepts `[{"path":"src/file.ts","text":"distinctive claim",
+"expected":"defect"}]` (or `false_positive`). Matching is deterministic by path and
+case-insensitive text substring. Unmatched findings are explicitly unclassified and
+need human adjudication. Use representative known false positives and cross-file defects
+to evaluate routing and prompt changes; fewer tokens or fewer findings alone do not
+establish better review quality. Run `bun test evals/__tests__` for harness tests.
+
 ## Quick start
 
 Add an OpenRouter API key to your repo secrets, then drop this into `.github/workflows/code-review.yml`:

@@ -196,7 +196,7 @@ export function buildPrompt(opts: PromptOptions): Envelope {
     user +=
       "\n\n## Renamed Files (each is a MOVE — the diff shows `rename from`/`rename to` " +
       "plus only the real edits. NOT a deletion plus a brand-new file: the target path " +
-      "exists, its content carried over, and its imports resolve)\n" +
+      "exists and its content carried over; verify affected imports from source)\n" +
       renames.map((r) => `- ${r.from} → ${r.to}`).join("\n");
   }
 
@@ -218,7 +218,10 @@ export function buildPrompt(opts: PromptOptions): Envelope {
 
   user += renderRulesChangedNotice(opts.rulesChanged ?? []);
 
-  user += `\n\n## Diff\n\`\`\`diff\n${diffText}\n\`\`\``;
+  const diffFence = "`".repeat(
+    Math.max(3, ...(diffText.match(/`+/g) ?? []).map((run) => run.length + 1)),
+  );
+  user += `\n\n## Diff\n${diffFence}diff\n${diffText}\n${diffFence}`;
 
   // Full post-change files for oversized single-file chunks (see review/chunked.ts):
   // read-only context so a construct spanning past a hunk boundary — a multi-line

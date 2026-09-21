@@ -103,6 +103,8 @@ export interface ReviewOptions {
  * (e.g. "length" for the reasoning-budget-exhausted bug).
  */
 export interface ProviderResult {
+  /** Optional enhancement metadata; never changes baseline coverage. */
+  enhancement?: import("@/jev/enhance.js").EnhancementSummary;
   verdict: "approved" | "changes" | "error";
   findings: Finding[];
   review_plan?: string;

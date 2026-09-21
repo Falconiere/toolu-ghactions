@@ -16,6 +16,10 @@ export const DEFAULT_PR = "Falconiere/comemory#72";
  *  on is filled with harmless placeholders — callers check `help` FIRST). */
 export interface EvalArgs {
   help: boolean;
+  compareJev?: boolean;
+  baseSha?: string;
+  headSha?: string;
+  expectations?: string;
   owner: string;
   repo: string;
   prNumber: number;
@@ -60,6 +64,10 @@ Options:
                               ${DEFAULT_MODEL})
   --max-wall-ms <ms>          Soft wall-clock budget forwarded to MAX_WALL_MS
                               (default: 0 = off)
+  --compare-jev              Paired baseline/enhanced review of one exact Git tree
+  --base-sha <sha>            Pin comparison base revision
+  --head-sha <sha>            Pin comparison head revision
+  --expectations <file>       Labeled known defects/false positives (JSON)
   --out <file>                Also write the scorecard as JSON to this path
   --help, -h                  Print this usage and exit 0 (no key/network needed)
 
@@ -107,6 +115,10 @@ export function parseArgs(argv: readonly string[]): EvalArgs {
   let maxWallMs = 0;
   let out: string | null = null;
   let help = false;
+  let compareJev = false;
+  let baseSha: string | undefined;
+  let headSha: string | undefined;
+  let expectations: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -114,6 +126,18 @@ export function parseArgs(argv: readonly string[]): EvalArgs {
       case "--help":
       case "-h":
         help = true;
+        break;
+      case "--compare-jev":
+        compareJev = true;
+        break;
+      case "--base-sha":
+        baseSha = requireValue(argv, ++i, "--base-sha");
+        break;
+      case "--head-sha":
+        headSha = requireValue(argv, ++i, "--head-sha");
+        break;
+      case "--expectations":
+        expectations = requireValue(argv, ++i, "--expectations");
         break;
       case "--pr":
         prRef = requireValue(argv, ++i, "--pr");
@@ -144,9 +168,11 @@ export function parseArgs(argv: readonly string[]): EvalArgs {
     }
   }
 
+  const comparison = compareJev ? { compareJev, baseSha, headSha, expectations } : {};
   const resolvedModel = model ?? DEFAULT_MODEL;
   if (help) {
     return {
+      ...comparison,
       help: true,
       owner: "",
       repo: "",
@@ -158,5 +184,15 @@ export function parseArgs(argv: readonly string[]): EvalArgs {
     };
   }
   const { owner, repo, prNumber } = parsePrRef(prRef);
-  return { help: false, owner, repo, prNumber, provider, model: resolvedModel, maxWallMs, out };
+  return {
+    ...comparison,
+    help: false,
+    owner,
+    repo,
+    prNumber,
+    provider,
+    model: resolvedModel,
+    maxWallMs,
+    out,
+  };
 }

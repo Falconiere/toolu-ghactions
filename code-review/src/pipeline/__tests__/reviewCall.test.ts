@@ -653,3 +653,241 @@ describe("reviewAndValidate — the source-evidence gate's coverage consequence"
     expect(out.result.error ?? "").toContain("lacked valid source evidence");
   });
 });
+
+describe("Jev after the baseline", () => {
+  it.each([false, true])(
+    "preserves baseline evidence and coverage with Jev enabled=%s",
+    async (enabled) => {
+      const dir = repoWith({
+        "src/util.ts": "export function add(a: number, b: number) {\n  return a - b;\n}\n",
+      });
+      const fixture: { response: { answers: Record<string, unknown> } } = JSON.parse(
+        readFileSync(
+          new URL("../../jev/__tests__/fixtures/supported.json", import.meta.url),
+          "utf8",
+        ),
+      );
+      const calls: string[] = [];
+      const fetchImpl: typeof fetch = async (url, init) => {
+        if ((url instanceof Request ? url.url : url.toString()).endsWith("/systemone")) {
+          calls.push("jev");
+          const body: { state: string; questions: Record<string, unknown> } = JSON.parse(
+            typeof init?.body === "string" ? init.body : "{}",
+          );
+          expect(body.state).toContain("return a - b;");
+          const answers = Object.fromEntries(
+            Object.keys(body.questions).map((id) => [
+              id,
+              fixture.response.answers[id === "risk" ? "risk" : "finding"],
+            ]),
+          );
+          return new Response(JSON.stringify({ ...fixture.response, answers }));
+        }
+        const body: RequestBody = JSON.parse(typeof init?.body === "string" ? init.body : "{}");
+        if (body.messages?.some((m) => m.content.includes("You are the cartographer"))) {
+          calls.push("map");
+          return chatResponse(null, init);
+        }
+        calls.push("baseline");
+        const recorded: { choices: { message: { content: string } }[] } = JSON.parse(
+          readFileSync(
+            new URL("../../llm/__tests__/fixtures/findings.json", import.meta.url),
+            "utf8",
+          ),
+        );
+        const verdict: { findings: { quoted_line?: string }[] } = JSON.parse(
+          recorded.choices[0]?.message.content ?? "{}",
+        );
+        // Exact quote supplied by this scenario, as required by the evidence gate.
+        if (verdict.findings[0]) verdict.findings[0].quoted_line = "  return a - b;";
+        return chatResponse(verdict, init);
+      };
+      const out = await reviewAndValidate({
+        inputs: baseInputs({ jevEnabled: enabled }),
+        diff: diffOf(dir),
+        event: EVENT,
+        priorThreads: [],
+        reviewHead: "HEAD",
+        cwd: dir,
+        fetch: fetchImpl,
+      });
+      expect(out.stamped).toHaveLength(1);
+      expect(out.ledger.entries["src/util.ts"]?.status).toBe("reviewed");
+      expect(calls).toEqual(enabled ? ["map", "baseline", "jev"] : ["map", "baseline"]);
+      if (enabled) expect(out.result.enhancement?.assessed).toBe(2);
+    },
+  );
+  it("skips Jev when baseline source validation leaves incomplete coverage", async () => {
+    const dir = repoWith({ "src/util.ts": "export const util = 1;\n" });
+    let jevCalls = 0;
+    const fetchImpl: typeof fetch = async (url, init) => {
+      if ((url instanceof Request ? url.url : url.toString()).endsWith("/systemone")) {
+        jevCalls++;
+        throw new Error("must not dispatch");
+      }
+      return replayCompletion(
+        readFileSync(
+          new URL("../../llm/__tests__/fixtures/findings.json", import.meta.url),
+          "utf8",
+        ),
+        init,
+      );
+    };
+    const out = await reviewAndValidate({
+      inputs: baseInputs({ jevEnabled: true }),
+      diff: diffOf(dir),
+      event: EVENT,
+      priorThreads: [],
+      reviewHead: "HEAD",
+      cwd: dir,
+      fetch: fetchImpl,
+    });
+    expect(jevCalls).toBe(0);
+    expect(out.result.enhancement?.skipped).toBeGreaterThan(0);
+    expect(out.ledger.entries["src/util.ts"]?.status).toBe("unreviewed");
+  });
+});
+
+it("dismisses the recorded PR175 false positive only after the independent generative recheck", async () => {
+  const jev: {
+    request: {
+      state: {
+        source: { path: string; content: string };
+        finding: { path: string; line: number; text: string; severity: string; confidence: string };
+      };
+    };
+    response: { answers: Record<string, unknown> };
+  } = JSON.parse(
+    readFileSync(
+      new URL("../../jev/__tests__/fixtures/full-counterexample.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  const recheck: { response: { choices: { message: { content: string } }[] } } = JSON.parse(
+    readFileSync(
+      new URL("../../jev/__tests__/fixtures/generative-recheck-exact-id.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  const source = jev.request.state.source;
+  const finding = {
+    ...jev.request.state.finding,
+    quoted_line: "            onChange={(event) => {",
+  };
+  const dir = repoWith({ [source.path]: source.content });
+  const order: string[] = [];
+  const fetchImpl: typeof fetch = async (url, init) => {
+    const bodyText = typeof init?.body === "string" ? init.body : "{}";
+    if ((url instanceof Request ? url.url : url.toString()).endsWith("/systemone")) {
+      order.push("jev");
+      const body: { questions: Record<string, unknown> } = JSON.parse(bodyText);
+      return new Response(
+        JSON.stringify({
+          ...jev.response,
+          answers: Object.fromEntries(
+            Object.keys(body.questions).map((id) => [
+              id,
+              jev.response.answers[id === "risk" ? "risk" : "finding"],
+            ]),
+          ),
+        }),
+      );
+    }
+    const body: RequestBody = JSON.parse(bodyText);
+    const system = body.messages?.find((m) => m.role === "system")?.content ?? "";
+    if (system.includes("You are the cartographer")) {
+      order.push("map");
+      return chatResponse(VALID_BRIEF, init);
+    }
+    if (system.includes("Recheck the supplied")) {
+      order.push("recheck");
+      const verdict: { decisions: { id: string }[] } = JSON.parse(
+        recheck.response.choices[0]?.message.content ?? "{}",
+      );
+      for (const decision of verdict.decisions) decision.id = fingerprint(finding);
+      return chatResponse(verdict, init);
+    }
+    order.push("baseline");
+    return chatResponse(
+      {
+        review_plan: "Review the prefix state transitions.",
+        verdict: "changes",
+        findings: [finding],
+        other_checks: "",
+        top_must_fix: [],
+      },
+      init,
+    );
+  };
+  const out = await reviewAndValidate({
+    inputs: baseInputs({ jevEnabled: true }),
+    diff: diffOf(dir),
+    event: EVENT,
+    priorThreads: [],
+    reviewHead: "HEAD",
+    cwd: dir,
+    fetch: fetchImpl,
+  });
+  expect(order).toEqual(["map", "baseline", "jev", "recheck"]);
+  expect(out.result.enhancement?.dismissed).toBe(1);
+  expect(out.stamped).toEqual([]);
+  expect(out.ledger.entries[source.path]?.status).toBe("reviewed");
+});
+
+it("a validated additional defect cannot retain a contradictory approved verdict", async () => {
+  const dir = repoWith({
+    "src/util.ts": "export function add(a: number, b: number) {\n  return a - b;\n}\n",
+  });
+  const calls: CapturedCall[] = [];
+  const baseline = modelServer(calls, VALID_BRIEF);
+  let additional = 0;
+  const fetchImpl: typeof fetch = async (url, init) => {
+    if ((url instanceof Request ? url.url : url.toString()).endsWith("/systemone")) {
+      const fixture: { response: { answers: Record<string, unknown> } } = JSON.parse(
+        readFileSync(
+          new URL("../../jev/__tests__/fixtures/cross-file-risk.json", import.meta.url),
+          "utf8",
+        ),
+      );
+      // Explicit routing-boundary variation, not a purported live judgment.
+      // Real source and the recorded generative finding remain unchanged.
+      fixture.response.answers.risk = {
+        type: "choice",
+        choice: "high",
+        confidence: 1,
+        probabilities: { high: 1, ordinary: 0, insufficient_evidence: 0 },
+      };
+      return new Response(JSON.stringify(fixture.response));
+    }
+    const body: RequestBody = JSON.parse(typeof init?.body === "string" ? init.body : "{}");
+    if (body.messages?.some((m) => m.content.includes("Additional review:"))) {
+      additional++;
+      const recorded: { choices: { message: { content: string } }[] } = JSON.parse(
+        readFileSync(
+          new URL("../../llm/__tests__/fixtures/findings.json", import.meta.url),
+          "utf8",
+        ),
+      );
+      const verdict: { verdict: string; findings: { quoted_line?: string }[] } = JSON.parse(
+        recorded.choices[0]?.message.content ?? "{}",
+      );
+      verdict.verdict = "approved"; // Deliberately inconsistent, schema-valid response.
+      if (verdict.findings[0]) verdict.findings[0].quoted_line = "  return a - b;";
+      return chatResponse(verdict, init);
+    }
+    return baseline.fetch(url, init);
+  };
+  const out = await reviewAndValidate({
+    inputs: baseInputs({ jevEnabled: true }),
+    diff: diffOf(dir),
+    event: EVENT,
+    priorThreads: [],
+    reviewHead: "HEAD",
+    cwd: dir,
+    fetch: fetchImpl,
+  });
+  expect(additional).toBe(1);
+  expect(out.stamped).toHaveLength(1);
+  expect(out.result.verdict).toBe("changes");
+  expect(out.result.enhancement?.additionalReviews).toBe(1);
+});
