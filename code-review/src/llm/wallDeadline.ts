@@ -2,7 +2,7 @@
 import { abstain, salvageResult, type Prefix } from "./recover.js";
 import type { ProviderResult } from "./reviewWithModel.js";
 
-/** Milliseconds left in the shared budget; an omitted deadline has no limit. */
+/** Milliseconds left in the shared budget; zero means expired, omission means unlimited. */
 export function wallTimeLeft(deadline: number | undefined): number {
   return deadline === undefined ? Infinity : Math.max(0, deadline - Date.now());
 }
