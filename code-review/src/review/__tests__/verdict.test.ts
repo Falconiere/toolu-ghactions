@@ -26,6 +26,21 @@ function lastLine(body: string): string {
 }
 
 describe("formatVerdict", () => {
+  it("distinguishes local evidence failures from provider failures", () => {
+    const { body } = formatVerdict(
+      {
+        verdict: "error",
+        findings: [],
+        partial: true,
+        review_plan: "Reviewed the code.",
+        error: "Review findings lacked valid source evidence.",
+        failure: "evidence",
+      },
+      {},
+    );
+    expect(body).toContain("Review incomplete — source evidence");
+    expect(body).not.toContain("provider error");
+  });
   it("maps approved → merge-approved label and ✅ badge", () => {
     const result: ProviderResult = {
       verdict: "approved",

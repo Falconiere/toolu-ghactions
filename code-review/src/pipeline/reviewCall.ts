@@ -38,6 +38,9 @@ import type { ActionInputs } from "@/inputs.js";
 import { resolveChecklistPath } from "./bodies.js";
 import { groupByBrief } from "./packages.js";
 import { readFileAt } from "./git.js";
+import { createRepositoryContext } from "@/review/repositoryContext.js";
+import { dropSettled } from "@/review/reconcile.js";
+import { clusterFindings } from "@/review/cluster.js";
 
 /** A validated finding with its state fingerprint attached. */
 export type StampedFinding = Finding & { fp: string };
@@ -70,6 +73,7 @@ export interface ReviewCallInput {
   diff: DiffData;
   event: EventResolution;
   priorThreads: PriorThread[];
+  priorClusters?: Record<string, string>;
   reviewHead: string;
   cwd: string;
   sarifDir?: string | undefined;
@@ -90,6 +94,7 @@ export interface ReviewCallInput {
  *  mechanical findings (re-used by the verdict comment's summary), the round's
  *  coverage ledger, and the brief (null when Layer 1 failed open). */
 export interface ReviewCallOutput {
+  settledBeforeValidation: number;
   result: ProviderResult;
   stamped: StampedFinding[];
   /** Count of findings `validateFindings` dropped as self-negating ("No issue"
@@ -169,6 +174,7 @@ export async function reviewAndValidate(input: ReviewCallInput): Promise<ReviewC
       result: { verdict: "approved", findings: [] },
       stamped: [],
       selfNegating: 0,
+      settledBeforeValidation: 0,
       mechanical,
       ledger: roundLedger(input, distillation, new Map()),
       brief: null,
@@ -187,6 +193,7 @@ export async function reviewAndValidate(input: ReviewCallInput): Promise<ReviewC
 
   // Layer 2 — bounded package reviewers over the shrunk diff.
   const coverage = new Map<string, CoverageEntry>();
+  const repositoryContext = createRepositoryContext(reviewHead, cwd);
   const result: ProviderResult = await reviewChunked({
     diff: distillation.review_diff,
     maxChunkLines: inputs.maxChunkLines,
@@ -199,6 +206,7 @@ export async function reviewAndValidate(input: ReviewCallInput): Promise<ReviewC
     buildEnvelope: (subDiff, chunkMechanical, chunkBrief) =>
       buildPrompt({
         diff: subDiff,
+        repositoryContext: repositoryContext(subDiff.changed_files, subDiff.diff),
         checklistPath: resolveChecklistPath(),
         maxTokens: inputs.maxTokens,
         enforceJsonSchema: inputs.enforceJsonSchema,
@@ -219,6 +227,29 @@ export async function reviewAndValidate(input: ReviewCallInput): Promise<ReviewC
   // Findings are validated against the SHRUNK diff: a finding on a path the model
   // never saw (a collapsed pattern member, a dropped stratum) is a hallucination
   // by construction — pattern findings are reported once, on the exemplar.
+  // A dismissed claim is not a new review obligation. Remove it before its
+  // stale quote can condemn coverage; unresolved candidates still face the gate.
+  const clusters = clusterFindings(
+    result.findings.map((f) => ({ ...f, fp: fingerprint(f) })),
+    input.priorClusters,
+  );
+  const settled = dropSettled(
+    clusters.map((c) => c.exemplar),
+    input.priorThreads,
+    {
+      members: new Map(clusters.map((c) => [c.exemplar.fp, c.members])),
+      priorClusters: input.priorClusters,
+    },
+  );
+  const keptFps = new Set(settled.kept.map((f) => f.fp));
+  const kept = clusters.filter((c) => keptFps.has(c.exemplar.fp)).flatMap((c) => c.members);
+  const settledBeforeValidation = result.findings.length - kept.length;
+  if (settledBeforeValidation > 0) {
+    process.stdout.write(
+      `  Suppressed ${settledBeforeValidation} settled finding(s) before source validation\n`,
+    );
+  }
+  result.findings = kept;
   const { stamped, selfNegating, unsupportedPaths } = validate(
     result,
     distillation.review_diff,
@@ -241,6 +272,7 @@ export async function reviewAndValidate(input: ReviewCallInput): Promise<ReviewC
     const evidenceError =
       "Review findings lacked valid source evidence; affected files remain unreviewed.";
     result.error = [result.error, evidenceError].filter(Boolean).join(" ");
+    result.failure ??= "evidence";
     result.partial = true;
     if (stamped.length === 0) result.verdict = "error";
   }
@@ -248,6 +280,7 @@ export async function reviewAndValidate(input: ReviewCallInput): Promise<ReviewC
     result,
     stamped,
     selfNegating,
+    settledBeforeValidation,
     mechanical,
     ledger: roundLedger(input, distillation, coverage),
     brief,

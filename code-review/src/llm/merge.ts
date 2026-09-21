@@ -57,7 +57,7 @@ export function mergeResults(chunks: PackageResults[]): ProviderResult {
   // A chunk nothing covered contributes nothing — not a success, not a failure.
   const covered = chunks.filter((chunk) => chunk.length > 0);
   if (covered.length === 0) {
-    return { verdict: "error", findings: [], error: "no chunks reviewed" };
+    return { verdict: "error", findings: [], error: "no chunks reviewed", failure: "coverage" };
   }
   const results = covered.flat();
 
@@ -95,6 +95,7 @@ export function mergeResults(chunks: PackageResults[]): ProviderResult {
   if (partials.length > 0 || failed.length > 0) merged.partial = true;
   const first = errored[0];
   if (failed.length > 0 && first !== undefined) {
+    if (first.failure !== undefined) merged.failure = first.failure;
     merged.error =
       `${failed.length}/${covered.length} chunks failed (after a retry) — the files in ` +
       `those chunks were NOT reviewed: ${first.error ?? "unknown error"}`;

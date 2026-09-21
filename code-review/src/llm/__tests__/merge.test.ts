@@ -82,6 +82,13 @@ async function unchunked(result: ProviderResult): Promise<ProviderResult> {
 }
 
 describe("mergeResults", () => {
+  it("distinguishes no dispatched work from a provider transport failure", () => {
+    expect(mergeResults([[]]).failure).toBe("coverage");
+    expect(
+      mergeResults([[{ verdict: "error", findings: [], failure: "transport", error: "offline" }]])
+        .failure,
+    ).toBe("transport");
+  });
   it("returns a changes verdict when any chunk requests changes", async () => {
     const merged = mergeResults([[await resultFrom("approved")], [await resultFrom("findings")]]);
     expect(merged.verdict).toBe("changes");

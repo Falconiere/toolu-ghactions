@@ -87,6 +87,9 @@ export function settleVerdict(
     );
   }
   const validated: ProviderResult = { ...input.result, findings };
+  // Free-form model commentary cannot be reconciled with individual findings.
+  // Never let it reintroduce rejected/dismissed claims outside the finding list.
+  validated.other_checks = "";
   // `verdict` is the ONLY thing the rules below move; `validated.verdict` is written
   // from it once, just before the return. Deliberately not paired per rule: a rule
   // that updates one half and forgets the other is how the returned verdict and the
@@ -96,7 +99,11 @@ export function settleVerdict(
   // to the comment: settled on its thread (suppressed), out of the incremental
   // scope (scoped.dropped), or self-negating noise validateFindings already
   // dropped before this function ever saw it (input.selfNegating — AC-8).
-  const removed = suppressed.length + scoped.dropped.length + input.selfNegating;
+  const removed =
+    suppressed.length +
+    scoped.dropped.length +
+    input.selfNegating +
+    (input.settledBeforeValidation ?? 0);
   if (verdict === "changes" && findings.length === 0 && removed > 0) {
     // Every concrete finding was either settled on its thread (resolved or
     // dismissed by the author), out of the incremental scope, or dropped as
@@ -182,6 +189,7 @@ function degradeOnCoverage(
 ): ProviderResult["verdict"] {
   if (exceptions.complete || verdict !== "approved") return verdict;
   const count = exceptions.unreviewed.length + exceptions.pending.length;
+  validated.failure ??= "coverage";
   if (validated.error === undefined || validated.error === "") {
     validated.error =
       `${count} file(s) were not reviewed this run (see Coverage below) — an approval ` +

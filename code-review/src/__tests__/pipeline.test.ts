@@ -606,7 +606,9 @@ describe("runReview — end to end", () => {
 function routingFetch(routes: Array<[match: string, fixture: string]>): typeof fetch {
   return async (_url, init) => {
     const raw = typeof init?.body === "string" ? init.body : "";
-    const hit = routes.find(([m]) => raw.includes(m));
+    const request: { messages?: { role: string; content: string }[] } = JSON.parse(raw || "{}");
+    const diff = promptDiff(request.messages?.find((m) => m.role === "user")?.content);
+    const hit = routes.find(([m]) => diff.includes(m));
     const fixture = hit ? hit[1] : "approved";
     const body: unknown = JSON.parse(readFileSync(join(FIXTURES, `${fixture}.json`), "utf8"));
     return replayWithSourceQuotes(body, init);
@@ -1368,7 +1370,9 @@ function recordingRoutingFetch(
       system: messages.find((m) => m.role === "system")?.content ?? "",
       user: messages.find((m) => m.role === "user")?.content ?? "",
     });
-    const hit = routes.find(([m]) => raw.includes(m));
+    const request: { messages?: { role: string; content: string }[] } = JSON.parse(raw || "{}");
+    const diff = promptDiff(request.messages?.find((m) => m.role === "user")?.content);
+    const hit = routes.find(([m]) => diff.includes(m));
     const fixture = hit ? hit[1] : "approved";
     const fixtureBody: unknown = JSON.parse(
       readFileSync(join(FIXTURES, `${fixture}.json`), "utf8"),
@@ -1386,7 +1390,7 @@ function packagePrompts(calls: { system: string; user: string }[]): string[] {
 /** The `## Diff` block of a captured package prompt — the only place it shows code. */
 function promptDiff(prompt: string | undefined): string {
   const user = prompt ?? "";
-  return user.slice(user.indexOf("\n\n## Diff\n"));
+  return user.split("## Diff\n```diff\n")[1]?.split("\n```\n")[0] ?? "";
 }
 
 /** The last posted comment body. */

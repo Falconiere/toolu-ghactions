@@ -14,6 +14,17 @@ function fromMap(map: Record<string, string>): { readBlob: ReadBlob; blobSize: B
 }
 
 describe("noiseReason", () => {
+  it("excludes generated Drizzle metadata while preserving migrations and ordinary snapshots", () => {
+    const { readBlob, blobSize } = fromMap({});
+    expect(
+      noiseReason("packages/database/drizzle/meta/0015_snapshot.json", readBlob, blobSize),
+    ).toBe("generated");
+    expect(noiseReason("db/migrations/meta/_journal.json", readBlob, blobSize)).toBe("generated");
+    expect(
+      noiseReason("packages/database/drizzle/0015_backfill.sql", readBlob, blobSize),
+    ).toBeNull();
+    expect(noiseReason("src/__tests__/snapshot.json", readBlob, blobSize)).toBeNull();
+  });
   it("drops lockfiles by name (path-only, no blob read)", () => {
     const { readBlob, blobSize } = fromMap({});
     expect(noiseReason("package-lock.json", readBlob, blobSize)).toBe("lockfile");

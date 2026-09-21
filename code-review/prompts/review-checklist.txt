@@ -20,15 +20,14 @@ First, analyze the changed files and create a targeted review plan. For each fil
 - What should you look for specifically? (e.g. "Check if the new SQL query in
   login.ts uses parameterized inputs" rather than "Review login.ts for security")
 
-Output the plan as a markdown string in the `review_plan` field, structured as:
-- A summary line: "Reviewing N files: 2 security-sensitive, 1 correctness-critical, 1 docs-only"
-- Per-file bullets with the specific dimensions and focus areas
+Keep the detailed plan internal. Output only a summary of at most two short
+sentences (280 characters) in `review_plan`.
 
 ## Phase 2: Execute the Review
 
 Now review THE CHANGES AGAINST YOUR OWN PLAN. For every dimension you committed to
 check in Phase 1, examine the diff and report findings. Do not report findings on
-dimensions you skipped in Phase 1. Do not suppress low-severity issues.
+dimensions you skipped in Phase 1. Severity never substitutes for evidence.
 Be specific: cite exact paths and line numbers.
 
 The available review dimensions are:
@@ -42,8 +41,9 @@ The available review dimensions are:
 3. PERFORMANCE — hot-path work (per-render, per-hook, per-request),
    unnecessary subprocess spawns or allocations in loops.
 
-4. TEST COVERAGE — every NEW code path must have a colocated real-data test.
-   A new function/behavior without a test is a finding.
+4. TEST COVERAGE — identify specific untested behavior only after checking the
+   repository inventory and supplied test context. A test absent from this chunk
+   is not a missing test. If relevant tests are unavailable, abstain from that claim.
 
 5. DOC/COMMENT ACCURACY — comments must match behavior. Flag "one-time" on
    blocks that run every invocation, stale paths after moves, outdated docs.
@@ -52,9 +52,9 @@ The available review dimensions are:
    suffixes or partial matches. assert on `*/statusline/statusline.sh`, not
    `*/statusline.sh`.
 
-7. MIGRATION WARNINGS — breaking changes (moved paths, removed symlinks,
-   renamed APIs) must surface actionable in-session warnings, not silent
-   failures.
+7. MIGRATION WARNINGS — flag a concrete compatibility or data-loss failure in a
+   migration, with evidence of an affected caller or data. Do not demand runtime
+   logging from SQL migrations or warnings for intentional internal refactors.
 
 8. CONVENTION ADHERENCE — the diff must follow the project's stated conventions
    (from the Project Conventions section). Flag any changed line that violates a
@@ -70,6 +70,13 @@ The available review dimensions are:
 - No style, formatting, or naming preferences.
 - No general advice ("consider adding error handling"). A finding must name a
   specific failure at a specific line.
+- Verify the premise against the supplied repository evidence before reporting.
+  Never invent exports, columns, return types, missing tests or missing guards.
+  A filename such as `schema` does not establish that a module is a barrel.
+  If the relevant definition is unavailable, omit the finding rather than speculate.
+- Give the reachable trigger and concrete consequence. "If the schema requires",
+  "could happen due to a bug", and theoretical concerns with no reachable failure
+  are not findings. Check the implementation's invariants before proposing a fix.
 - No findings on code outside this diff.
 - Findings are DEFECTS ONLY. NEVER emit a finding whose conclusion is that there
   is no problem ("No issue", "No violation", "This is acceptable") — a passed

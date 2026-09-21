@@ -20,7 +20,7 @@
 import { countLines, type DiffData } from "@/git/diff.js";
 import { splitDiffByFile } from "@/git/chunk.js";
 import type { ReviewState } from "@/state.js";
-import { objectExists, resolveTreeSha, treeDiffPaths } from "./git.js";
+import { objectExists, resolveTreeSha, treeDiffPaths, recoverReviewedCommit } from "./git.js";
 
 /** How this run picks its file set. `full` — a full re-review (`@toolu review`,
  *  memory off, or a non-PR event): no narrowing at all. `incremental` — a
@@ -71,6 +71,9 @@ export function resolveTreeScope(opts: {
 
   const reviewedTree = prior?.reviewed_tree;
   if (reviewedTree === undefined || reviewedTree === "") return null;
+  if (!objectExists(reviewedTree, cwd)) {
+    recoverReviewedCommit(prior?.reviewed_sha, cwd);
+  }
   if (!objectExists(reviewedTree, cwd)) {
     process.stderr.write(
       `  Note: last reviewed tree ${reviewedTree.slice(0, 7)} is not in this clone — full review\n`,

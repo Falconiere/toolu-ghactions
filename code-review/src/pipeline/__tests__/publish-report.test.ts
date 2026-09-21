@@ -164,6 +164,40 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("does not resurrect dismissed clusters or model commentary in the posted summary", async () => {
+  const bodies: string[] = [];
+  const stamped = ["src/a.ts", "src/b.ts", "src/c.ts"].map((path) => {
+    const f = {
+      path,
+      line: 10,
+      severity: "low" as const,
+      text: "Invented barrel violation",
+      category: "convention",
+    };
+    return { ...f, fp: fingerprint(f) };
+  });
+  const out = await publish(
+    basePublishInput(fakeOctokit([], bodies), {
+      inputs: baseInputs({ touluApiKey: "", inlineComments: false }),
+      stamped,
+      result: {
+        verdict: "changes",
+        findings: stamped,
+        other_checks: "Fix all the invented barrels.",
+      },
+      priorThreads: stamped.map((f) => thread({ ...f, isResolved: true })),
+      ledger: {
+        entries: Object.fromEntries(stamped.map((f) => [f.path, { status: "reviewed" as const }])),
+      },
+    }),
+  );
+  expect(out.findingsCount).toBe(0);
+  expect(out.verdict).toBe("approved");
+  expect(bodies[0]).not.toContain("Repeated findings");
+  expect(bodies[0]).not.toContain("Invented barrel violation");
+  expect(bodies[0]).not.toContain("Fix all the invented barrels");
+});
+
 describe("publish — reporting gate (AC-23)", () => {
   it("TOOLU_API_KEY empty: no request, no warning", async () => {
     const warn = vi.spyOn(core, "warning").mockImplementation(() => {});

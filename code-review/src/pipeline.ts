@@ -101,8 +101,6 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
   // FETCH_HEAD` — the fetched PR head itself, the correct series anchor.
   const reviewedSha = event.head_sha ?? target.headSha;
 
-  const scope = incrementalScope(deps, found, reviewHead, cwd);
-
   // TREE scope (spec §True incremental): which FILES this round re-reviews. Null =
   // full diff (fail-open). Everything it drops is carried — not re-reviewed, prior
   // findings re-injected in publish so no thread is falsely resolved.
@@ -112,6 +110,8 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     reviewHead,
     cwd,
   });
+  // Tree scope may recover the previously reviewed commit from origin.
+  const scope = incrementalScope(deps, found, reviewHead, cwd);
   const scoped =
     treeScope === null ? { diff, carried: [] } : filterDiffToScope(diff, treeScope.inScope);
   if (scoped.carried.length > 0) {
@@ -128,6 +128,7 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     priorThreads,
     reviewHead,
     cwd,
+    priorClusters: found.prior?.clusters,
     sarifDir: deps.sarifDir,
     fetch: deps.fetch,
     carriedPaths: scoped.carried,
@@ -149,6 +150,7 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     result: reviewed.result,
     stamped: reviewed.stamped,
     selfNegating: reviewed.selfNegating,
+    settledBeforeValidation: reviewed.settledBeforeValidation,
     mechanical: reviewed.mechanical,
     ledger: reviewed.ledger,
     exceptionPaths: treeScope?.exceptions ?? new Set<string>(),

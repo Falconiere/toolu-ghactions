@@ -70,6 +70,8 @@ export interface PublishInput {
    *  feeds `settleVerdict`'s `removed`, flipping an all-junk "changes" to
    *  "approved" instead of blocking on noise (AC-8). */
   selfNegating: number;
+  /** Settled candidates removed before their stale source quotes could affect coverage. */
+  settledBeforeValidation?: number;
   priorThreads: PriorThread[];
   prior: ReviewState | null;
   stickyId: number | undefined;
@@ -157,7 +159,7 @@ export async function publish(input: PublishInput): Promise<ReviewResult> {
     ledgerSummary: renderLedgerSummary(ledger),
     unanchored: inline.unanchored,
     dropped: inline.dropped,
-    clusters: reduction.clustered,
+    clusters: reduction.clustered.filter((c) => findings.some((f) => f.fp === c.exemplar.fp)),
   });
 
   const commentUrl = await upsertComment(octokit, target, body, input.stickyId);

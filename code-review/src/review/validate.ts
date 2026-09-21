@@ -121,6 +121,21 @@ export function validateFindings(
       if (failure === "missing") missingQuote++;
       else unverifiedQuote++;
       unsupportedPaths.add(f.path);
+      if (missingQuote + unverifiedQuote <= 5) {
+        // Locations only: never copy potentially sensitive source into CI logs.
+        const quoteAtLines = [...(lineTextByPath?.get(f.path) ?? [])]
+          .filter(([, text]) => quoteMatches(text, f.quoted_line ?? ""))
+          .slice(0, 3)
+          .map(([line]) => line);
+        process.stdout.write(
+          `  Source evidence rejected: ${JSON.stringify({
+            path: f.path.slice(0, 240),
+            line: f.line,
+            reason: failure,
+            quoteAtLines,
+          })}\n`,
+        );
+      }
       continue;
     }
 
