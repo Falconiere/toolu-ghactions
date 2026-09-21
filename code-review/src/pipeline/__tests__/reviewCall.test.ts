@@ -13,6 +13,7 @@
 //  - package assignment: the brief's `path_prefixes` beat path order when packing,
 //    and a null brief falls back to today's grouping exactly.
 import { describe, it, expect, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
 import { reviewAndValidate } from "@/pipeline/reviewCall.js";
 import { fetchDiff } from "@/git/diff.js";
 import type { DiffData } from "@/git/diff.js";
@@ -21,7 +22,12 @@ import type { ActionInputs } from "@/inputs.js";
 import type { EventResolution } from "@/github/event.js";
 import type { BlockableVerdict } from "@/review/gate.js";
 import { git, setupGitRepo, writeFile, removeRepo } from "@/git/__tests__/helpers.js";
-import { contentFrames, sseResponse, wantsStream } from "@/__tests__/integration/sse.js";
+import {
+  contentFrames,
+  replayCompletion,
+  sseResponse,
+  wantsStream,
+} from "@/__tests__/integration/sse.js";
 
 /** One recorded outgoing model request. */
 interface CapturedCall {
@@ -389,6 +395,28 @@ describe("reviewAndValidate — package assignment from the brief's hints", () =
 });
 
 describe("reviewAndValidate — wallDeadline pass-through (MAX_WALL_MS, s13)", () => {
+  it("rejects a historical no-quote response as fresh evidence without claiming clean coverage", async () => {
+    const dir = repoWith({
+      "src/util.ts": "export function add(a: number, b: number): number {\n  return a - b;\n}\n",
+    });
+    const body: unknown = JSON.parse(
+      readFileSync(new URL("../../llm/__tests__/fixtures/findings.json", import.meta.url), "utf8"),
+    );
+    const out = await reviewAndValidate({
+      inputs: baseInputs(),
+      diff: diffOf(dir),
+      event: EVENT,
+      priorThreads: [],
+      reviewHead: "HEAD",
+      cwd: dir,
+      fetch: async (_url, init) => replayCompletion(body, init),
+    });
+    expect(out.stamped).toEqual([]);
+    expect(out.result.verdict).toBe("error");
+    expect(out.result.error).toContain("source evidence");
+    expect(out.ledger.entries["src/util.ts"]?.status).toBe("unreviewed");
+  });
+
   it("reaches ChunkedReviewOptions: an already-past deadline skips every package call and ledgers pending", async () => {
     const dir = repoWith({ "src/a.ts": "export const a = 1;\n" });
     const calls: CapturedCall[] = [];
@@ -408,10 +436,36 @@ describe("reviewAndValidate — wallDeadline pass-through (MAX_WALL_MS, s13)", (
     });
 
     // The deadline is checked BEFORE every package, including the warm-up one —
-    // Layer 2 issues zero review calls (Layer 1's cartographer call is unaffected).
+    // Neither layer may spend a request once the shared deadline has expired.
     const review = calls.filter((c) => !isCartographer(c));
     expect(review.length).toBe(0);
+    expect(calls).toHaveLength(0);
     expect(out.ledger.entries["src/a.ts"]?.status).toBe("pending");
     expect(out.result.verdict).toBe("error");
+  });
+
+  it("marks a salvaged recorded review unreviewed so resume includes its files", async () => {
+    const dir = repoWith({
+      "src/auth.ts": "export const authorized = false;\n",
+      "src/db.ts": "export const query = 'select 1';\n",
+    });
+    const body: unknown = JSON.parse(
+      readFileSync(
+        new URL("../../llm/__tests__/fixtures/truncated-findings.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    const out = await reviewAndValidate({
+      inputs: baseInputs({ maxTokens: 131072 }),
+      diff: diffOf(dir),
+      event: EVENT,
+      priorThreads: [],
+      reviewHead: "HEAD",
+      cwd: dir,
+      fetch: async (_url, init) => replayCompletion(body, init),
+    });
+    expect(out.result.partial).toBe(true);
+    expect(out.ledger.entries["src/auth.ts"]?.status).toBe("unreviewed");
+    expect(out.ledger.entries["src/db.ts"]?.status).toBe("unreviewed");
   });
 });

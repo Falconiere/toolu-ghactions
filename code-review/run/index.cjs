@@ -38488,6 +38488,16 @@ function anyGlobMatches(globs, path) {
 // src/inputs.ts
 var DEFAULT_MAX_TOKENS = 8192;
 var DEFAULT_REQUEST_TIMEOUT_MS = 18e4;
+var DEFAULT_MAX_WALL_MS = 6e5;
+function readWallBudget() {
+  const raw = getInput("MAX_WALL_MS").trim();
+  const parsed = Number(raw);
+  const budget = raw === "" || !Number.isFinite(parsed) ? DEFAULT_MAX_WALL_MS : parsed;
+  if (!Number.isSafeInteger(budget) || budget < 0) {
+    throw new Error("MAX_WALL_MS must be a non-negative integer (0 explicitly disables it).");
+  }
+  return budget;
+}
 function intInput(name17, fallback) {
   const raw = getInput(name17).trim();
   if (raw === "") return fallback;
@@ -38578,7 +38588,7 @@ function readInputs() {
     maxDiffLines: intInput("MAX_DIFF_LINES", 0),
     maxChunkLines: intInput("MAX_CHUNK_LINES", 1500),
     maxChunks: intInput("MAX_CHUNKS", 0),
-    maxWallMs: intInput("MAX_WALL_MS", 0),
+    maxWallMs: readWallBudget(),
     requestTimeoutMs: validateTimeout(
       intInput("REQUEST_TIMEOUT_MS", DEFAULT_REQUEST_TIMEOUT_MS),
       "REQUEST_TIMEOUT_MS"
@@ -41549,6 +41559,21 @@ function salvagePrefix(snapshot) {
   return plan === void 0 ? { findings } : { findings, review_plan: plan.slice(0, PLAN_CAP) };
 }
 
+// src/llm/wallDeadline.ts
+function wallTimeLeft(deadline) {
+  return deadline === void 0 ? Infinity : Math.max(0, deadline - Date.now());
+}
+function wallDeadlineResult(prefix) {
+  const message = "MAX_WALL_MS review deadline reached. Resume the unreviewed files in another run.";
+  if (prefix === void 0 || prefix.findings.length === 0) {
+    return abstain(new Error(message), true);
+  }
+  return {
+    ...salvageResult(prefix, { reason: "deadline" }),
+    error: `${message} Recovered ${prefix.findings.length} finding(s); later findings may be missing.`
+  };
+}
+
 // src/llm/reviewWithModel.ts
 var REQUEST_TIMEOUT_MS = 18e4;
 var MAX_ATTEMPTS = 3;
@@ -41568,11 +41593,18 @@ async function reviewWithModel(envelope, opts) {
   let escalations = 0;
   let best;
   while (attempt <= maxAttempts) {
+    const remainingMs = wallTimeLeft(opts.wallDeadline);
+    if (remainingMs === 0) return wallDeadlineResult(best);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), perAttemptMs);
+    const wallLimited = remainingMs <= perAttemptMs;
+    const timeout = setTimeout(() => controller.abort(), Math.min(perAttemptMs, remainingMs));
     timeout.unref?.();
     const lastAttempt = attempt >= maxAttempts;
     try {
+      process.stdout.write(
+        `  ${opts.rawJson === true ? "PR map" : "Review"} attempt ${attempt}/${maxAttempts}, output budget ${budget}, deadline ${Math.min(perAttemptMs, remainingMs)}ms
+`
+      );
       const call = {
         model,
         system: envelope.system,
@@ -41591,6 +41623,9 @@ async function reviewWithModel(envelope, opts) {
       if (streamed.outcome === "complete")
         return { ...streamed.object, finishReason: streamed.finishReason };
       best = bestPrefix(best, streamed);
+      if (wallTimeLeft(opts.wallDeadline) === 0 || wallLimited && controller.signal.aborted) {
+        return wallDeadlineResult(best);
+      }
       if (streamed.outcome === "truncated") {
         const next = nextBudget(budget, escalations);
         if (next !== null) {
@@ -41601,18 +41636,21 @@ async function reviewWithModel(envelope, opts) {
         return salvageResult(best, { reason: "length", exhausted: budgetExhausted(budget) });
       }
       if (!lastAttempt) {
-        await hangBackoff(attempt);
+        await hangBackoff(attempt, opts.wallDeadline);
         attempt++;
         continue;
       }
       return salvageResult(best, { reason: "deadline" });
     } catch (err) {
+      if (wallTimeLeft(opts.wallDeadline) === 0 || wallLimited && controller.signal.aborted) {
+        return wallDeadlineResult(best);
+      }
       if (isProviderCap(err) && best !== void 0) {
         return salvageResult(best, { reason: "length", exhausted: true });
       }
       if (controller.signal.aborted) {
         if (!lastAttempt) {
-          await hangBackoff(attempt);
+          await hangBackoff(attempt, opts.wallDeadline);
           attempt++;
           continue;
         }
@@ -41635,9 +41673,9 @@ async function reviewWithModel(envelope, opts) {
   }
   return abstain(new Error("OpenRouter request failed"), false);
 }
-function hangBackoff(attempt) {
+function hangBackoff(attempt, wallDeadline) {
   return new Promise((resolve) => {
-    setTimeout(resolve, 300 * attempt);
+    setTimeout(resolve, Math.min(300 * attempt, wallTimeLeft(wallDeadline)));
   });
 }
 
@@ -41833,7 +41871,9 @@ var BISECT_MAX_DEPTH = 2;
 async function reviewPackage(ctx, segments, mechanical, depth) {
   const result = await ctx.review(ctx.buildEnvelope(segments, mechanical));
   if (result.verdict !== "error") {
-    reportCoverage(ctx.onCoverage, segments, { status: "reviewed" });
+    reportCoverage(ctx.onCoverage, segments, {
+      status: result.partial === true ? "unreviewed" : "reviewed"
+    });
     return [result];
   }
   if (result.failure === "schema" && depth < BISECT_MAX_DEPTH && segments.length > 1) {
@@ -41841,7 +41881,7 @@ async function reviewPackage(ctx, segments, mechanical, depth) {
   }
   const retryable = depth === 0 && !deadlinePassed(ctx.wallDeadline);
   const final = retryable ? await ctx.review(ctx.buildEnvelope(segments, mechanical)) : result;
-  const status = final.verdict === "error" ? "unreviewed" : "reviewed";
+  const status = final.verdict === "error" || final.partial === true ? "unreviewed" : "reviewed";
   reportCoverage(ctx.onCoverage, segments, { status });
   return [final];
 }
@@ -41918,7 +41958,7 @@ async function reviewWhole(opts) {
     return mergeResults([]);
   }
   const result = await opts.review(opts.buildEnvelope(opts.diff, opts.mechanical, opts.brief));
-  const status = result.verdict === "error" ? "unreviewed" : "reviewed";
+  const status = result.verdict === "error" || result.partial === true ? "unreviewed" : "reviewed";
   for (const path of paths) opts.onCoverage(path, { status });
   return result;
 }
@@ -42067,6 +42107,7 @@ var NEGATION_PATTERNS = [
   /^no changes? needed$/i
 ];
 var FINAL_ONLY_PATTERNS = [/^acceptable$/i, /^fine$/i];
+var EXPLICIT_RETRACTION = /\bi was wrong\b/i;
 function normalizeText(text2) {
   let s = text2.trim();
   s = s.replace(/^[-*+]\s+/, "");
@@ -42084,6 +42125,7 @@ function stripSentence(sentence) {
   return sentence.trim().replace(LEADING_PREFIX, "").replace(TRAILING_PUNCTUATION, "").trim();
 }
 function isSelfNegating(text2) {
+  if (EXPLICIT_RETRACTION.test(text2)) return true;
   const sentences = normalizeText(text2).split(SENTENCE_SPLIT).map((s) => s.trim()).filter((s) => s !== "");
   if (sentences.length === 0) return false;
   const lastIndex = sentences.length - 1;
@@ -42095,7 +42137,7 @@ function isSelfNegating(text2) {
 }
 
 // src/review/validate.ts
-function validateFindings(findings, changedLinesByPath, minConfidence, lineTextByPath) {
+function validateFindings(findings, changedLinesByPath, minConfidence, lineTextByPath, options = {}) {
   const changedSetByPath = /* @__PURE__ */ new Map();
   for (const [path, lines] of changedLinesByPath) {
     changedSetByPath.set(path, new Set(lines));
@@ -42103,23 +42145,26 @@ function validateFindings(findings, changedLinesByPath, minConfidence, lineTextB
   const EMPTY_CHANGED = /* @__PURE__ */ new Set();
   const kept = [];
   let selfNegating = 0;
+  let unsupportedEvidence = 0;
+  const unsupportedPaths = /* @__PURE__ */ new Set();
   for (const f of findings) {
     const changedSet = changedSetByPath.get(f.path) ?? EMPTY_CHANGED;
     if (!changedSet.has(f.line)) continue;
-    const isLlm = f.source === void 0 || f.source === "llm";
-    if (isLlm && f.quoted_line !== void 0 && lineTextByPath !== void 0) {
-      const actual = lineTextByPath.get(f.path)?.get(f.line);
-      if (actual !== void 0 && !quotesMatch(actual, f.quoted_line)) continue;
-    }
     if (isSelfNegating(f.text)) {
       selfNegating++;
       continue;
     }
+    const isLlm = f.source === void 0 || f.source === "llm";
+    if (isLlm && !quoteIsValid(f, lineTextByPath, options.requireQuote === true)) {
+      unsupportedEvidence++;
+      unsupportedPaths.add(f.path);
+      continue;
+    }
     const c = f.confidence ?? "low";
-    const keep = f.severity === "blocker" || f.severity === "high" || minConfidence === "high" && c === "high" || minConfidence === "medium" && (c === "high" || c === "medium");
+    const keep = minConfidence === "high" && c === "high" || minConfidence === "medium" && (c === "high" || c === "medium");
     if (!keep) continue;
     const spanInDiff = spanIsInDiff(f, changedSet);
-    if (f.suggestion !== void 0 && !(f.confidence === "high" && spanInDiff)) {
+    if (f.suggestion !== void 0 && !suggestionIsSafe(f, lineTextByPath, spanInDiff)) {
       const { suggestion: _dropped, ...rest } = f;
       kept.push(rest);
     } else {
@@ -42130,15 +42175,24 @@ function validateFindings(findings, changedLinesByPath, minConfidence, lineTextB
     process.stdout.write(`  Dropped ${selfNegating} self-negating finding(s)
 `);
   }
-  return { findings: dedup(kept), selfNegating };
+  return {
+    findings: dedup(kept),
+    selfNegating,
+    unsupportedEvidence,
+    unsupportedPaths: [...unsupportedPaths]
+  };
 }
-function quotesMatch(actual, quoted) {
+function quoteIsValid(finding, lineTextByPath, requireQuote) {
+  if (finding.quoted_line === void 0) return !requireQuote;
+  if (lineTextByPath === void 0) return !requireQuote;
+  const actual = lineTextByPath.get(finding.path)?.get(finding.line);
+  return actual !== void 0 && quoteMatches(actual, finding.quoted_line);
+}
+function quoteMatches(actual, quoted) {
   const norm = (s) => s.replace(/\s+/g, " ").trim();
   const a = norm(actual);
   const q = norm(quoted);
-  if (q === "") return true;
-  if (a === "") return false;
-  return a.includes(q) || q.includes(a);
+  return q !== "" && a.includes(q);
 }
 function spanIsInDiff(f, changedSet) {
   const end = f.end_line ?? f.line;
@@ -42146,6 +42200,29 @@ function spanIsInDiff(f, changedSet) {
     if (!changedSet.has(l)) return false;
   }
   return true;
+}
+function suggestionIsSafe(finding, lineTextByPath, spanInDiff) {
+  if (finding.confidence !== "high" || !spanInDiff || finding.suggestion === void 0) {
+    return false;
+  }
+  const source = sourceSpan(finding, lineTextByPath);
+  if (source === void 0) return lineTextByPath === void 0;
+  if (finding.suggestion === source) return false;
+  return !isProseInstruction(finding.suggestion);
+}
+function sourceSpan(finding, lineTextByPath) {
+  const lines = lineTextByPath?.get(finding.path);
+  if (lines === void 0) return void 0;
+  const source = [];
+  for (let line = finding.line; line <= (finding.end_line ?? finding.line); line++) {
+    const text2 = lines.get(line);
+    if (text2 === void 0) return void 0;
+    source.push(text2);
+  }
+  return source.join("\n");
+}
+function isProseInstruction(suggestion) {
+  return /^(?:Add|Call|Change|Ensure|Remove|Update|Use|Wire)\s/.test(suggestion.trim());
 }
 function dedup(findings) {
   const byKey = /* @__PURE__ */ new Map();
@@ -42793,7 +42870,20 @@ async function reviewAndValidate(input) {
     review: (envelope) => reviewWithModel(envelope, modelOptions(input)),
     readFile: readFileAt(reviewHead, cwd)
   });
-  const { stamped, selfNegating } = validate(result, distillation.review_diff, inputs);
+  const { stamped, selfNegating, unsupportedPaths } = validate(
+    result,
+    distillation.review_diff,
+    inputs
+  );
+  for (const path of unsupportedPaths) {
+    coverage.set(path, { status: "unreviewed", reason: "unsupported-source-evidence" });
+  }
+  if (unsupportedPaths.length > 0) {
+    const evidenceError = "Review findings lacked valid source evidence; affected files remain unreviewed.";
+    result.error = [result.error, evidenceError].filter(Boolean).join(" ");
+    result.partial = true;
+    if (stamped.length === 0) result.verdict = "error";
+  }
   return {
     result,
     stamped,
@@ -42820,6 +42910,7 @@ function modelOptions(input) {
     model: input.inputs.model,
     apiKey: input.inputs.apiKey,
     timeoutMs: input.inputs.requestTimeoutMs,
+    wallDeadline: input.wallDeadline,
     ...input.fetch ? { fetch: input.fetch } : {}
   };
 }
@@ -42841,11 +42932,13 @@ function validate(result, diff, inputs) {
     result.findings,
     changedLinesByPath,
     inputs.minConfidence,
-    lineTextByPath
+    lineTextByPath,
+    { requireQuote: true }
   );
   return {
     stamped: anchored.findings.map((f) => ({ ...f, fp: fingerprint(f) })),
-    selfNegating: anchored.selfNegating
+    selfNegating: anchored.selfNegating,
+    unsupportedPaths: anchored.unsupportedPaths
   };
 }
 
@@ -42971,7 +43064,7 @@ ${body.reviewPlan}
 ${body.otherChecks}
 
 `;
-  const topMustFix = buildTopMustFixSection(body.topMustFix);
+  const topMustFix = buildTopMustFixSection(body.findings);
   if (topMustFix !== "") section += `### Top-N must-fix
 ${topMustFix}`;
   parts.push(section);
@@ -43017,20 +43110,8 @@ function buildMechanicalSection(mechanical, llmErrored) {
   return `${out}
 `;
 }
-function buildTopMustFixSection(topMustFix) {
-  const capped = dedupeCap(topMustFix, TOP_MUST_FIX_MAX);
-  return capped.length > 0 ? capped.join("\n") : "";
-}
-function dedupeCap(items, max) {
-  const seen = /* @__PURE__ */ new Set();
-  const out = [];
-  for (const item of items) {
-    if (seen.has(item)) continue;
-    seen.add(item);
-    out.push(item);
-    if (out.length === max) break;
-  }
-  return out;
+function buildTopMustFixSection(findings) {
+  return [...findings].sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]).slice(0, TOP_MUST_FIX_MAX).map((finding) => `- \`${finding.path}:${finding.line}\` \u2014 ${finding.text}`).join("\n");
 }
 function buildSeveritySummary(findings) {
   const counts = { blocker: 0, high: 0, medium: 0, low: 0, nit: 0 };
@@ -43076,7 +43157,6 @@ function formatVerdict(result, opts) {
     botLogoUrl: opts.botLogoUrl ?? DEFAULT_BOT_LOGO_URL,
     reviewPlan: result.review_plan ?? "",
     otherChecks: result.other_checks ?? "",
-    topMustFix: result.top_must_fix ?? [],
     findings,
     changedFiles: opts.changedFiles ?? 0,
     // Default compact: only an explicit "full" restores the multi-line checklist.

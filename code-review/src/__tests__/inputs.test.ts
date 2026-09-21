@@ -71,8 +71,8 @@ describe("MAX_CHUNKS", () => {
 });
 
 describe("MAX_WALL_MS", () => {
-  it("defaults to 0 (off)", () => {
-    expect(readInputs().maxWallMs).toBe(0);
+  it("defaults to ten minutes", () => {
+    expect(readInputs().maxWallMs).toBe(600000);
   });
 
   it("parses a positive override", () => {
@@ -80,9 +80,29 @@ describe("MAX_WALL_MS", () => {
     expect(readInputs().maxWallMs).toBe(600000);
   });
 
-  it("falls back to 0 on a non-numeric value", () => {
+  it("falls back to ten minutes on a non-numeric value", () => {
     setInput("MAX_WALL_MS", "abc");
+    expect(readInputs().maxWallMs).toBe(600000);
+  });
+
+  it("allows an explicit zero to disable the budget", () => {
+    setInput("MAX_WALL_MS", "0");
     expect(readInputs().maxWallMs).toBe(0);
+  });
+
+  it("rejects a negative budget instead of silently disabling it", () => {
+    setInput("MAX_WALL_MS", "-1");
+    expect(() => readInputs()).toThrow("MAX_WALL_MS must be a non-negative integer");
+  });
+
+  it.each(["-0.5", "0.5", "1.5"])("rejects fractional budget %s", (value) => {
+    setInput("MAX_WALL_MS", value);
+    expect(() => readInputs()).toThrow("MAX_WALL_MS must be a non-negative integer");
+  });
+
+  it("does not interpret malformed zero text as an explicit opt-out", () => {
+    setInput("MAX_WALL_MS", "0ms");
+    expect(readInputs().maxWallMs).toBe(600000);
   });
 });
 

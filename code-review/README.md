@@ -29,6 +29,7 @@ on:
     types: [opened, synchronize, ready_for_review, reopened]
 
 permissions:
+  actions: read # upload-sarif reads workflow-run metadata
   contents: read
   pull-requests: write
   issues: write
@@ -195,7 +196,7 @@ reproducible and means a provider error never leaves the PR un-reviewed.
 
 Both run as steps of this composite action (pinned release binaries) and write SARIF.
 Their findings (1) **upload to the repo's Code Scanning tab** — which requires
-`security-events: write` in your workflow `permissions` — and (2) are passed to the LLM
+`security-events: write` and `actions: read` in your workflow `permissions` — and (2) are passed to the LLM
 as TRUSTED context to assess; confirmed ones appear in the verdict comment tagged with
 their tool. A scanner that fails to install or run is non-fatal: the review degrades to
 LLM-only. On a **fork PR** (where `security-events: write` and the token are read-only) the
@@ -267,7 +268,10 @@ review over findings that had to be dropped.
 **4 — Validate & anchor.** Findings are checked against the diff — hallucinated
 line numbers and low-confidence findings are dropped, findings are deduplicated by
 `(path, line, end_line, text-fingerprint)` keeping the highest severity, and each
-is anchored to a real changed line.
+is anchored to a real changed line. Fresh LLM findings must quote source text from
+their cited line; missing or mismatched evidence leaves the affected coverage
+unreviewed rather than turning an unsupported claim into a clean approval. Existing
+stored findings remain compatible. Top-N recommendations use only surviving findings.
 
 **5 — Post.** A summary verdict comment (machine-readable label for `pr-babysit`),
 plus — when `INLINE_COMMENTS` is on — per-line review comments with committable
@@ -501,6 +505,7 @@ on:
 
 permissions:
   contents: read
+  actions: read # upload-sarif reads workflow-run metadata
   pull-requests: write
   issues: write
   security-events: write # upload the gitleaks/opengrep SARIF to the Code Scanning tab
@@ -655,7 +660,7 @@ resolution without posting the note again.
 | `MODEL_ID` | no | per-provider | Model id. Defaults to `deepseek/deepseek-v4-pro` for `openrouter` (1M-token context, 384k max output, so large diffs and verbose reviews rarely truncate), `deepseek-v4-flash` for `deepseek`, `MiniMax-M3` for `minimax`, and `kimi-k2.7-code` for `kimi`. Use `<vendor>/<model>` ids for OpenRouter; bare native ids for the native providers. Pick one with reliable JSON structured output. |
 | `API_KEY` | **yes** | — | API key for the selected `PROVIDER` (OpenRouter, DeepSeek, MiniMax, or Kimi). **Required** — an empty value fails the action. Pass via a step-level `env:`/`secrets` reference for secret hygiene. |
 | `MAX_TOKENS` | no | `8192` | Max completion-token budget per request (always sent — omitting it makes OpenRouter reserve the model's full output window against your credits and can 402-reject). A response truncated at this limit (`finish_reason: length`) is retried with a doubled budget up to the 131072 ceiling (escalations don't consume hang retries); whatever the outcome, the findings completed before a cut are salvaged. |
-| `MIN_CONFIDENCE` | no | `high` | Drop findings below this confidence unless severity is blocker/high (`high` or `medium`) |
+| `MIN_CONFIDENCE` | no | `high` | Drop findings below this confidence at every severity, including blocker/high (`high` or `medium`) |
 | `INLINE_COMMENTS` | no | `true` | Post per-line review comments with committable code suggestions (Reviews API), in addition to the summary comment |
 | `MANAGE_LABELS` | no | `true` | Set a real PR label chip matching the verdict (`merge-approved` / `request-changes`) and remove the opposite one. Requires `issues: write`. |
 | `FAIL_ON` | no | `changes` | Comma-separated verdicts that **fail the job** (turn this check red so branch protection can block the PR): `changes`, `error`, or both. **Defaults to `changes`** — the job goes red when the bot requests changes. Set `none` to keep the job green on every verdict (advisory only), or `changes,error` to also block when the review could not run (`error`). The comment, label, and outputs are still posted; only the exit code changes. Governs the verdict-driven gate only — a thrown infra error fails the job regardless. **Mark this check Required in branch protection** for the red to actually block a merge. See [Blocking merges](#blocking-merges). |
@@ -671,7 +676,7 @@ resolution without posting the note again.
 | `MAX_DIFF_LINES` | no | `0` (unlimited) | Maximum diff lines before truncation, applied **before** chunking. `0` reviews the whole diff. Set a positive value to keep the first N lines (lexicographic by file path) and append a truncation notice. |
 | `MAX_CHUNK_LINES` | no | `1500` | Per-chunk diff-line budget, applied to the diff **after** [distillation](#how-it-works) has collapsed mechanical repeats/renames/formatting away. When the remaining diff exceeds this, it is split into packages of **whole files** (≤ this many primed lines each), each reviewed in its own model call and the results merged — so a large PR no longer overwhelms a single call and abstains. Module-coupled files (e.g. a Rust `#[path]`/`mod` parent and its child) always share a package, and a single file over the budget rides alone **with its full post-change content attached** as read-only context, so the model never judges a construct from a truncated view. A package whose call fails to produce valid structured output is split and retried in bisecting halves (up to 4 leaves) to isolate just the file(s) actually at fault, instead of writing off the whole package; a leaf that still fails is recorded `unreviewed` in the [coverage ledger](#coverage-ledger) (never a confident approval over unreviewed files). `0` disables chunking (always one call). |
 | `MAX_CHUNKS` | no | `0` | Maximum chunks (= model calls) per review, bounding cost and wall-clock on very large PRs. **`0` (default, changed from `20` prior to `@v7` — see [v7 migration](#v7-migration)) = unlimited.** When set, files beyond the cap are recorded **per-file** as `unreviewed` in the [coverage ledger](#coverage-ledger), which also degrades a would-be `approved` verdict to `error`; the `### Other checks` section of the summary comment also carries a short notice naming them, on top of (not instead of) the per-file ledger rows. |
-| `MAX_WALL_MS` | no | `0` | Soft wall-clock budget, in milliseconds, for the whole review loop. `0` (default) = off, never interrupts a run. When set and exceeded mid-run, packages not yet started are recorded `pending` in the [coverage ledger](#coverage-ledger) instead of being attempted, `reviewed_tree` does **not** advance, and the round becomes resumable — via [`@toolu resume`](#toolu-resume-resuming-a-paused-run), a plain workflow re-run, or automatically on the PR's next push. Checked before every package and before every bisection split; a call already in flight always finishes. |
+| `MAX_WALL_MS` | no | `600000` (10 min) | Shared model-work deadline covering cartography, retries, backoff and token escalation. `0` explicitly disables it. Active requests abort at expiry; recovered findings remain partial and their files stay `unreviewed`, while unstarted packages become `pending`. Neither advances `reviewed_tree`; both resume via [`@toolu resume`](#toolu-resume-resuming-a-paused-run), a workflow re-run, or the next push. Publishing runs outside this budget; use a workflow job timeout (for example 15 minutes) as an outer ceiling. |
 | `REQUEST_TIMEOUT_MS` | no | `180000` (3 min) | Per-attempt model deadline in milliseconds. Each chunk gets up to this long per attempt (retried a few times) before it is aborted and the chunk abstains (`This operation was aborted`). Raise it for slow/large models, lower it to fail faster. A non-positive value falls back to the default. |
 | `TOKEN` | no | `${{ github.token }}` | GitHub token for posting and editing comments. |
 | `APP_ID` | no | — | GitHub App id. Set together with `APP_PRIVATE_KEY` to post as a custom-branded App (`Toolu — Code Review`) instead of `github-actions[bot]`. Both must be set or the action falls back to the default identity. See [Custom identity](#custom-identity-github-app). |
@@ -753,7 +758,7 @@ The gate governs the verdict only; a thrown infra error fails the job regardless
 | Comment shape | The sticky comment gains four new sections — `### Coverage`, `### Repeated findings`, `### Unanchored findings`, `### Findings GitHub rejected inline` — see [Coverage ledger](#coverage-ledger), [Finding clustering](#finding-clustering), and [Inline comments & suggestions](#inline-comments--suggestions). |
 | Prompt bytes | The user prompt's block order changed (the shared prefix — system, codebase overview, project rules, brief, prior threads — now extends further before the per-package blocks, for prompt-cache efficiency), so prompt byte counts differ from `@v6` even on an identical diff. The review's substance is unaffected. |
 | Inline anchoring | The `subject_type: "file"` fallback is **gone** — a finding on a file GitHub's own diff can't anchor a comment to is never posted as a file-level comment. It appears in the sticky comment's `### Unanchored findings` section instead. See [Inline comments & suggestions](#inline-comments--suggestions). |
-| New input | `MAX_WALL_MS` — soft wall-clock budget, resumable via [`@toolu resume`](#toolu-resume-resuming-a-paused-run). See [Inputs](#inputs). |
+| Runtime budget | `MAX_WALL_MS` — now defaults to a shared ten-minute model-work deadline (including active calls), resumable via [`@toolu resume`](#toolu-resume-resuming-a-paused-run). Set `0` to explicitly opt out. See [Inputs](#inputs). |
 
 No workflow YAML changes are required to adopt `@v7` — bump the pinned ref (`falconiere/toolu-ghactions/code-review@v7`) and the new behavior applies on the next run. If any downstream tooling parses the sticky comment's markdown directly (rather than the machine-readable verdict label `pr-babysit` uses), re-check it against the new section shapes above; the verdict label, checklist line, and `### Findings` block are unchanged.
 

@@ -64,8 +64,8 @@ export interface ActionInputs {
   maxChunkLines: number;
   /** Max chunks (= model calls) per review, bounding cost; files beyond are skipped (0 = unlimited). */
   maxChunks: number;
-  /** Soft wall-clock budget (ms) for the whole review loop; packages not yet started
-   *  when it is exceeded are recorded pending and left for a resume run (0 = off). */
+  /** Shared model-work deadline (ms), including in-flight calls and retries.
+   *  Unfinished files remain resumable (600000 by default; 0 explicitly opts out). */
   maxWallMs: number;
   /** Per-attempt model deadline in ms before an attempt is aborted and retried (must fit the model). */
   requestTimeoutMs: number;
@@ -114,6 +114,20 @@ const DEFAULT_MAX_TOKENS = 8192;
  * 60s deadline aborted most chunks ("This operation was aborted") and abstained.
  */
 const DEFAULT_REQUEST_TIMEOUT_MS = 180000;
+
+/** Ten minutes across all model calls, matching action.yml MAX_WALL_MS. */
+const DEFAULT_MAX_WALL_MS = 600000;
+
+/** A negative wall budget is a typo, never an implicit request for unlimited work. */
+function readWallBudget(): number {
+  const raw = core.getInput("MAX_WALL_MS").trim();
+  const parsed = Number(raw);
+  const budget = raw === "" || !Number.isFinite(parsed) ? DEFAULT_MAX_WALL_MS : parsed;
+  if (!Number.isSafeInteger(budget) || budget < 0) {
+    throw new Error("MAX_WALL_MS must be a non-negative integer (0 explicitly disables it).");
+  }
+  return budget;
+}
 
 /**
  * Parse a string input as a base-10 integer, falling back to `fallback` for an
@@ -272,7 +286,7 @@ export function readInputs(): ActionInputs {
     maxDiffLines: intInput("MAX_DIFF_LINES", 0),
     maxChunkLines: intInput("MAX_CHUNK_LINES", 1500),
     maxChunks: intInput("MAX_CHUNKS", 0),
-    maxWallMs: intInput("MAX_WALL_MS", 0),
+    maxWallMs: readWallBudget(),
     requestTimeoutMs: validateTimeout(
       intInput("REQUEST_TIMEOUT_MS", DEFAULT_REQUEST_TIMEOUT_MS),
       "REQUEST_TIMEOUT_MS",

@@ -84,7 +84,7 @@ export class VerdictIntegrityError extends Error {
  * Format the verdict comment body and its PR label.
  *
  * @param result - the review result (verdict, findings, review_plan,
- *   other_checks, top_must_fix). A null/empty verdict defaults to "approved"
+ *   other_checks). A null/empty verdict defaults to "approved"
  *   when there are no findings, else "changes" (the bash default).
  * @param opts - branding + the pre-rendered recap/history + the state marker.
  * @returns `{ body, label }` — the full markdown body (marker last) and the bare
@@ -122,7 +122,6 @@ export function formatVerdict(
     botLogoUrl: opts.botLogoUrl ?? DEFAULT_BOT_LOGO_URL,
     reviewPlan: result.review_plan ?? "",
     otherChecks: result.other_checks ?? "",
-    topMustFix: result.top_must_fix ?? [],
     findings,
     changedFiles: opts.changedFiles ?? 0,
     // Default compact: only an explicit "full" restores the multi-line checklist.

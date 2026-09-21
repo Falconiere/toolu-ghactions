@@ -49,6 +49,10 @@ const NEGATION_PATTERNS: readonly RegExp[] = [
  *  no-defect when they are the LAST sentence (nothing follows to contradict them). */
 const FINAL_ONLY_PATTERNS: readonly RegExp[] = [/^acceptable$/i, /^fine$/i];
 
+/** An explicit first-person retraction invalidates the entire finding, even when
+ * the model tries to pivot that same response to a different claim afterwards. */
+const EXPLICIT_RETRACTION = /\bi was wrong\b/i;
+
 /**
  * Whole-text normalization, run once before sentence splitting: outer
  * whitespace, a leading list/heading marker, and a bold/italic/code wrapper
@@ -83,6 +87,7 @@ function stripSentence(sentence: string): string {
  * defect. Callers drop the finding rather than report it.
  */
 export function isSelfNegating(text: string): boolean {
+  if (EXPLICIT_RETRACTION.test(text)) return true;
   const sentences = normalizeText(text)
     .split(SENTENCE_SPLIT)
     .map((s) => s.trim())

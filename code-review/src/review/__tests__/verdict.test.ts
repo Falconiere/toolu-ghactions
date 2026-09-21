@@ -73,9 +73,9 @@ describe("formatVerdict", () => {
     expect(lastLine(body)).toBe(MARKER);
   });
 
-  it("dedupes top_must_fix and caps it at 3 (FIX 11 — coordinate-findings parity)", () => {
-    // 10 items with duplicates: the rendered Top-N must-fix section keeps the first
-    // 3 UNIQUE items in order, matching the bash `unique | .[0:3]` cap.
+  it("does not render model top_must_fix prose when no validated findings survive", () => {
+    // The recorded model summary is untrusted independently generated prose. It
+    // must never resurrect a claim that validation already rejected.
     const topMustFix = [
       "Fix the auth bypass in login.ts",
       "Fix the auth bypass in login.ts", // dup of #1
@@ -97,18 +97,8 @@ describe("formatVerdict", () => {
     };
     const { body } = formatVerdict(result, {});
 
-    // Exactly the 3 first-seen unique items render; the 4th+ unique ones do not.
-    expect(body).toContain("Fix the auth bypass in login.ts");
-    expect(body).toContain("Close the SQL injection in query.ts");
-    expect(body).toContain("Handle the null deref in parse.ts");
-    expect(body).not.toContain("A fifth distinct must-fix");
-    expect(body).not.toContain("A sixth distinct must-fix");
-
-    // The Top-N section body has exactly 3 lines (no duplicate of #1).
-    const section = body.split("### Top-N must-fix\n")[1] ?? "";
-    const firstItem = "Fix the auth bypass in login.ts";
-    const occurrences = section.split(firstItem).length - 1;
-    expect(occurrences).toBe(1);
+    expect(body).not.toContain("### Top-N must-fix");
+    expect(body).not.toContain("Fix the auth bypass in login.ts");
   });
 
   it("enforces the 65000-char cap, dropping lowest-severity findings first while recap + marker survive", () => {
@@ -191,7 +181,7 @@ describe("formatVerdict — verbosity (compact vs full) + dedup", () => {
     expect(body).not.toContain("Reviewed 3-file diff");
   });
 
-  it("omits empty Review Plan / Other checks / Top-N sections (no filler)", () => {
+  it("omits empty Review Plan / Other checks sections without filler", () => {
     const bare: ProviderResult = {
       verdict: "changes",
       findings: [{ path: "src/a.ts", line: 1, severity: "high", text: "bug", confidence: "high" }],
@@ -204,14 +194,14 @@ describe("formatVerdict — verbosity (compact vs full) + dedup", () => {
     expect(body).not.toContain("_No review plan provided._");
     expect(body).not.toContain("### Other checks");
     expect(body).not.toContain("_No additional checks performed._");
-    // Top-N is no longer auto-generated from findings.
-    expect(body).not.toContain("### Top-N must-fix");
+    expect(body).toContain("### Top-N must-fix");
   });
 
-  it("never auto-duplicates findings into Top-N: each finding text appears exactly once", () => {
+  it("derives Top-N from surviving findings instead of model prose", () => {
     const { body } = formatVerdict(base, {});
-    expect(body.split("auth bypass").length - 1).toBe(1);
-    expect(body.split("spacing").length - 1).toBe(1);
+    expect(body).toContain("### Top-N must-fix");
+    expect(body).toContain("`src/a.ts:10` — auth bypass");
+    expect(body).toContain("`src/b.ts:4` — spacing");
   });
 
   it("severity-sorts the Findings list worst-first without mutating the input array", () => {
@@ -230,12 +220,13 @@ describe("formatVerdict — verbosity (compact vs full) + dedup", () => {
     expect(findings).toEqual(snapshot);
   });
 
-  it("renders the model's explicit Top-N list in BOTH modes", () => {
+  it("ignores model Top-N prose in BOTH modes", () => {
     const withTop: ProviderResult = { ...base, top_must_fix: ["Fix the auth bypass now"] };
     for (const verbosity of ["compact", "full"] as const) {
       const { body } = formatVerdict(withTop, { verbosity, changedFiles: 2 });
       expect(body).toContain("### Top-N must-fix");
-      expect(body).toContain("Fix the auth bypass now");
+      expect(body).not.toContain("Fix the auth bypass now");
+      expect(body).toContain("`src/a.ts:10` — auth bypass");
     }
   });
 });

@@ -52,8 +52,8 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
   const cwd = deps.cwd ?? process.cwd();
   const now = deps.now ?? Date.now;
   const startMs = now();
-  // MAX_WALL_MS soft budget: undefined (off) when unset, else an epoch-ms deadline
-  // the review loop checks against (review/bisect.ts's `deadlinePassed`) — computed
+  // MAX_WALL_MS shared model deadline: undefined when explicitly disabled, else
+  // checked before dispatch and used to abort active model attempts — computed
   // once, off the same start timestamp `publish()` uses for the run's duration.
   const wallDeadline = inputs.maxWallMs > 0 ? startMs + inputs.maxWallMs : undefined;
 

@@ -5,9 +5,11 @@ on:
     types: [opened, synchronize, ready_for_review, reopened]
 
 permissions:
+  actions: read
   contents: read
   pull-requests: write
   issues: write
+  security-events: write
 
 concurrency:
   group: code-review-${{ github.ref }}
@@ -16,6 +18,7 @@ concurrency:
 jobs:
   review:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # Dogfooding runs the LOCAL action (the PR's own code-review/), so restrict it
     # to same-repo PRs — a fork PR must not execute its untrusted build on our
     # runner. Forks are withheld the secret anyway; this also skips them cleanly.

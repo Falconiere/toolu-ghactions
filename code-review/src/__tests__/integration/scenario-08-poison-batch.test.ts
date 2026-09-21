@@ -48,6 +48,7 @@ function fiftyFindings(): ScriptedFinding[] {
     confidence: "high" as const,
     category: "correctness",
     text: findingText(i),
+    quoted_line: `export const f${i} = ${i};`,
   }));
 }
 
