@@ -1,5 +1,15 @@
 # Changelog
 
+## [7.3.1](https://github.com/Falconiere/toolu-ghactions/compare/v7.3.0...v7.3.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* **code-review:** bound model work and require grounded findings ([6621638](https://github.com/Falconiere/toolu-ghactions/commit/6621638497f09a71052d9e8a902e4be79178c5ea))
+* **code-review:** clarify migration and verify strict quote acceptance ([8dca744](https://github.com/Falconiere/toolu-ghactions/commit/8dca744b009b68990b385f9fbab0f6d820ef5f83))
+* **code-review:** don't claim 'LLM judgment unavailable' on a gated review ([ccd0269](https://github.com/Falconiere/toolu-ghactions/commit/ccd02690f3e6f9c7dda460f49115c4d4e7b8ee21))
+* **code-review:** don't mark a file unreviewed over one mis-quoted finding ([b7cab1c](https://github.com/Falconiere/toolu-ghactions/commit/b7cab1cb067b676124908334eea2739b7600bd75))
+
 ## [7.3.0](https://github.com/Falconiere/toolu-ghactions/compare/v7.2.0...v7.3.0) (2026-09-20)
 
 
