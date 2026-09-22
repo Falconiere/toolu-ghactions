@@ -31,10 +31,16 @@ jobs:
       # in-repo build reviews this repo's own PRs before it ships in a release.
       - uses: ./code-review
         with:
-          # v4 flat contract. PROVIDER is written out rather than left to
+          # Flat provider contract. PROVIDER is written out rather than left to
           # action.yml's default: this step runs the LOCAL action, so editing that
           # default would silently move this repo's own review along with it.
           # MODEL_ID still rides the action's default (deepseek/deepseek-v4-pro)
           # and carries the same exposure.
           PROVIDER: openrouter
           API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Dogfood Jev on this repo's own reviews. It reuses API_KEY (no extra
+          # secret) and shares the review deadline; JEV_MODEL_ID is pinned to the
+          # same value action.yml defaults to, for the reason PROVIDER is pinned
+          # above — a default change must not silently move this repo's reviews.
+          JEV_ENABLED: 'true'
+          JEV_MODEL_ID: typesafe/jev-1.13

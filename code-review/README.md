@@ -123,7 +123,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # full history so the merge-base resolves without deepening
-      - uses: falconiere/toolu-ghactions/code-review@v4
+      - uses: falconiere/toolu-ghactions/code-review@v8
         with:
           API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 ```
@@ -134,7 +134,7 @@ jobs:
 Use `MODEL_ID` to switch models and `REVIEW_PROMPT_FILE` for a custom checklist:
 
 ```yaml
-      - uses: falconiere/toolu-ghactions/code-review@v4
+      - uses: falconiere/toolu-ghactions/code-review@v8
         with:
           PROVIDER: openrouter
           MODEL_ID: 'anthropic/claude-sonnet-4'
@@ -155,7 +155,7 @@ The action runs **one model**, selected with three flat inputs:
 Anything OpenRouter serves works as long as it's OpenAI-compatible:
 
 ```yaml
-- uses: falconiere/toolu-ghactions/code-review@v4
+- uses: falconiere/toolu-ghactions/code-review@v8
   with:
     PROVIDER: openrouter
     MODEL_ID: 'anthropic/claude-sonnet-4-5'   # default: deepseek/deepseek-v4-pro
@@ -521,7 +521,7 @@ Prefer clicking through github.com → Settings → Developer settings → GitHu
 ### Use it
 
 ```yaml
-- uses: falconiere/toolu-ghactions/code-review@v4
+- uses: falconiere/toolu-ghactions/code-review@v8
   with:
     API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
     APP_ID: ${{ secrets.APP_ID }}
@@ -582,7 +582,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: falconiere/toolu-ghactions/code-review@v4
+      - uses: falconiere/toolu-ghactions/code-review@v8
         with:
           API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 ```
@@ -797,7 +797,7 @@ mapping.
 Use outputs in downstream workflow steps. Note that once the action **fails** the job (see [Blocking merges](#blocking-merges)), later steps that read these outputs need `if: always()` to run at all:
 
 ```yaml
-- uses: falconiere/toolu-ghactions/code-review@v4
+- uses: falconiere/toolu-ghactions/code-review@v8
   id: review
   with:
     API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -834,8 +834,7 @@ than assuming a pure input rename.
 To adopt `@v8`: bump the pin to
 `falconiere/toolu-ghactions/code-review@v8`, drop any `PROVIDER` line naming a
 removed vendor (or set it to `openrouter`), namespace `MODEL_ID`, and point
-`API_KEY` at your OpenRouter key. The copy-pasteable examples above still pin `@v4`; swap in
-`@v8` when you copy one.
+`API_KEY` at your OpenRouter key. The examples throughout this README pin `@v8` already.
 
 ## v7 migration
 
