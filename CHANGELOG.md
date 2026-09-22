@@ -1,5 +1,22 @@
 # Changelog
 
+## [8.0.0](https://github.com/Falconiere/toolu-ghactions/compare/v7.3.2...v8.0.0) (2026-09-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **code-review:** PROVIDER values "deepseek", "minimax", "kimi" and "moonshot" are rejected. Set PROVIDER to "openrouter" (or omit it), pass an OpenRouter model id in MODEL_ID (deepseek/deepseek-v4-flash, minimax/minimax-m3, moonshotai/kimi-k2), and set API_KEY to an OpenRouter key.
+
+### Features
+
+* **code-review:** add optional Jev assessments and tighten review prompts ([685bbc5](https://github.com/Falconiere/toolu-ghactions/commit/685bbc59e997c5a2312590dbdbca6525acdd6477))
+* **code-review:** remove the native vendor backends, keep OpenRouter only ([56126de](https://github.com/Falconiere/toolu-ghactions/commit/56126de86061757684b255ec9b0e00e9e8559ab7))
+
+
+### Bug Fixes
+
+* **code-review:** align Jev with the OpenRouter-only review API ([542fc6f](https://github.com/Falconiere/toolu-ghactions/commit/542fc6f3f6ee3ab570b92028fc449d160c076b10))
+
 ## [7.3.2](https://github.com/Falconiere/toolu-ghactions/compare/v7.3.1...v7.3.2) (2026-09-21)
 
 
