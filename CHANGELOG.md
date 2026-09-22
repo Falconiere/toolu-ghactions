@@ -1,5 +1,14 @@
 # Changelog
 
+## [8.0.1](https://github.com/Falconiere/toolu-ghactions/compare/v8.0.0...v8.0.1) (2026-09-22)
+
+
+### Bug Fixes
+
+* **code-review:** make every surface say what the code now does ([a5a292f](https://github.com/Falconiere/toolu-ghactions/commit/a5a292f715b1f993de2e983f56ada167e83a0efe))
+* **code-review:** name the vendor's real OpenRouter slug in the migration advice ([4b827bb](https://github.com/Falconiere/toolu-ghactions/commit/4b827bb51e1cec07aa999f2fd2c12d53c6c1c762))
+* **code-review:** point migration advice at the catalog instead of guessing ids ([a3b22cc](https://github.com/Falconiere/toolu-ghactions/commit/a3b22ccc1ea029d545f158da31eb24c61d94ef32))
+
 ## [8.0.0](https://github.com/Falconiere/toolu-ghactions/compare/v7.3.2...v8.0.0) (2026-09-22)
 
 
