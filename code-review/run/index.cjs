@@ -39762,9 +39762,12 @@ var NEGATION_PATTERNS = [
   /^no changes? needed$/i
 ];
 var FINAL_ONLY_PATTERNS = [
+  /^no findings?$/i,
   /^acceptable$/i,
   /^fine$/i,
-  /^a theoretical edge case, not a practical concern$/i
+  /^a theoretical edge case, not a practical concern$/i,
+  /^.+, which is correct because .+$/i,
+  /^correct and matches .+$/i
 ];
 var EXPLICIT_RETRACTION = /\bi was wrong\b/i;
 function normalizeText(text2) {
@@ -43026,8 +43029,14 @@ function settleVerdict(input, reduction, exceptions) {
   validated.other_checks = "";
   let verdict = resolveVerdict(validated.verdict, findings.length);
   const removed = suppressed.length + scoped.dropped.length + input.selfNegating + (input.settledBeforeValidation ?? 0) + (input.result.enhancement?.dismissed ?? 0);
-  if (verdict === "changes" && findings.length === 0 && removed > 0) {
-    verdict = "approved";
+  if (verdict === "changes" && findings.length === 0) {
+    if (removed > 0) {
+      verdict = "approved";
+    } else {
+      verdict = "error";
+      validated.failure ??= "schema";
+      validated.error ??= "Model requested changes but supplied no source-validated actionable findings.";
+    }
   }
   if (verdict === "approved" && lastVerdict(input) === "changes" && hasCarried(findings, reduction)) {
     verdict = "changes";

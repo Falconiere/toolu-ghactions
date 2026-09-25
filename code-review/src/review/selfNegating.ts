@@ -6,13 +6,12 @@
 // comment is accurate. No issue." — structurally valid (anchored, high
 // confidence), so the purely-structural gates in validate.ts never touched it.
 //
-// Rule (verbatim from the design doc): normalize the text, split it into
+// Rule: normalize the text, split it into
 // sentences, and drop the finding when ANY sentence — in full, after an optional
 // leading "This is|That is|It is" and its own trailing punctuation are stripped —
-// equals one of the no-defect phrases below. `acceptable`/`fine` are the two
-// exceptions: they only count in the FINAL sentence, because a concede-then-accuse
-// finding ("This is fine. The real bug is the missing await on line 12.") uses
-// "fine" to set up the real defect that follows, not to conclude there is none.
+// equals one of the no-defect phrases below. Some conclusions only count in the
+// FINAL sentence, because a concede-then-accuse finding ("This is fine. The real
+// bug is the missing await on line 12.") must keep its actionable claim.
 //
 // Deliberately FULL-SENTENCE matching, never substring: "Clamping to 0 here is
 // not acceptable for negative counts." contains "acceptable" but is not, in full,
@@ -45,12 +44,15 @@ const NEGATION_PATTERNS: readonly RegExp[] = [
   /^no changes? needed$/i,
 ];
 
-/** "acceptable"/"fine" alone are common concession words — they only mean
- *  no-defect when they are the LAST sentence (nothing follows to contradict them). */
+/** No-finding and affirmative conclusions count only as the LAST sentence, so a
+ *  later defect claim is not discarded as praise. */
 const FINAL_ONLY_PATTERNS: readonly RegExp[] = [
+  /^no findings?$/i,
   /^acceptable$/i,
   /^fine$/i,
   /^a theoretical edge case, not a practical concern$/i,
+  /^.+, which is correct because .+$/i,
+  /^correct and matches .+$/i,
 ];
 
 /** An explicit first-person retraction invalidates the entire finding, even when
@@ -86,8 +88,8 @@ function stripSentence(sentence: string): string {
 }
 
 /**
- * True when the finding's text concludes — in any sentence, or in its final
- * sentence for the "acceptable"/"fine" concession words — that there is no
+ * True when the finding's text concludes — in any sentence for explicit
+ * negations, or in its final sentence for affirmative conclusions — that there is no
  * defect. Callers drop the finding rather than report it.
  */
 export function isSelfNegating(text: string): boolean {

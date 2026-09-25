@@ -150,8 +150,8 @@ describe("scenario 9 — a hostile state marker (AC-15.9)", () => {
     });
 
     // Memory just starts fresh: both files are reviewed, and the round writes a
-    // complete marker of its own.
-    expect(result.verdict).toBe("changes");
+    // complete marker of its own. The model requested changes without a finding.
+    expect(result.verdict).toBe("error");
     expect(lastBody(rec)).toContain("reviewed: 2");
     const state = markerState(rec);
     expect("history" in state && state.history.length).toBe(1);

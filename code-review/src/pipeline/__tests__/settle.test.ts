@@ -215,6 +215,20 @@ function settle(opts: {
 }
 
 describe("settleVerdict — MAX_ROUNDS surrender vs the coverage degrade", () => {
+  it("reports an unsupported changes verdict as an error when there are no findings", () => {
+    const settled = settle({
+      findings: [],
+      reviewed: ["src/a.ts"],
+      unreviewed: [],
+      maxRounds: 0,
+      priorRounds: 0,
+    });
+
+    expect(settled.verdict).toBe("error");
+    expect(settled.validated.verdict).toBe("error");
+    expect(settled.validated.error).toContain("no source-validated actionable findings");
+  });
+
   it("the coverage degrade runs LAST and overrides the round cap's approval (decided order)", () => {
     // Round 3 of MAX_ROUNDS=3 with only sub-blocker findings → applyRoundCap turns
     // "changes" into "approved". One path went unreviewed in the same round, so the
@@ -328,9 +342,9 @@ describe("settleVerdict — the coverage degrade on its own", () => {
     expect(settled.capped).toBe(false);
   });
 
-  it("leaves a findings-free `changes` alone — the degrade only ever touches an approval", () => {
-    // Nothing was suppressed or dropped, so the flip-to-approved rule does not fire
-    // either; the verdict stays the do-not-merge one it already was.
+  it("classifies a findings-free `changes` as an unsupported verdict", () => {
+    // Nothing was suppressed or dropped, so there is no actionable evidence for
+    // the provider's change request and no reason to infer an approval either.
     const settled = settle({
       findings: [],
       reviewed: ["src/a.ts"],
@@ -338,8 +352,8 @@ describe("settleVerdict — the coverage degrade on its own", () => {
       maxRounds: 0,
       priorRounds: 0,
     });
-    expect(settled.verdict).toBe("changes");
-    expect(settled.validated.error).toBeUndefined();
+    expect(settled.verdict).toBe("error");
+    expect(settled.validated.error).toContain("no source-validated actionable findings");
   });
 
   it("a carried finding holds the prior round's `changes`, and validated.verdict agrees", () => {
@@ -469,7 +483,7 @@ describe("Jev dismissal accounting", () => {
       jevDismissed: 1,
     };
     expect(settle(opts).verdict).toBe("approved");
-    expect(settle({ ...opts, jevDismissed: 0 }).verdict).toBe("changes");
+    expect(settle({ ...opts, jevDismissed: 0 }).verdict).toBe("error");
     expect(settle({ ...opts, unreviewed: ["src/b.ts"] }).verdict).toBe("error");
   });
 });

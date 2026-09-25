@@ -1,8 +1,7 @@
-// pipeline.test.ts — END-TO-END pipeline wiring with REAL data, no network, no
-// fabricated review output. A real temp git repo provides the diff, the REAL
-// recorded OpenRouter fixtures drive the LLM via an injected fetch, and a
-// recording fake Octokit captures every API call. The pull_request context is a
-// real GitHub pull_request event payload shape.
+// pipeline.test.ts — END-TO-END pipeline wiring with real git diffs and no network.
+// Recorded OpenRouter responses and a replay of PR #125's published review text
+// drive the LLM through an injected fetch. A recording Octokit captures GitHub
+// calls, and the pull_request context uses the real event payload shape.
 import { describe, it, expect, afterEach } from "vitest";
 import { readFileSync, mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,6 +21,7 @@ import {
 import { appendFpMarker } from "@/review/fpmarker.js";
 import { git, setupGitRepo, writeFile, removeRepo } from "@/git/__tests__/helpers.js";
 import { replayWithSourceQuotes } from "./integration/evidenceReplay.js";
+import { replayCompletion, wantsStream } from "./integration/sse.js";
 
 const FIXTURES = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -309,8 +309,8 @@ describe("runReview — end to end", () => {
 
     const result = await runReview(deps);
 
-    // The recorded success fixture's verdict is "changes" (no structured findings).
-    expect(result.verdict).toBe("changes");
+    // The recorded response requests changes but supplies no actionable finding.
+    expect(result.verdict).toBe("error");
     expect(result.findingsCount).toBe(0);
     expect(result.commentUrl).toBeTruthy();
 
@@ -343,7 +343,7 @@ describe("runReview — end to end", () => {
       now: () => 1_700_000_000_000,
     });
 
-    expect(result.verdict).toBe("changes");
+    expect(result.verdict).toBe("error");
     // No new comment created: every post updated the located sticky (id 555).
     expect(rec.created).toEqual([]);
     expect(rec.updated.every((u) => u.comment_id === 555)).toBe(true);
@@ -490,7 +490,7 @@ describe("runReview — end to end", () => {
         cwd: dir,
         now: () => 1_700_000_000_000,
       });
-      expect(result.verdict).toBe("changes");
+      expect(result.verdict).toBe("error");
     } finally {
       if (saved === undefined) delete process.env["GITHUB_ACTION_PATH"];
       else process.env["GITHUB_ACTION_PATH"] = saved;
@@ -524,7 +524,7 @@ describe("runReview — end to end", () => {
       now: () => 1_700_000_000_000,
     });
 
-    expect(result.verdict).toBe("changes");
+    expect(result.verdict).toBe("error");
     // It reused the located sticky (memory still works) and posted a marker.
     expect(rec.updated.every((u) => u.comment_id === 777)).toBe(true);
     const lastBody = rec.updated.at(-1)?.body ?? "";
@@ -587,7 +587,7 @@ describe("runReview — end to end", () => {
       now: () => 1_700_000_000_000,
     });
 
-    expect(result.verdict).toBe("changes");
+    expect(result.verdict).toBe("error");
     // No new comment: the located sticky (id 888) is updated in place.
     expect(rec.created).toEqual([]);
     expect(rec.updated.length).toBeGreaterThanOrEqual(1);
@@ -1102,6 +1102,74 @@ describe("runReview — thread-aware inline reconciliation", () => {
 // network) — proves shouldBlock fires on a genuinely-produced verdict. The gate
 // itself is wired in main.ts; here we assert the decision against the real verdict.
 describe("FAIL_ON merge gate (real pipeline verdict + shouldBlock)", () => {
+  it("rejects source-free claims and PR #125 praise without blocking FAIL_ON=changes", async () => {
+    const dir = setupGitRepo();
+    repos.push(dir);
+    git(dir, "checkout", "-b", "feature", "--quiet");
+    const path = "crates/execution/src/execution/job_runner.rs";
+    const sourceLine = "  let local = start_local_services(config, &msg, &ctx).await?;";
+    writeFile(
+      dir,
+      path,
+      `${Array.from({ length: 94 }, (_, n) => `// context ${n + 1}`).join("\n")}\n${sourceLine}\n`,
+    );
+    git(dir, "add", path);
+    git(dir, "commit", "-m", "add job runner", "--quiet");
+    const headSha = git(dir, "rev-parse", "HEAD").trim();
+    const { octokit, rec } = fakeOctokit();
+    const normalFetch = replayFetch("success");
+    const review = {
+      review_plan: "Review the changed job runner code.",
+      verdict: "changes",
+      findings: [
+        {
+          path,
+          line: 95,
+          severity: "low",
+          confidence: "high",
+          category: "documentation accuracy",
+          quoted_line: sourceLine.trim(),
+          text: "The `start_local_services` call is unchanged. It is still called after context building, which is correct because the context must be available for service configuration.",
+        },
+        {
+          path,
+          line: 95,
+          severity: "high",
+          confidence: "high",
+          quoted_line: "let local = start_local_services(config, &msg, &ctx);",
+          text: "The service startup error is silently ignored.",
+        },
+      ],
+      other_checks: "",
+      top_must_fix: [],
+    };
+    const fetchReview: typeof fetch = async (url, init) =>
+      wantsStream(init)
+        ? replayCompletion(
+            { choices: [{ finish_reason: "stop", message: { content: JSON.stringify(review) } }] },
+            init,
+          )
+        : normalFetch(url, init);
+
+    const result = await runReview({
+      inputs: baseInputs({ failOn: parseFailOn("changes") }),
+      octokit,
+      context: prContext(headSha),
+      fetch: fetchReview,
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    expect(result.verdict).toBe("error");
+    expect(result.findingsCount).toBe(0);
+    expect(shouldBlock(result.verdict, parseFailOn("changes"))).toBe(false);
+    expect(shouldBlock(result.verdict, parseFailOn("changes,error"))).toBe(true);
+    expect(rec.reviews).toEqual([]);
+    const body = rec.updated.at(-1)?.body ?? "";
+    expect(body).toContain("Review incomplete — source evidence");
+    expect(body).not.toContain("### Findings (1)");
+  });
+
   it("AC-7: a real 'changes' verdict blocks under FAIL_ON=changes, not under none", async () => {
     const { dir, headSha } = track(featureRepoWithChange());
     const { octokit } = fakeOctokit();
@@ -1110,7 +1178,7 @@ describe("FAIL_ON merge gate (real pipeline verdict + shouldBlock)", () => {
       inputs: baseInputs(),
       octokit,
       context: prContext(headSha),
-      fetch: replayFetch("success"),
+      fetch: replayFetch("findings"),
       cwd: dir,
       now: () => 1_700_000_000_000,
     });
