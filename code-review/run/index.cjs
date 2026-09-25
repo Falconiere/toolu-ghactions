@@ -39765,9 +39765,11 @@ var FINAL_ONLY_PATTERNS = [
   /^no findings?$/i,
   /^acceptable$/i,
   /^fine$/i,
-  /^a theoretical edge case, not a practical concern$/i,
-  /^.+, which is correct because .+$/i,
-  /^correct and matches .+$/i
+  /^a theoretical edge case, not a practical concern$/i
+];
+var PRAISE_ONLY_PATTERNS = [
+  /^the [^.!?]+ call is unchanged\. it is still called after [^.!?]+, which is correct because [^.!?]+\.$/i,
+  /^the [^.!?]+ env var is still set after [^.!?]+\. this is correct and matches [^.!?]+\.$/i
 ];
 var EXPLICIT_RETRACTION = /\bi was wrong\b/i;
 function normalizeText(text2) {
@@ -39788,7 +39790,9 @@ function stripSentence(sentence) {
 }
 function isSelfNegating(text2) {
   if (EXPLICIT_RETRACTION.test(text2)) return true;
-  const sentences = normalizeText(text2).split(SENTENCE_SPLIT).map((s) => s.trim()).filter((s) => s !== "");
+  const normalized = normalizeText(text2);
+  if (PRAISE_ONLY_PATTERNS.some((p) => p.test(normalized))) return true;
+  const sentences = normalized.split(SENTENCE_SPLIT).map((s) => s.trim()).filter((s) => s !== "");
   if (sentences.length === 0) return false;
   const lastIndex = sentences.length - 1;
   return sentences.some((sentence, i) => {

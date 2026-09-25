@@ -51,8 +51,13 @@ const FINAL_ONLY_PATTERNS: readonly RegExp[] = [
   /^acceptable$/i,
   /^fine$/i,
   /^a theoretical edge case, not a practical concern$/i,
-  /^.+, which is correct because .+$/i,
-  /^correct and matches .+$/i,
+];
+
+/** PR #125's praise without an explicit "No findings". Match the WHOLE text so
+ * a separate defect sentence cannot be hidden by a later compliment. */
+const PRAISE_ONLY_PATTERNS: readonly RegExp[] = [
+  /^the [^.!?]+ call is unchanged\. it is still called after [^.!?]+, which is correct because [^.!?]+\.$/i,
+  /^the [^.!?]+ env var is still set after [^.!?]+\. this is correct and matches [^.!?]+\.$/i,
 ];
 
 /** An explicit first-person retraction invalidates the entire finding, even when
@@ -94,7 +99,9 @@ function stripSentence(sentence: string): string {
  */
 export function isSelfNegating(text: string): boolean {
   if (EXPLICIT_RETRACTION.test(text)) return true;
-  const sentences = normalizeText(text)
+  const normalized = normalizeText(text);
+  if (PRAISE_ONLY_PATTERNS.some((p) => p.test(normalized))) return true;
+  const sentences = normalized
     .split(SENTENCE_SPLIT)
     .map((s) => s.trim())
     .filter((s) => s !== "");
