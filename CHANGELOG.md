@@ -1,5 +1,13 @@
 # Changelog
 
+## [8.0.2](https://github.com/Falconiere/toolu-ghactions/compare/v8.0.1...v8.0.2) (2026-09-25)
+
+
+### Bug Fixes
+
+* **code-review:** align verdict with validated findings ([0d7320f](https://github.com/Falconiere/toolu-ghactions/commit/0d7320f44b106e75285598799f62c41222f2c439))
+* **code-review:** limit praise filtering to complete comments ([28f4b41](https://github.com/Falconiere/toolu-ghactions/commit/28f4b412fd4a24fc571e52d1196aae154c7ddd55))
+
 ## [8.0.1](https://github.com/Falconiere/toolu-ghactions/compare/v8.0.0...v8.0.1) (2026-09-22)
 
 
