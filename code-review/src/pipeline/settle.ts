@@ -55,8 +55,10 @@ export interface SettledVerdict {
  * review — new findings only from lines changed since the last reviewed sha, with
  * the resume exception paths always in scope), respect settled threads at CLUSTER
  * level — resolved on GitHub or dismissed in a reply, where dismissing the exemplar
- * dismisses the pattern — flip a now-findingless "changes" to "approved", then apply
- * the (optional) MAX_ROUNDS surrender cap and the ledger's own degrade rule.
+ * dismisses the pattern. A now-findingless "changes" becomes "approved" when all
+ * findings were accounted for as removed, or "error" when the model supplied no
+ * supporting finding. Then apply the (optional) MAX_ROUNDS surrender cap and the
+ * ledger's own degrade rule.
  */
 export function settleVerdict(
   input: PublishInput,
@@ -105,13 +107,19 @@ export function settleVerdict(
     input.selfNegating +
     (input.settledBeforeValidation ?? 0) +
     (input.result.enhancement?.dismissed ?? 0);
-  if (verdict === "changes" && findings.length === 0 && removed > 0) {
-    // Every concrete finding was either settled on its thread (resolved or
-    // dismissed by the author), out of the incremental scope, or dropped as
-    // self-negating chatter that never should have been a finding; keeping the
-    // model's request-changes would re-block on code that was already reviewed,
-    // decisions a human already made, or junk the model itself contradicted.
-    verdict = "approved";
+  if (verdict === "changes" && findings.length === 0) {
+    if (removed > 0) {
+      // Every concrete finding was settled, out of scope, or self-negating.
+      verdict = "approved";
+    } else {
+      // A bare request for changes supplies nothing a reader can verify or fix.
+      // Keep the review distinct from both an actionable change request and an
+      // approval when the provider gives no supporting finding at all.
+      verdict = "error";
+      validated.failure ??= "schema";
+      validated.error ??=
+        "Model requested changes but supplied no source-validated actionable findings.";
+    }
   }
   // A CARRIED finding was not re-examined this round (its path was out of the tree
   // scope, collapsed, or unreviewable), so this round's approval speaks only for the

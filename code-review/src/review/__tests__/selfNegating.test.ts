@@ -44,6 +44,35 @@ describe("isSelfNegating — verbatim reviewer texts", () => {
     expect(isSelfNegating("No defects found.")).toBe(true);
   });
 
+  it("drops the no-finding and praise-only conclusions posted on PR #125", () => {
+    expect(
+      isSelfNegating(
+        "The `container` field is initialized to `None`. This is correct for jobs without containers. No findings.",
+      ),
+    ).toBe(true);
+    expect(isSelfNegating("No findings. The missing await drops the error.")).toBe(false);
+    expect(
+      isSelfNegating(
+        "The `workspace_gc` call is unchanged. It is still called after `prepare_job_dirs`, which is correct because the workspace must exist before garbage collection can be spawned.",
+      ),
+    ).toBe(true);
+    expect(
+      isSelfNegating(
+        "The `start_local_services` call is unchanged. It is still called after context building, which is correct because the context must be available for service configuration.",
+      ),
+    ).toBe(true);
+    expect(
+      isSelfNegating(
+        "The `GITHUB_EVENT_PATH` env var is still set after writing the event JSON. This is correct and matches the GitHub Actions documentation.",
+      ),
+    ).toBe(true);
+    expect(
+      isSelfNegating(
+        "The `start_local_services` call is unchanged. It is still called after context building, which is correct because the context must be available for service configuration. But the returned error is ignored.",
+      ),
+    ).toBe(false);
+  });
+
   it("keeps concede-then-accuse and does-not-work-as-intended findings", () => {
     expect(isSelfNegating("This is fine. The real bug is the missing await on line 12.")).toBe(
       false,

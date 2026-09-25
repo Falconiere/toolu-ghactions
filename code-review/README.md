@@ -809,6 +809,8 @@ Use outputs in downstream workflow steps. Note that once the action **fails** th
 
 By default (`FAIL_ON: changes`) the action **fails its own job** when the bot's verdict is `changes` — the check turns red, the verdict comment and label are still posted. To make that red check actually **block a merge**, mark this action's check as a **required status check** in the repository's branch-protection rules (Settings → Branches). Without that, the red check is visible but advisory.
 
+`changes` requires at least one surviving actionable finding. Explicit "No findings" and recognized praise-only comments are removed before the verdict is settled. If source evidence is rejected and affected files remain unreviewed, the verdict is `error` ("Review incomplete — source evidence"), not a request for changes. A model response that requests changes without any supporting finding is also `error` because the action cannot establish an actionable verdict. Under the default `FAIL_ON: changes`, these `error` verdicts do not fail the job; use `FAIL_ON: changes,error` to block incomplete reviews too. When a model's only findings are recognized as non-actionable and coverage is complete, the verdict is `approved`.
+
 - `FAIL_ON: changes` (default) — block when the bot requests changes.
 - `FAIL_ON: changes,error` — also block when the review could not run (provider error/timeout). Safer, but a transient failure reds the check until re-run.
 - `FAIL_ON: none` — never fail on a verdict; the review stays purely advisory (the pre-4.x behavior). You can still gate yourself with `if: steps.review.outputs.verdict == 'changes'`.
