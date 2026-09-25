@@ -71,6 +71,11 @@ describe("isSelfNegating — verbatim reviewer texts", () => {
         "The `start_local_services` call is unchanged. It is still called after context building, which is correct because the context must be available for service configuration. But the returned error is ignored.",
       ),
     ).toBe(false);
+    expect(
+      isSelfNegating(
+        "The startup error is silently ignored. The context is constructed before the call, which is correct because configuration needs the context.",
+      ),
+    ).toBe(false);
   });
 
   it("keeps concede-then-accuse and does-not-work-as-intended findings", () => {
