@@ -1,10 +1,11 @@
 name: 'Toolu Merge Gate'
 description: |
   Fails until a pull request is ready to auto-merge: it carries the
-  `merge-approved` label the code-review action sets on an approved verdict,
-  and every review thread has a reply from someone other than its opener. Mark
-  the job's check Required in branch protection, next to required
-  conversation resolution, so auto-merge waits for it.
+  `merge-approved` label the code-review action sets on an approved verdict (or
+  every finding of that review is settled on the current head, recomputed
+  read-only with no model call), and every review thread has a reply from
+  someone other than its opener. Mark the job's check Required in branch
+  protection, next to required conversation resolution, so auto-merge waits for it.
 author: 'Falconiere'
 branding:
   icon: 'git-merge'
@@ -12,16 +13,51 @@ branding:
 
 inputs:
   github-token:
-    description: 'Token used to read the pull request labels and review threads. Needs `pull-requests: read`.'
+    description: 'Token used to read the pull request labels, comments, review threads and head. Needs `pull-requests: read`.'
     required: false
     default: ${{ github.token }}
+  settle-recompute:
+    description: "When `merge-approved` is missing, recompute the last code-review round from its stored findings minus the ones settled on their threads (resolved, `@toolu dismiss`, or argued out). No model call, no writes; fails closed. 'false' restores the label-only rule."
+    required: false
+    default: 'true'
+  approve-below:
+    description: 'Mirror of the code-review `APPROVE_BELOW` input: findings below this severity do not block.'
+    required: false
+    default: 'nit'
+  trigger-phrase:
+    description: 'Mirror of the code-review `TRIGGER_PHRASE` input (the `<phrase> dismiss` command).'
+    required: false
+    default: '@toolu'
+  min-trigger-permission:
+    description: 'Mirror of the code-review `MIN_TRIGGER_PERMISSION` input: the repo permission a dismissing login needs (`write` or `admin`).'
+    required: false
+    default: 'write'
 
 runs:
   using: composite
   steps:
+    # Read-only settle recompute (#123), a node24 nested action built from code-review's
+    # own recompute. `$/` resolves against THIS action's repository at the consumer's
+    # pinned ref (runner >= 2.336.0). Best-effort: a failure leaves its outputs empty,
+    # which the gate treats as "not settled" — fail closed, never a crash of the check.
+    - name: Recompute settled findings (read-only, no model call)
+      id: recompute
+      if: ${{ inputs.settle-recompute == 'true' }}
+      continue-on-error: true
+      uses: $/merge-gate/recompute
+      with:
+        TOKEN: ${{ inputs.github-token }}
+        PR: ${{ github.event.pull_request.number }}
+        APPROVE_BELOW: ${{ inputs.approve-below }}
+        TRIGGER_PHRASE: ${{ inputs.trigger-phrase }}
+        MIN_TRIGGER_PERMISSION: ${{ inputs.min-trigger-permission }}
     - shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
         REPO: ${{ github.repository }}
         PR: ${{ github.event.pull_request.number }}
+        SETTLE_OUTCOME: ${{ steps.recompute.outputs.outcome }}
+        SETTLE_REASON: ${{ steps.recompute.outputs.reason }}
+        SETTLE_SETTLED: ${{ steps.recompute.outputs.settled }}
+        SETTLE_TOTAL: ${{ steps.recompute.outputs.total }}
       run: bash "$GITHUB_ACTION_PATH/src/merge-gate.sh"

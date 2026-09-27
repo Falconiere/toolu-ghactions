@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # merge-gate.sh — fail the `merge-gate` check until a pull request is ready to
-# auto-merge: it carries the `merge-approved` label, and every review thread
-# has a reply from someone other than the account that opened it. Green CI and
+# auto-merge: it carries the `merge-approved` label (or the composite's read-only
+# recompute found every finding of the last review settled on the live head), and
+# every review thread has a reply from someone other than the account that opened it. Green CI and
 # resolved threads are left to branch protection (required checks and required
 # conversation resolution); this gate checks only what GitHub cannot express.
 #
 # env : GH_TOKEN (needs pull-requests: read), REPO (owner/name), PR (number),
-#       GITHUB_STEP_SUMMARY (optional; the verdict is appended when set)
+#       GITHUB_STEP_SUMMARY (optional; the verdict is appended when set),
+#       SETTLE_OUTCOME / SETTLE_REASON / SETTLE_SETTLED / SETTLE_TOTAL (optional; the
+#       outputs of the composite's `recompute` step — merge-gate/recompute)
 # exit: 0 ready to merge; 1 not ready, bad input, or an unreadable API.
 set -euo pipefail
 
@@ -45,13 +48,29 @@ api() {
 }
 
 problems=()
+settled_by_recompute=0
 
 # Read the labels fresh rather than from the event payload: the Code Review
 # action swaps `request-changes` for `merge-approved` during its own job, after
 # the payload of the event that started this run was frozen.
 api "repos/$REPO/issues/$PR/labels?per_page=100"
 if ! jq -e 'any(.[]; .name == "merge-approved")' >/dev/null <<<"$API_OUT"; then
-  problems+=("label \`merge-approved\` is missing; the Code Review action adds it when its verdict is approved")
+  # The label is missing. The recompute step (no model call, read-only) may still
+  # show that every finding of the last review on the LIVE head is settled — a reply
+  # on a thread is a trigger, and the label only moves inside a review run. Anything
+  # but an explicit `approve` (unchanged, empty from a skipped or crashed step) keeps
+  # the problem: fail closed.
+  if [ "${SETTLE_OUTCOME:-}" = "approve" ]; then
+    settled_by_recompute=1
+  else
+    missing="label \`merge-approved\` is missing; the Code Review action adds it when its verdict is approved"
+    # The reason is one of the recompute's own tokens; anything else is not echoed.
+    case "${SETTLE_REASON:-}" in
+      ""|*[!a-z-]*) ;;
+      *) missing="$missing (settled-findings recompute: $SETTLE_REASON)" ;;
+    esac
+    problems+=("$missing")
+  fi
 fi
 
 # Every review thread across every page; --slurp wraps the pages in one array.
@@ -92,8 +111,14 @@ while IFS= read -r thread; do
 done <<<"$unanswered"
 
 if [ "${#problems[@]}" -eq 0 ]; then
-  echo "PR #$PR is ready to auto-merge: labeled \`merge-approved\` and every review thread answered." \
-    | tee -a "$summary"
+  if [ "$settled_by_recompute" -eq 1 ]; then
+    count() { case "$1" in ""|*[!0-9]*) echo "?" ;; *) echo "$1" ;; esac; }
+    echo "PR #$PR is ready to auto-merge: every finding of the last review is settled ($(count "${SETTLE_SETTLED:-}") of $(count "${SETTLE_TOTAL:-}"), no model call) and every review thread answered." \
+      | tee -a "$summary"
+  else
+    echo "PR #$PR is ready to auto-merge: labeled \`merge-approved\` and every review thread answered." \
+      | tee -a "$summary"
+  fi
   exit 0
 fi
 
