@@ -8,79 +8,18 @@ import { afterEach, describe, expect, it } from "vitest";
 import { join } from "node:path";
 import { runReview } from "@/pipeline.js";
 import type { ReviewDeps } from "@/pipeline.js";
-import { writeFile } from "@/git/__tests__/helpers.js";
 import { decodeMarker, encodeMarker, extractMarker } from "@/state.js";
 import type { ReviewState } from "@/state.js";
-import { extractFpMarker } from "@/review/fpmarker.js";
 import { inProgressBody } from "@/pipeline/bodies.js";
 import { asReviewState } from "@/pipeline/sticky.js";
 import type { ActionInputs } from "@/inputs.js";
-import {
-  baseInputs,
-  cleanupRepos,
-  lastBody,
-  prContext,
-  scratchRepo,
-  settleContext,
-} from "./harness.js";
+import { baseInputs, cleanupRepos, lastBody, prContext, settleContext } from "./harness.js";
 import { fakeOctokit } from "./github.js";
-import type { CommentUser, Recorded, SeedThread } from "./github.js";
-import { changes, modelServer, type ScriptedFinding } from "./model.js";
+import type { CommentUser } from "./github.js";
+import { DISMISS, dismiss, path, reviewedRound, writes } from "./settleRound.js";
+import type { Round } from "./settleRound.js";
 
 afterEach(cleanupRepos);
-
-const DISMISS = "@toolu dismiss — intentional, see ADR-12";
-const path = (n: number): string => `src/f${n}.ts`;
-
-function finding(n: number, severity: ScriptedFinding["severity"]): ScriptedFinding {
-  return {
-    path: path(n),
-    line: 1,
-    severity,
-    confidence: "high",
-    category: "correctness",
-    quoted_line: `export const f${n} = ${n};`,
-    text: `Export f${n} leaks an internal constant (${severity}).`,
-  };
-}
-
-/** Round 1: a real review that asks for changes on `severities.length` files, then the
- *  bot threads GitHub would show for the inline comments it posted. */
-async function reviewedRound(
-  severities: ScriptedFinding["severity"][],
-  inputs: Partial<ActionInputs> = {},
-) {
-  const { dir, headSha } = scratchRepo((d) => {
-    severities.forEach((_, i) => writeFile(d, path(i), `export const f${i} = ${i};\n`));
-  });
-  const threads: SeedThread[] = [];
-  const { octokit, rec } = fakeOctokit({ threads });
-  const server = modelServer({ reply: () => changes(severities.map((s, i) => finding(i, s))) });
-  const round1 = await runReview({
-    inputs: baseInputs({ manageLabels: true, ...inputs }),
-    octokit,
-    context: prContext(headSha),
-    cwd: dir,
-    fetch: server.fetch,
-    lookupPermission: async () => "write",
-  });
-  expect(round1.verdict).toBe("changes");
-  const posted = rec.reviews.flatMap((r) => r.comments);
-  expect(posted).toHaveLength(severities.length);
-  posted.forEach((c, i) => {
-    threads.push({
-      threadId: `T${i}`,
-      rootCommentId: 5000 + i,
-      fp: extractFpMarker(c.body) ?? "",
-      path: c.path,
-      line: c.line ?? null,
-      rootBody: c.body,
-    });
-  });
-  return { dir, headSha, octokit, rec, threads, server, body: lastBody(rec) };
-}
-
-type Round = Awaited<ReturnType<typeof reviewedRound>>;
 
 /** The settle run: a reply on thread `root`, with the live head and permission given. */
 function settle(round: Round, over: Partial<ReviewDeps> = {}, inputs: Partial<ActionInputs> = {}) {
@@ -97,25 +36,6 @@ function settle(round: Round, over: Partial<ReviewDeps> = {}, inputs: Partial<Ac
     lookupHeadSha: async () => round.headSha,
     ...over,
   });
-}
-
-/** Snapshot every GitHub mutation + model call, to prove a run added none. */
-function writes(round: Round, rec: Recorded = round.rec) {
-  return {
-    model: round.server.calls.length,
-    created: rec.created.length,
-    updated: rec.updated.length,
-    reviews: rec.reviews.length,
-    replies: rec.replies.length,
-    resolved: rec.resolved.length,
-    added: rec.addedLabels.length,
-    removed: rec.removedLabels.length,
-  };
-}
-
-function dismiss(thread: SeedThread | undefined, author = "human-dev"): void {
-  if (!thread) throw new Error("fixture: missing thread");
-  thread.replies = [{ author, body: DISMISS }];
 }
 
 describe("scenario 13 — @toolu dismiss settles the verdict without a model call (#125)", () => {

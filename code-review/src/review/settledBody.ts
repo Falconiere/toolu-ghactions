@@ -19,6 +19,11 @@ const VERDICT_LINE = /^\*\*Verdict:\*\* .*$/m;
 const SETTLED_NOTE = /^(\*\*Verdict:\*\* .*)\n\n> ✅ \*\*Settled:\*\* [^\n]*/m;
 const IN_PROGRESS = /^### PR Review in Progress$/m;
 
+/** True for the sticky's in-progress body (a review is running on the PR). */
+export function isInProgressBody(body: string): boolean {
+  return IN_PROGRESS.test(body);
+}
+
 /**
  * Apply a settle outcome to a completed verdict body, or return null when the body is
  * not one (in-progress, skipped, foreign) or lacks a line an approval must rewrite.
@@ -27,7 +32,7 @@ export function patchSettledBody(
   body: string,
   outcome: Extract<RecomputeOutcome, { kind: "approve" }>,
 ): string | null {
-  if (IN_PROGRESS.test(body) || !VERDICT_LINE.test(body)) return null;
+  if (isInProgressBody(body) || !VERDICT_LINE.test(body)) return null;
   let out = body.replace(SETTLED_NOTE, "$1");
   if (outcome.verdict === "approved") {
     const swapped = swapLabel(out);

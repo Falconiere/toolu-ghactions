@@ -43632,6 +43632,40 @@ function resolveNote(thread) {
   }
 }
 
+// src/review/settledBody.ts
+var VERDICT_LINE = /^\*\*Verdict:\*\* .*$/m;
+var SETTLED_NOTE = /^(\*\*Verdict:\*\* .*)\n\n> ✅ \*\*Settled:\*\* [^\n]*/m;
+var IN_PROGRESS = /^### PR Review in Progress$/m;
+function isInProgressBody(body) {
+  return IN_PROGRESS.test(body);
+}
+function patchSettledBody(body, outcome) {
+  if (isInProgressBody(body) || !VERDICT_LINE.test(body)) return null;
+  let out = body.replace(SETTLED_NOTE, "$1");
+  if (outcome.verdict === "approved") {
+    const swapped = swapLabel(out);
+    if (swapped === null) return null;
+    out = swapped.replace(VERDICT_LINE, `**Verdict:** ${labelAndBadge("approved").badge}`);
+  }
+  return out.replace(VERDICT_LINE, (line) => `${line}
+
+${settledNote(outcome)}`);
+}
+function settledNote(outcome) {
+  const base = `> \u2705 **Settled:** ${outcome.settled} of ${outcome.total} finding(s) settled on their threads since this review (dismissed, argued out, or resolved) \u2014 verdict recomputed without a new model call.`;
+  if (outcome.verdict === "approved") return base;
+  return `${base} The rest are below \`APPROVE_BELOW\`, so the label is \`merge-approved\`.`;
+}
+function swapLabel(body) {
+  const from = `\`${labelAndBadge("changes").label}\``;
+  const to = `\`${labelAndBadge("approved").label}\``;
+  const lines = body.split("\n");
+  const at = lines.lastIndexOf(from);
+  if (at < 0) return lines.includes(to) ? body : null;
+  lines[at] = to;
+  return lines.join("\n").replace(`- [x] Set verdict label (${from})`, `- [x] Set verdict label (${to})`);
+}
+
 // src/review/recompute.ts
 function recomputeVerdict(input) {
   const { state } = input;
@@ -43696,35 +43730,56 @@ function clusterGroups(findings, clusters) {
   return groups;
 }
 
-// src/review/settledBody.ts
-var VERDICT_LINE = /^\*\*Verdict:\*\* .*$/m;
-var SETTLED_NOTE = /^(\*\*Verdict:\*\* .*)\n\n> ✅ \*\*Settled:\*\* [^\n]*/m;
-var IN_PROGRESS = /^### PR Review in Progress$/m;
-function patchSettledBody(body, outcome) {
-  if (IN_PROGRESS.test(body) || !VERDICT_LINE.test(body)) return null;
-  let out = body.replace(SETTLED_NOTE, "$1");
-  if (outcome.verdict === "approved") {
-    const swapped = swapLabel(out);
-    if (swapped === null) return null;
-    out = swapped.replace(VERDICT_LINE, `**Verdict:** ${labelAndBadge("approved").badge}`);
+// src/pipeline/settleEvaluation.ts
+async function evaluateSettle(deps) {
+  let sticky;
+  try {
+    sticky = await findSticky(deps.octokit, deps.target);
+  } catch (err) {
+    return {
+      kind: "skip",
+      reason: "comments-unreadable",
+      detail: err instanceof Error ? err.message : String(err)
+    };
   }
-  return out.replace(VERDICT_LINE, (line) => `${line}
-
-${settledNote(outcome)}`);
+  if (sticky === null) return { kind: "skip", reason: "no-sticky" };
+  if (sticky.author?.type !== "Bot") return { kind: "skip", reason: "not-bot-sticky" };
+  if (isInProgressBody(sticky.body)) return { kind: "skip", reason: "in-progress" };
+  const headSha = await liveHead(deps);
+  if (headSha === null) return { kind: "skip", reason: "no-head" };
+  const threads = await classifyDismissals(
+    ownThreads(await fetchReviewThreads(deps.octokit, deps.target), sticky),
+    {
+      triggerPhrase: deps.triggerPhrase,
+      minPermission: deps.minPermission,
+      lookupPermission: deps.lookupPermission
+    }
+  );
+  const outcome = recomputeVerdict({
+    state: asReviewState(decodeMarker(sticky.body)),
+    headSha,
+    threads,
+    approveBelow: deps.approveBelow
+  });
+  if (outcome.kind === "unchanged") return { kind: "unchanged", reason: outcome.reason };
+  return { kind: "approve", outcome, sticky };
 }
-function settledNote(outcome) {
-  const base = `> \u2705 **Settled:** ${outcome.settled} of ${outcome.total} finding(s) settled on their threads since this review (dismissed, argued out, or resolved) \u2014 verdict recomputed without a new model call.`;
-  if (outcome.verdict === "approved") return base;
-  return `${base} The rest are below \`APPROVE_BELOW\`, so the label is \`merge-approved\`.`;
+async function liveHead(deps) {
+  if (!deps.lookupHeadSha) return null;
+  try {
+    const sha = await deps.lookupHeadSha(deps.target.prNumber);
+    return sha === "" ? null : sha;
+  } catch {
+    return null;
+  }
 }
-function swapLabel(body) {
-  const from = `\`${labelAndBadge("changes").label}\``;
-  const to = `\`${labelAndBadge("approved").label}\``;
-  const lines = body.split("\n");
-  const at = lines.lastIndexOf(from);
-  if (at < 0) return lines.includes(to) ? body : null;
-  lines[at] = to;
-  return lines.join("\n").replace(`- [x] Set verdict label (${from})`, `- [x] Set verdict label (${to})`);
+function ownThreads(threads, sticky) {
+  const bot = bare(sticky.author?.login ?? "");
+  if (bot === "") return [];
+  return threads.filter((t) => bare(t.botLogin) === bot);
+}
+function bare(login) {
+  return login.replace(/\[bot\]$/, "");
 }
 
 // src/pipeline/dismissRecompute.ts
@@ -43733,36 +43788,32 @@ function skip(reason) {
 `);
   return { verdict: "skip", findingsCount: 0, commentUrl: "" };
 }
+var SKIP_TEXT = {
+  "comments-unreadable": "could not list PR comments",
+  "no-sticky": "no sticky review comment",
+  "not-bot-sticky": "sticky comment is not bot-authored",
+  "in-progress": "a review is in progress",
+  "no-head": "could not read the PR's live head sha"
+};
 async function runDismissRecompute(deps, prNumber) {
   const { inputs, octokit, context: context3 } = deps;
   const target = { owner: context3.repo.owner, repo: context3.repo.repo, prNumber };
   if (!inputs.reviewMemory) return skip("REVIEW_MEMORY is off \u2014 no stored findings to recompute");
-  let sticky;
-  try {
-    sticky = await findSticky(octokit, target);
-  } catch (err) {
-    return skip(`could not list PR comments (${err instanceof Error ? err.message : String(err)})`);
-  }
-  if (sticky === null) return skip("no sticky review comment");
-  const botAuthored = sticky.author?.type === "Bot";
-  if (!botAuthored) return skip("sticky comment is not bot-authored");
-  const headSha = await liveHead(deps, prNumber);
-  if (headSha === null) return skip("could not read the PR's live head sha");
-  const threads = await classifyDismissals(
-    ownThreads(await fetchReviewThreads(octokit, target), sticky),
-    {
-      triggerPhrase: inputs.triggerPhrase,
-      minPermission: inputs.minTriggerPermission,
-      lookupPermission: deps.lookupPermission
-    }
-  );
-  const outcome = recomputeVerdict({
-    state: asReviewState(decodeMarker(sticky.body)),
-    headSha,
-    threads,
-    approveBelow: inputs.approveBelow
+  const evaluation = await evaluateSettle({
+    octokit,
+    target,
+    triggerPhrase: inputs.triggerPhrase,
+    minPermission: inputs.minTriggerPermission,
+    approveBelow: inputs.approveBelow,
+    ...deps.lookupPermission ? { lookupPermission: deps.lookupPermission } : {},
+    ...deps.lookupHeadSha ? { lookupHeadSha: deps.lookupHeadSha } : {}
   });
-  if (outcome.kind === "unchanged") return skip(outcome.reason);
+  if (evaluation.kind === "skip") {
+    const text2 = SKIP_TEXT[evaluation.reason];
+    return skip(evaluation.detail ? `${text2} (${evaluation.detail})` : text2);
+  }
+  if (evaluation.kind === "unchanged") return skip(evaluation.reason);
+  const { outcome, sticky } = evaluation;
   const patched = patchSettledBody(sticky.body, outcome);
   if (patched === null) return skip("sticky comment layout not recognised");
   let commentUrl = sticky.url;
@@ -43779,23 +43830,6 @@ async function runDismissRecompute(deps, prNumber) {
 `
   );
   return { verdict: outcome.verdict, findingsCount: outcome.remaining.length, commentUrl };
-}
-async function liveHead(deps, prNumber) {
-  if (!deps.lookupHeadSha) return null;
-  try {
-    const sha = await deps.lookupHeadSha(prNumber);
-    return sha === "" ? null : sha;
-  } catch {
-    return null;
-  }
-}
-function ownThreads(threads, sticky) {
-  const bot = bare(sticky.author?.login ?? "");
-  if (bot === "") return [];
-  return threads.filter((t) => bare(t.botLogin) === bot);
-}
-function bare(login) {
-  return login.replace(/\[bot\]$/, "");
 }
 
 // src/pipeline.ts
