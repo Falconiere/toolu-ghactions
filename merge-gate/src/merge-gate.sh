@@ -66,9 +66,10 @@ if ! jq -e 'any(.[]; .name == "merge-approved")' >/dev/null <<<"$API_OUT"; then
     settled_by_recompute=1
   else
     missing="label \`merge-approved\` is missing; the Code Review action adds it when its verdict is approved"
-    # The reason is one of the recompute's own tokens; anything else is not echoed.
+    # The reason is one of the recompute's own tokens ([a-z0-9-]); a value with any
+    # other character is dropped whole, so nothing else ever reaches an annotation.
     case "${SETTLE_REASON:-}" in
-      ""|*[!a-z-]*) ;;
+      ""|*[!a-z0-9-]*) ;;
       *) missing="$missing (settled-findings recompute: $SETTLE_REASON)" ;;
     esac
     problems+=("$missing")

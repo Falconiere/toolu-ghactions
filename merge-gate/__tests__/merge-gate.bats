@@ -113,6 +113,13 @@ teardown() { common_teardown; }
     [ "$output" = '::error::label `merge-approved` is missing; the Code Review action adds it when its verdict is approved (settled-findings recompute: incomplete)' ]
 }
 
+@test "#307: a reason token with digits is named too" {
+    stub_gh_pr 307
+    SETTLE_OUTCOME=unchanged SETTLE_REASON=http-404 PR=307 run bash "$SCRIPT"
+    [ "$status" -eq 1 ]
+    [ "$output" = '::error::label `merge-approved` is missing; the Code Review action adds it when its verdict is approved (settled-findings recompute: http-404)' ]
+}
+
 @test "#307: a crashed recompute step (empty outputs) → today's missing-label line" {
     stub_gh_pr 307
     SETTLE_OUTCOME= SETTLE_REASON= PR=307 run bash "$SCRIPT"
