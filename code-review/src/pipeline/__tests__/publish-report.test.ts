@@ -54,6 +54,7 @@ function baseInputs(over: Partial<ActionInputs> = {}): ActionInputs {
     botLogoUrl: "https://example.com/logo.png",
     reviewMemory: false,
     failOn: new Set<BlockableVerdict>(),
+    approveBelow: "nit",
     verbosity: "compact",
     touluApiKey: "toolu_test_key",
     touluApiUrl: "https://api.toolu.sh",

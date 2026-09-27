@@ -143,6 +143,10 @@ inputs:
     description: 'Comma-separated verdicts that FAIL the job (turning this check red so branch protection can block the PR): changes, error, or both. Defaults to "changes" — the job goes red when the bot requests changes. Set "none" to keep the job green on every verdict (advisory only), or "changes,error" to also block when the review could not run. The comment, label, and outputs are posted regardless; only the exit code changes. This governs the verdict-driven gate only; a thrown infra error still fails the job regardless of FAIL_ON. Mark this check Required in branch protection for the red to block.'
     required: false
     default: 'changes'
+  APPROVE_BELOW:
+    description: 'The lowest finding severity that still withholds the merge-approved label: blocker, high, medium, low, or nit (aliases like "critical" normalize the same way finding severities do). Findings strictly below this level no longer block the label — they still post inline, in the summary, and in the verdict text, only the label rule changes. Defaults to "nit", the lowest severity, which preserves the pre-existing behavior where any finding withholds merge-approved. This is independent of FAIL_ON: FAIL_ON governs the job exit code from the verdict; APPROVE_BELOW governs only the merge-approved/request-changes label. An incomplete or partial review still yields request-changes regardless of this setting.'
+    required: false
+    default: 'nit'
   RUN_SECRET_SCAN:
     description: 'Run the deterministic secret scan (gitleaks) before the LLM review. Its findings feed the LLM as triage context and upload to the Code Scanning tab. Set false to skip.'
     required: false

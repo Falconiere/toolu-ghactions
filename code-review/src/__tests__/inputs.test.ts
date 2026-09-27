@@ -127,6 +127,22 @@ describe("FAIL_ON", () => {
   });
 });
 
+describe("APPROVE_BELOW", () => {
+  it("AC-6: defaults to 'nit' when unset, preserving 'any finding blocks'", () => {
+    expect(readInputs().approveBelow).toBe("nit");
+  });
+
+  it("AC-6: APPROVE_BELOW=high flows through to ActionInputs.approveBelow", () => {
+    setInput("APPROVE_BELOW", "high");
+    expect(readInputs().approveBelow).toBe("high");
+  });
+
+  it("AC-5: APPROVE_BELOW=critical normalizes via SEVERITY_ALIASES to 'blocker'", () => {
+    setInput("APPROVE_BELOW", "critical");
+    expect(readInputs().approveBelow).toBe("blocker");
+  });
+});
+
 describe("MAX_TOKENS", () => {
   it("defaults to 8192", () => {
     expect(readInputs().maxTokens).toBe(8192);

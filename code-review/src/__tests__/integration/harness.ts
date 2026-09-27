@@ -128,6 +128,7 @@ export function baseInputs(over: Partial<ActionInputs> = {}): ActionInputs {
     botLogoUrl: "https://example.com/logo.png",
     reviewMemory: true,
     failOn: new Set<BlockableVerdict>(),
+    approveBelow: "nit",
     verbosity: "compact",
     touluApiKey: "",
     touluApiUrl: "https://api.toolu.sh",

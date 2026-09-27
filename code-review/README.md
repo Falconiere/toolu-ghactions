@@ -731,6 +731,7 @@ resolution without posting the note again.
 | `INLINE_COMMENTS` | no | `true` | Post per-line review comments with committable code suggestions (Reviews API), in addition to the summary comment |
 | `MANAGE_LABELS` | no | `true` | Set a real PR label chip matching the verdict (`merge-approved` / `request-changes`) and remove the opposite one. Requires `issues: write`. |
 | `FAIL_ON` | no | `changes` | Comma-separated verdicts that **fail the job** (turn this check red so branch protection can block the PR): `changes`, `error`, or both. **Defaults to `changes`** — the job goes red when the bot requests changes. Set `none` to keep the job green on every verdict (advisory only), or `changes,error` to also block when the review could not run (`error`). The comment, label, and outputs are still posted; only the exit code changes. Governs the verdict-driven gate only — a thrown infra error fails the job regardless. **Mark this check Required in branch protection** for the red to actually block a merge. See [Blocking merges](#blocking-merges). |
+| `APPROVE_BELOW` | no | `nit` | The lowest finding severity that still **withholds the `merge-approved` label**: `blocker`, `high`, `medium`, `low`, or `nit` (aliases like `critical` normalize the same way finding severities do). Findings strictly below this level no longer block the label — they still post inline, in the summary, and in the verdict text; only the label rule changes. **Defaults to `nit`**, the lowest severity, which preserves the pre-existing behavior where any finding withholds `merge-approved`. Independent of `FAIL_ON`: `FAIL_ON` governs the job exit code from the verdict; `APPROVE_BELOW` governs only the `merge-approved`/`request-changes` label. An incomplete or partial review still yields `request-changes` regardless of this setting. See [Blocking merges](#blocking-merges). |
 | `BASE_BRANCH` | no | `main` | Base branch for diff comparison. Falls back to `GITHUB_BASE_REF` if unset. |
 | `REVIEW_PROMPT_FILE` | no | *(8-dimension checklist)* | Path to a markdown file (relative to repo root) with a custom review prompt. Overrides the default checklist. Project conventions are still gathered and injected, but a custom prompt supplies its own dimensions. |
 | `CODEBASE_OVERVIEW` | no | — | High-level context about the codebase (framework, patterns, architecture) injected into the review prompt. |
@@ -816,6 +817,28 @@ By default (`FAIL_ON: changes`) the action **fails its own job** when the bot's 
 - `FAIL_ON: none` — never fail on a verdict; the review stays purely advisory (the pre-4.x behavior). You can still gate yourself with `if: steps.review.outputs.verdict == 'changes'`.
 
 The gate governs the verdict only; a thrown infra error fails the job regardless of `FAIL_ON`. A `skip` (non-trigger event) never blocks.
+
+### Advisory findings below a severity threshold
+
+`FAIL_ON` makes the *job* advisory for a verdict, but with `merge-gate` (or any
+branch-protection rule requiring the `merge-approved` label) the *label* is what
+actually controls mergeability — and by default any surviving finding, even a
+`low` or `nit`, withholds `merge-approved`. Set `APPROVE_BELOW` to let lower
+severities stay advisory for the label too, independently of `FAIL_ON`:
+
+```yaml
+- uses: falconiere/toolu-ghactions/code-review@v8
+  with:
+    API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    FAIL_ON: none          # job stays green regardless of verdict
+    APPROVE_BELOW: high    # merge-approved label withheld only for high/blocker
+```
+
+With `APPROVE_BELOW: high`, a review whose only findings are `medium`, `low`, or
+`nit` still sets the `merge-approved` label — a single `high` or `blocker`
+finding, or an incomplete/partial review, always withholds it regardless of the
+threshold. The comment body, `outputs.verdict`, and `FAIL_ON`'s exit-code gate
+are unaffected — `APPROVE_BELOW` changes only the label.
 
 ## v8 migration
 
