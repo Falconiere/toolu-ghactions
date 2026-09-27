@@ -1,5 +1,12 @@
 # Changelog
 
+## [8.3.0](https://github.com/Falconiere/toolu-ghactions/compare/v8.2.0...v8.3.0) (2026-09-27)
+
+
+### Features
+
+* **code-review:** settle [@toolu](https://github.com/toolu) dismiss replies deterministically, without a model run ([#129](https://github.com/Falconiere/toolu-ghactions/issues/129)) ([d15c7ce](https://github.com/Falconiere/toolu-ghactions/commit/d15c7ceea4ca8cced884d2e6ff7244e33c4fa3da))
+
 ## [8.2.0](https://github.com/Falconiere/toolu-ghactions/compare/v8.1.0...v8.2.0) (2026-09-27)
 
 
