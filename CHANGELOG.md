@@ -1,5 +1,12 @@
 # Changelog
 
+## [8.1.0](https://github.com/Falconiere/toolu-ghactions/compare/v8.0.2...v8.1.0) (2026-09-27)
+
+
+### Features
+
+* **merge-gate:** add an auto-merge readiness check action ([#121](https://github.com/Falconiere/toolu-ghactions/issues/121)) ([143db27](https://github.com/Falconiere/toolu-ghactions/commit/143db27d7b360292f36fccd0db73ce5b5d410131))
+
 ## [8.0.2](https://github.com/Falconiere/toolu-ghactions/compare/v8.0.1...v8.0.2) (2026-09-25)
 
 
