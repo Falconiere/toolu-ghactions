@@ -85,7 +85,9 @@ type Round = Awaited<ReturnType<typeof reviewedRound>>;
 /** The settle run: a reply on thread `root`, with the live head and permission given. */
 function settle(round: Round, over: Partial<ReviewDeps> = {}, inputs: Partial<ActionInputs> = {}) {
   return runReview({
-    inputs: baseInputs({ manageLabels: true, ...inputs }),
+    // No API key: the settle workflow never holds the model secret, and the pass must
+    // not depend on it (readInputs allows it empty on this event).
+    inputs: baseInputs({ manageLabels: true, apiKey: "", ...inputs }),
     octokit: round.octokit,
     context: settleContext(round.headSha, DISMISS, 5000),
     // A directory that does not exist: the settle pass must never touch git.

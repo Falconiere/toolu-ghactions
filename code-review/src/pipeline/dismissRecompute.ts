@@ -46,7 +46,10 @@ export async function runDismissRecompute(
     return skip(`could not list PR comments (${err instanceof Error ? err.message : String(err)})`);
   }
   if (sticky === null) return skip("no sticky review comment");
-  if (sticky.author?.type !== "Bot") return skip("sticky comment is not bot-authored");
+  // Proceed ONLY on an explicit "Bot" author: a "User", an empty or an absent type all
+  // skip — an author we cannot identify as the bot is never trusted (fail closed).
+  const botAuthored = sticky.author?.type === "Bot";
+  if (!botAuthored) return skip("sticky comment is not bot-authored");
 
   const headSha = await liveHead(deps, prNumber);
   if (headSha === null) return skip("could not read the PR's live head sha");
@@ -77,6 +80,9 @@ export async function runDismissRecompute(
       return skip(`sticky update failed (${err instanceof Error ? err.message : String(err)})`);
     }
   }
+  // "approve" means the LABEL resolves to approved (review/recompute.ts): either nothing
+  // remains, or everything left is below APPROVE_BELOW — the #124 rule, under which the
+  // comment may still read "Changes requested" while the label is merge-approved.
   await setVerdictLabel(octokit, "approved", target, { manageLabels: inputs.manageLabels });
   process.stdout.write(
     `  Settle: ${outcome.settled} of ${outcome.total} finding(s) settled — label merge-approved, no model call\n`,

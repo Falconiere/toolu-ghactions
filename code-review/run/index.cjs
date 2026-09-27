@@ -43744,7 +43744,8 @@ async function runDismissRecompute(deps, prNumber) {
     return skip(`could not list PR comments (${err instanceof Error ? err.message : String(err)})`);
   }
   if (sticky === null) return skip("no sticky review comment");
-  if (sticky.author?.type !== "Bot") return skip("sticky comment is not bot-authored");
+  const botAuthored = sticky.author?.type === "Bot";
+  if (!botAuthored) return skip("sticky comment is not bot-authored");
   const headSha = await liveHead(deps, prNumber);
   if (headSha === null) return skip("could not read the PR's live head sha");
   const threads = await classifyDismissals(
