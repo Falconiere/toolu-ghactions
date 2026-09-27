@@ -39,6 +39,16 @@ export interface SeedThread {
   rootBody?: string;
 }
 
+/** A comment author as the REST API reports it. */
+export interface CommentUser {
+  login: string;
+  type: string;
+}
+
+/** The identity the action posts its sticky under (REST spelling, `[bot]` suffix);
+ *  GraphQL reports the same App's thread roots as plain `toolu-bot`. */
+export const BOT_USER: CommentUser = { login: "toolu-bot[bot]", type: "Bot" };
+
 /** Every GitHub call a run made, recorded for assertions. */
 export interface Recorded {
   created: { body: string }[];
@@ -56,8 +66,9 @@ export interface Recorded {
 
 /** How the GitHub fake behaves for one scenario. */
 export interface OctokitOptions {
-  /** Seed the comment list (a prior sticky). The store is mutable across rounds. */
-  existing?: { id: number; body: string }[];
+  /** Seed the comment list (a prior sticky). The store is mutable across rounds.
+   *  `user` defaults to the bot identity every comment the action posts carries. */
+  existing?: { id: number; body: string; user?: CommentUser }[];
   /** Bot threads to serve. Mutable by reference — a scenario pushes the thread its
    *  previous round created, exactly as GitHub would show it on the next run. */
   threads?: SeedThread[];
@@ -97,6 +108,7 @@ export function fakeOctokit(opts: OctokitOptions = {}): {
     body: c.body,
     created_at: `2026-01-01T00:0${i}:00Z`,
     html_url: `https://github.com/o/r/issues/comments/${c.id}`,
+    user: c.user ?? BOT_USER,
   }));
   const threads = opts.threads ?? [];
   const patches = opts.patches;
@@ -110,7 +122,13 @@ export function fakeOctokit(opts: OctokitOptions = {}): {
           rec.created.push({ body: p.body });
           const id = nextId++;
           const html_url = `https://github.com/o/r/issues/${p.issue_number}#c${id}`;
-          store.push({ id, body: p.body, created_at: "2026-06-01T00:00:00Z", html_url });
+          store.push({
+            id,
+            body: p.body,
+            created_at: "2026-06-01T00:00:00Z",
+            html_url,
+            user: BOT_USER,
+          });
           return { data: { html_url } };
         },
         updateComment: async (p) => {

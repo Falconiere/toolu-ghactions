@@ -245,6 +245,20 @@ describe("provider contract (PROVIDER / MODEL_ID / API_KEY)", () => {
     expect(() => readInputs()).toThrow(/API_KEY is required/);
   });
 
+  it("does not require API_KEY on a pull_request_review_comment run (the no-model settle pass)", () => {
+    setInput("API_KEY", "");
+    process.env["GITHUB_EVENT_NAME"] = "pull_request_review_comment";
+    expect(readInputs().apiKey).toBe("");
+  });
+
+  it("still requires API_KEY on every event that can reach the model", () => {
+    setInput("API_KEY", "");
+    for (const event of ["pull_request", "issue_comment"]) {
+      process.env["GITHUB_EVENT_NAME"] = event;
+      expect(() => readInputs()).toThrow(/API_KEY is required/);
+    }
+  });
+
   it("resolves PROVIDER=openrouter case-insensitively, whitespace and all", () => {
     setInput("PROVIDER", "  OpenRouter ");
     expect(readInputs().provider).toBe("openrouter");

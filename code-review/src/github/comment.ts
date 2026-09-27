@@ -23,6 +23,8 @@ export interface IssueComment {
   body?: string;
   created_at: string;
   html_url: string;
+  /** The comment's author (`type` is "Bot" for an App or github-actions identity). */
+  user?: { login?: string; type?: string } | null;
 }
 
 /** The slice of an Octokit REST client this module uses. */
@@ -63,6 +65,10 @@ export interface CommentTarget {
 export interface StickyComment {
   id: number;
   body: string;
+  url: string;
+  /** Who posted it — the settle pass trusts only a Bot-authored sticky, since the
+   *  lookup itself is login-agnostic (pipeline/dismissRecompute.ts). */
+  author?: { login: string; type: string };
 }
 
 /** True when a comment body carries the hidden state marker. */
@@ -106,7 +112,10 @@ export async function findSticky(
 
   // Latest by created_at (string ISO timestamps sort lexically == chronologically).
   const latest = selected.reduce((a, b) => (a.created_at <= b.created_at ? b : a));
-  return { id: latest.id, body: latest.body ?? "" };
+  const author = latest.user
+    ? { author: { login: latest.user.login ?? "", type: latest.user.type ?? "" } }
+    : {};
+  return { id: latest.id, body: latest.body ?? "", url: latest.html_url, ...author };
 }
 
 /**

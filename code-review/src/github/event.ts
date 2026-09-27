@@ -1,5 +1,5 @@
-// github/event.ts — normalize a `pull_request` OR `issue_comment` event into a
-// single review decision. Port of resolve-event.sh.
+// github/event.ts — normalize a `pull_request`, `issue_comment` or review-comment
+// event into a single review decision. Port of resolve-event.sh.
 //
 // A `pull_request` event always runs a FULL review of HEAD. An `issue_comment`
 // event is an `@toolu review …` re-trigger — or an `@toolu resume`, which reruns
@@ -9,6 +9,7 @@
 // permission lookup throwing, or returning no permission string) means
 // run=false. A bot-authored comment never triggers, and an @mention that
 // carries an instruction runs a SCOPED review (full_review=false).
+import { resolveReviewComment } from "./reviewCommentEvent.js";
 
 /** The fields of the GitHub event payload this resolver reads (loose by design). */
 export interface EventContext {
@@ -18,8 +19,12 @@ export interface EventContext {
   payload: EventPayload | null;
 }
 
+/** A comment author as the webhook reports it. */
+type CommentUser = { login?: string; type?: string };
+
 /** Loose payload shape — only the fields the resolver touches are typed. */
 export interface EventPayload {
+  action?: string; // webhook activity type: created / edited / deleted
   /**
    * The webhook's repository object. Present on every real repo-scoped delivery
    * (`pull_request` and `issue_comment` alike) — `id` is GitHub's numeric,
@@ -55,7 +60,8 @@ export interface EventPayload {
     title?: string;
     body?: string;
   };
-  comment?: { id?: number; body?: string; user?: { login?: string; type?: string } };
+  /** `in_reply_to_id` is set on a `pull_request_review_comment` REPLY in a thread. */
+  comment?: { id?: number; body?: string; user?: CommentUser; in_reply_to_id?: number };
 }
 
 /** Tunables, mirroring the env vars resolve-event.sh reads (passed in, never env). */
@@ -115,6 +121,8 @@ export interface EventResolution {
   commenter?: string;
   /** The triggering comment id (@mention only, on the allowed path). */
   comment_id?: number;
+  /** A review-comment reply: run the no-model SETTLE pass (pipeline/dismissRecompute.ts). */
+  settle?: true;
 }
 
 /**
@@ -136,6 +144,8 @@ export async function resolveEvent(
       return resolvePullRequest(ctx.payload);
     case "issue_comment":
       return resolveIssueComment(ctx.payload, opts);
+    case "pull_request_review_comment":
+      return resolveReviewComment(ctx.payload, opts);
     default:
       return deny("unsupported-event");
   }

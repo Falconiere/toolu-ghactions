@@ -108,6 +108,14 @@ header for the full story, this is just the index).
   `### Findings GitHub rejected inline` (422'd even isolated alone — the
   `InlineReviewResult.dropped` path), each ≤20 rows, and `### Repeated
   findings` (≤10 clusters, ≤10 members listed each).
+- **`recompute.ts`** — `recomputeVerdict()`, the no-model settle decision:
+  the last completed round's stored findings minus the ones settled on their
+  threads (`dropSettled`, cluster-aware), labelled by `resolveLabelVerdict`.
+  Fails closed on no state, an incomplete round, a stale head, or a last
+  verdict other than `changes`. Shared with merge-gate's recompute (#123).
+- **`settledBody.ts`** — patches the sticky's verdict line, `Settled` note
+  and label line after a settle pass; the marker is never touched, and an
+  unrecognised body yields `null` (write nothing).
 - **`verdict.ts`** — verdict→label/badge mapping (`formatVerdict`) and the
   `fitToSizeLimit` shrink ladder: ledger exception rows → whole ledger
   section → findings (worst-severity-last), all ahead of ever dropping the
@@ -139,6 +147,11 @@ header for the full story, this is just the index).
   `mapPr()` → `reviewChunked()` in that fixed order, validates + fingerprint
   stamps findings against the shrunk diff, and assembles this round's
   `CoverageLedger`.
+- **`dismissRecompute.ts`** — the settle pass a reply on a bot thread runs
+  (`pull_request_review_comment`): trusts only a Bot-authored sticky and
+  that bot's own threads, checks the LIVE head, then flips
+  `request-changes` → `merge-approved` via `recompute.ts` + `settledBody.ts`
+  — no git, no model, no thread mutations.
 - **`publish.ts`** — the publish orchestration, order load-bearing twice
   over: inline threads run **before** the sticky comment (so unanchored and
   dropped findings can be rendered into it), and the toolu.sh report runs
@@ -154,10 +167,11 @@ header for the full story, this is just the index).
 - **`reviewBatch.ts`** — batches comments at `MAX_COMMENTS_PER_REVIEW=30`;
   a batch that 422s is bisected (poison-comment isolation) so the rest of
   the batch still posts; the isolated comment is returned in `dropped`.
-- **`event.ts`** — normalizes a `pull_request` or `issue_comment` event into
-  one `EventResolution`, including the `<TRIGGER_PHRASE> review` vs
-  `<TRIGGER_PHRASE> resume` parse (same fail-closed permission gate for
-  both).
+- **`event.ts`** — normalizes a `pull_request`, `issue_comment` or
+  `pull_request_review_comment` event into one `EventResolution`, including
+  the `<TRIGGER_PHRASE> review` vs `<TRIGGER_PHRASE> resume` parse (same
+  fail-closed permission gate for both). A review-comment reply resolves to
+  `settle` (`reviewCommentEvent.ts`) — the no-model settle pass.
 
 ### `src/llm/`
 - **`reviewWithModel.ts`** — the OpenRouter `generateObject` call

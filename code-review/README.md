@@ -10,7 +10,7 @@ Audits the diff against an 8-dimension checklist — correctness, security, perf
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](../LICENSE)
 [![Tests](https://img.shields.io/badge/tests-vitest-3fb950)](https://github.com/Falconiere/toolu-ghactions/actions/workflows/tests.yml)
 
-[Quick start](#quick-start) · [Choosing a model](#choosing-a-model) · [How it works](#how-it-works) · [Example verdict](#example-verdict) · [Coverage ledger](#coverage-ledger) · [Finding clustering](#finding-clustering) · [Custom identity](#custom-identity-github-app) · [@mention re-trigger](#mention-re-trigger) · [Review memory](#review-memory) · [Inputs](#inputs) · [Outputs](#outputs) · [v8 migration](#v8-migration) · [v7 migration](#v7-migration)
+[Quick start](#quick-start) · [Choosing a model](#choosing-a-model) · [How it works](#how-it-works) · [Example verdict](#example-verdict) · [Coverage ledger](#coverage-ledger) · [Finding clustering](#finding-clustering) · [Custom identity](#custom-identity-github-app) · [@mention re-trigger](#mention-re-trigger) · [Settling findings](#settling-findings-without-a-re-review) · [Review memory](#review-memory) · [Inputs](#inputs) · [Outputs](#outputs) · [v8 migration](#v8-migration) · [v7 migration](#v7-migration)
 
 </div>
 
@@ -624,6 +624,63 @@ When `MAX_WALL_MS` cuts a run short mid-review, the sticky comment says so, and 
 
 `@toolu resume` never re-reviews files that already reached complete coverage, and never clears memory or `reviewed_tree`. Contrast with `@toolu review`, which is still a **full** re-review — it clears `reviewed_tree` and both exception lists and starts over. If there is nothing left to resume (no exception paths recorded — e.g. a run that never actually paused), `@toolu resume` falls back to a full review rather than silently doing nothing.
 
+## Settling findings without a re-review
+
+Replying `@toolu dismiss` on one of the bot's inline threads, or arguing a finding out
+(see [Dismissing a finding](#dismissing-a-finding-without-resolving-the-thread)), settles
+that finding — but **a dismissal does not start a new LLM review**. On the default
+`pull_request`-only workflow nothing re-evaluates until the next push; wiring the reply
+into the `@mention` workflow instead would re-run the whole review, which on the same
+commit can re-roll the findings. For the label to follow your replies immediately, add a
+small **second** workflow on `pull_request_review_comment`:
+
+```yaml
+name: Code Review — settle
+on:
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: code-review-settle-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  settle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: falconiere/toolu-ghactions/code-review@v8
+        with:
+          # Mirror your review workflow's APPROVE_BELOW, TRIGGER_PHRASE,
+          # MIN_TRIGGER_PERMISSION and MANAGE_LABELS (and APP_ID / APP_PRIVATE_KEY
+          # when the review posts as a GitHub App). No API_KEY — no model is called.
+          APPROVE_BELOW: nit
+```
+
+On each new reply, the action reads the last completed review's findings from the sticky
+comment's memory marker, drops the ones now settled on their threads (resolved, `@toolu
+dismiss`, or argued out — same permission gate and blocker rules as above), and — when
+nothing blocking remains under [`APPROVE_BELOW`](#advisory-findings-below-a-severity-threshold)
+— swaps `request-changes` for `merge-approved` and adds a `Settled` note under the sticky's
+verdict line, **within that run**. It never calls the model, never posts findings or
+replies, never resolves threads (the next full review still closes dismissed ones), never
+checks out or scans code, and never rewrites the memory marker.
+
+It fails closed and changes **nothing** (the log says `[SKIP] settle: <reason>`) when the
+PR has a newer push than the last review, the last review was incomplete or errored,
+findings are still blocking, the sticky comment was not posted by a bot, the PR head cannot
+be read, or `REVIEW_MEMORY` is off.
+
+- **Keep it a separate workflow.** Sharing the review's per-PR `cancel-in-progress`
+  group would let a reply cancel a running review.
+- **Don't make its job a required status check.** Its output is the label, which
+  `merge-gate` and branch protection read; a reply that settles nothing
+  reports `skip` and must not stand in for the review's own check.
+
 ## Review memory
 
 If a push rewrites history and the stored review tree is missing locally, the
@@ -703,6 +760,10 @@ more channels close that:
   silences a `blocker` (the same rule [`MAX_ROUNDS`](#convergence-settled-threads--the-round-cap)
   follows).
 
+Either way the verdict and label move on the **next review run** — or immediately, on
+the reply itself, with the [settle workflow](#settling-findings-without-a-re-review)
+(no model call).
+
 Both are gated on the **same repo permission** as the `@mention` re-trigger
 (`MIN_TRIGGER_PERMISSION`, default `write`) and **fail closed** — an unprivileged
 commenter cannot silence the reviewer, and a failing permissions API leaves the finding
@@ -725,7 +786,7 @@ resolution without posting the note again.
 |---|---|---|---|
 | `PROVIDER` | no | `openrouter` | Backend to call. `openrouter` is the only supported value — any OpenAI-compatible model via OpenRouter. Any other value, including the removed native vendor backends, fails the action with an error telling you to set `PROVIDER: "openrouter"` and to look the model's id up at [openrouter.ai/models](https://openrouter.ai/models) — it never guesses an id for you, because a vendor's OpenRouter namespace is not always its name. See [Native vendor APIs (removed)](#native-vendor-apis-removed). |
 | `MODEL_ID` | no | `deepseek/deepseek-v4-pro` | OpenRouter model id, namespaced `<vendor>/<model>`. The default has a 1M-token context and 384k max output, so large diffs and verbose reviews rarely truncate. Pick one with reliable JSON structured output. |
-| `API_KEY` | **yes** | — | OpenRouter API key. **Required** — an empty value fails the action. Pass via a step-level `env:`/`secrets` reference for secret hygiene. |
+| `API_KEY` | **yes** | — | OpenRouter API key. **Required** — an empty value fails the action, except on a `pull_request_review_comment` run ([the no-model settle pass](#settling-findings-without-a-re-review)). Pass via a step-level `env:`/`secrets` reference for secret hygiene. |
 | `MAX_TOKENS` | no | `8192` | Max completion-token budget per request (always sent — omitting it makes OpenRouter reserve the model's full output window against your credits and can 402-reject). A response truncated at this limit (`finish_reason: length`) is retried with a doubled budget up to the 131072 ceiling (escalations don't consume hang retries); whatever the outcome, the findings completed before a cut are salvaged. |
 | `MIN_CONFIDENCE` | no | `high` | Drop findings below this confidence at every severity, including blocker/high (`high` or `medium`) |
 | `INLINE_COMMENTS` | no | `true` | Post per-line review comments with committable code suggestions (Reviews API), in addition to the summary comment |
@@ -749,7 +810,7 @@ resolution without posting the note again.
 | `TOKEN` | no | `${{ github.token }}` | GitHub token for posting and editing comments. |
 | `APP_ID` | no | — | GitHub App id. Set together with `APP_PRIVATE_KEY` to post as a custom-branded App (`Toolu — Code Review`) instead of `github-actions[bot]`. Both must be set or the action falls back to the default identity. See [Custom identity](#custom-identity-github-app). |
 | `APP_PRIVATE_KEY` | no | — | GitHub App private key — raw PEM **or** base64-encoded PEM (auto-decoded). Pair with `APP_ID`. Pass via a secret; never inline. Used only to mint a short-lived installation token — never logged. |
-| `TRIGGER_PHRASE` | no | `@toolu` | Mention prefix for the bot's two comment commands: `@toolu review [focus on …]` re-triggers a review (requires the workflow to also listen on `issue_comment` — see [@mention re-trigger](#mention-re-trigger)), and `@toolu dismiss` in a reply on one of the bot's inline threads settles that finding (see [Dismissing a finding](#dismissing-a-finding-without-resolving-the-thread)). |
+| `TRIGGER_PHRASE` | no | `@toolu` | Mention prefix for the bot's two comment commands: `@toolu review [focus on …]` re-triggers a review (requires the workflow to also listen on `issue_comment` — see [@mention re-trigger](#mention-re-trigger)), and `@toolu dismiss` in a reply on one of the bot's inline threads settles that finding (see [Dismissing a finding](#dismissing-a-finding-without-resolving-the-thread); the label follows on the next review, or at once with the [settle workflow](#settling-findings-without-a-re-review)). |
 | `MIN_TRIGGER_PERMISSION` | no | `write` | Minimum repo permission a commenter needs to trigger a review via `@mention` **or** dismiss a finding on a bot thread: `write` or `admin`. The check fails closed (denied on any error). |
 | `BOT_NAME` | no | `Toolu — Code Review` | Display name shown in the comment body header. |
 | `BOT_LOGO_URL` | no | `…/code-review/assets/logo.png` | Logo image shown in the comment body header. |

@@ -30785,7 +30785,7 @@ function readInputs() {
   const jevEnabled = readBool("JEV_ENABLED", false);
   const model = getInput("MODEL_ID").trim() || DEFAULT_MODEL;
   const apiKey = getInput("API_KEY").trim();
-  if (apiKey === "") {
+  if (apiKey === "" && process.env["GITHUB_EVENT_NAME"] !== "pull_request_review_comment") {
     throw new Error(`API_KEY is required (the ${provider} API key).`);
   }
   warnBareModelId(model);
@@ -31380,21 +31380,49 @@ function stripTrailingNewlines(s) {
   return s.replace(/\n+$/, "");
 }
 
+// src/github/reviewCommentEvent.ts
+function resolveReviewComment(payload, opts) {
+  const ownLogin = opts.ownLogin ?? "github-actions[bot]";
+  const action = payload.action ?? "created";
+  if (action !== "created") return deny("unsupported-action");
+  const commenter = payload.comment?.user?.login ?? "";
+  if (payload.comment?.user?.type === "Bot" || commenter === ownLogin) return deny("bot-author");
+  if (payload.comment?.in_reply_to_id == null) return deny("not-a-reply");
+  const prNumber = payload.pull_request?.number;
+  if (!prNumber) return deny("no-pr-number");
+  const headSha = payload.pull_request?.head?.sha;
+  return {
+    run: true,
+    reason: "review-comment-settle",
+    settle: true,
+    base_ref: payload.pull_request?.base?.ref ?? "",
+    full_review: false,
+    pr_number: prNumber,
+    commenter,
+    ...headSha !== void 0 && headSha !== "" ? { head_sha: headSha } : {}
+  };
+}
+function deny(reason) {
+  return { run: false, reason, full_review: false };
+}
+
 // src/github/event.ts
 async function resolveEvent(ctx, opts = {}) {
-  if (!ctx.payload) return deny("no-event-payload");
+  if (!ctx.payload) return deny2("no-event-payload");
   switch (ctx.eventName) {
     case "pull_request":
       return resolvePullRequest(ctx.payload);
     case "issue_comment":
       return resolveIssueComment(ctx.payload, opts);
+    case "pull_request_review_comment":
+      return resolveReviewComment(ctx.payload, opts);
     default:
-      return deny("unsupported-event");
+      return deny2("unsupported-event");
   }
 }
 function resolvePullRequest(payload) {
   const prNumber = payload.pull_request?.number;
-  if (!prNumber) return deny("no-pr-number");
+  if (!prNumber) return deny2("no-pr-number");
   const headSha = payload.pull_request?.head?.sha;
   return {
     run: true,
@@ -31412,10 +31440,10 @@ async function resolveIssueComment(payload, opts) {
   const ownLogin = opts.ownLogin ?? "github-actions[bot]";
   const commenter = payload.comment?.user?.login ?? "";
   const userType = payload.comment?.user?.type ?? "";
-  if (userType === "Bot" || commenter === ownLogin) return deny("bot-author");
-  if (payload.issue?.pull_request == null) return deny("not-a-pull-request");
+  if (userType === "Bot" || commenter === ownLogin) return deny2("bot-author");
+  if (payload.issue?.pull_request == null) return deny2("not-a-pull-request");
   const trigger = findTrigger(payload.comment?.body ?? "", triggerPhrase.toLowerCase());
-  if (trigger === null) return deny("no-trigger");
+  if (trigger === null) return deny2("no-trigger");
   const { resume, instruction } = trigger;
   const prNumber = payload.issue?.number;
   const commentId = payload.comment?.id;
@@ -31423,11 +31451,11 @@ async function resolveIssueComment(payload, opts) {
   try {
     permission = await opts.lookupPermission?.(commenter) ?? "";
   } catch {
-    return deny("permission-check-failed", { commenter });
+    return deny2("permission-check-failed", { commenter });
   }
-  if (!permission) return deny("permission-check-failed", { commenter });
+  if (!permission) return deny2("permission-check-failed", { commenter });
   if (!meetsPermission(permission, minPermission)) {
-    return deny("insufficient-permission", { commenter });
+    return deny2("insufficient-permission", { commenter });
   }
   let baseRef = "";
   if (prNumber !== void 0 && opts.lookupBaseRef) {
@@ -31471,7 +31499,7 @@ function meetsPermission(permission, min) {
   if (min === "admin") return permission === "admin";
   return permission === "admin" || permission === "write";
 }
-function deny(reason, extra = {}) {
+function deny2(reason, extra = {}) {
   return {
     run: false,
     reason,
@@ -31797,7 +31825,8 @@ async function findSticky(octokit, target) {
   const selected = markerMatches.length > 0 ? markerMatches : legacyMatches;
   if (selected.length === 0) return null;
   const latest = selected.reduce((a, b) => a.created_at <= b.created_at ? b : a);
-  return { id: latest.id, body: latest.body ?? "" };
+  const author = latest.user ? { author: { login: latest.user.login ?? "", type: latest.user.type ?? "" } } : {};
+  return { id: latest.id, body: latest.body ?? "", url: latest.html_url, ...author };
 }
 async function upsertComment(octokit, target, body, stickyId) {
   let url;
@@ -43603,6 +43632,166 @@ function resolveNote(thread) {
   }
 }
 
+// src/review/recompute.ts
+function recomputeVerdict(input) {
+  const { state } = input;
+  const blocked = freshness(state, input.headSha);
+  if (blocked !== null || state === null)
+    return { kind: "unchanged", reason: blocked ?? "no-state" };
+  const findings = state.findings.map(normalise);
+  const groups = clusterGroups(findings, state.clusters ?? {});
+  const representatives = [...groups.keys()].flatMap((fp) => groups.get(fp)?.slice(0, 1) ?? []);
+  const { kept } = dropSettled(representatives, input.threads, {
+    members: groups,
+    priorClusters: state.clusters
+  });
+  const remaining = kept.flatMap((f) => groups.get(f.fp) ?? [f]);
+  const settled = findings.length - remaining.length;
+  if (settled === 0) return { kind: "unchanged", reason: "nothing-settled" };
+  const verdict = remaining.length === 0 ? "approved" : "changes";
+  const label = resolveLabelVerdict({
+    verdict,
+    findings: remaining,
+    approveBelow: input.approveBelow
+  });
+  if (label !== "approved") return { kind: "unchanged", reason: "still-blocking" };
+  return { kind: "approve", verdict, remaining, settled, total: findings.length };
+}
+function freshness(state, headSha) {
+  if (state === null) return "no-state";
+  if ((state.unreviewed_paths?.length ?? 0) > 0 || (state.pending_paths?.length ?? 0) > 0) {
+    return "incomplete";
+  }
+  const reviewed = state.reviewed_sha ?? "";
+  const last = state.history.at(-1);
+  if (reviewed === "" || last === void 0 || last.sha !== reviewed.slice(0, 7)) {
+    return "no-completed-round";
+  }
+  if (headSha === "" || reviewed !== headSha) return "stale-head";
+  return last.verdict === "changes" ? null : "not-changes";
+}
+function normalise(f) {
+  const severity = f["severity"];
+  return {
+    path: typeof f.path === "string" ? f.path : "",
+    line: typeof f.line === "number" ? f.line : 0,
+    fp: typeof f.fp === "string" && f.fp !== "" ? f.fp : fingerprint(f),
+    text: typeof f.text === "string" ? f.text : "",
+    ...typeof f.category === "string" ? { category: f.category } : {},
+    ...typeof severity === "string" ? { severity } : {}
+  };
+}
+function clusterGroups(findings, clusters) {
+  const byExemplar = /* @__PURE__ */ new Map();
+  for (const f of findings) {
+    const key = clusters[f.fp] ?? f.fp;
+    byExemplar.set(key, [...byExemplar.get(key) ?? [], f]);
+  }
+  const groups = /* @__PURE__ */ new Map();
+  for (const [exemplar, members] of byExemplar) {
+    const lead = members.find((m) => m.fp === exemplar) ?? members[0];
+    if (lead === void 0) continue;
+    groups.set(lead.fp, [lead, ...members.filter((m) => m !== lead)]);
+  }
+  return groups;
+}
+
+// src/review/settledBody.ts
+var VERDICT_LINE = /^\*\*Verdict:\*\* .*$/m;
+var SETTLED_NOTE = /\n\n> ✅ \*\*Settled:\*\* [^\n]*/;
+var IN_PROGRESS = /^### PR Review in Progress$/m;
+function patchSettledBody(body, outcome) {
+  if (IN_PROGRESS.test(body) || !VERDICT_LINE.test(body)) return null;
+  let out = body.replace(SETTLED_NOTE, "");
+  if (outcome.verdict === "approved") {
+    const swapped = swapLabel(out);
+    if (swapped === null) return null;
+    out = swapped.replace(VERDICT_LINE, `**Verdict:** ${labelAndBadge("approved").badge}`);
+  }
+  return out.replace(VERDICT_LINE, (line) => `${line}
+
+${settledNote(outcome)}`);
+}
+function settledNote(outcome) {
+  const base = `> \u2705 **Settled:** ${outcome.settled} of ${outcome.total} finding(s) settled on their threads since this review (dismissed, argued out, or resolved) \u2014 verdict recomputed without a new model call.`;
+  if (outcome.verdict === "approved") return base;
+  return `${base} The rest are below \`APPROVE_BELOW\`, so the label is \`merge-approved\`.`;
+}
+function swapLabel(body) {
+  const from = `\`${labelAndBadge("changes").label}\``;
+  const to = `\`${labelAndBadge("approved").label}\``;
+  const lines = body.split("\n");
+  const at = lines.lastIndexOf(from);
+  if (at < 0) return lines.includes(to) ? body : null;
+  lines[at] = to;
+  return lines.join("\n").replace(`- [x] Set verdict label (${from})`, `- [x] Set verdict label (${to})`);
+}
+
+// src/pipeline/dismissRecompute.ts
+function skip(reason) {
+  process.stderr.write(`[SKIP] settle: ${reason}
+`);
+  return { verdict: "skip", findingsCount: 0, commentUrl: "" };
+}
+async function runDismissRecompute(deps, prNumber) {
+  const { inputs, octokit, context: context3 } = deps;
+  const target = { owner: context3.repo.owner, repo: context3.repo.repo, prNumber };
+  if (!inputs.reviewMemory) return skip("REVIEW_MEMORY is off \u2014 no stored findings to recompute");
+  const sticky = await findSticky(octokit, target).catch(() => null);
+  if (sticky === null) return skip("no sticky review comment");
+  if (sticky.author?.type !== "Bot") return skip("sticky comment is not bot-authored");
+  const headSha = await liveHead(deps, prNumber);
+  if (headSha === null) return skip("could not read the PR's live head sha");
+  const threads = await classifyDismissals(
+    ownThreads(await fetchReviewThreads(octokit, target), sticky),
+    {
+      triggerPhrase: inputs.triggerPhrase,
+      minPermission: inputs.minTriggerPermission,
+      lookupPermission: deps.lookupPermission
+    }
+  );
+  const outcome = recomputeVerdict({
+    state: asReviewState(decodeMarker(sticky.body)),
+    headSha,
+    threads,
+    approveBelow: inputs.approveBelow
+  });
+  if (outcome.kind === "unchanged") return skip(outcome.reason);
+  const patched = patchSettledBody(sticky.body, outcome);
+  if (patched === null) return skip("sticky comment layout not recognised");
+  let commentUrl = sticky.url;
+  if (patched !== sticky.body) {
+    try {
+      commentUrl = await upsertComment(octokit, target, patched, sticky.id);
+    } catch (err) {
+      return skip(`sticky update failed (${err instanceof Error ? err.message : String(err)})`);
+    }
+  }
+  await setVerdictLabel(octokit, "approved", target, { manageLabels: inputs.manageLabels });
+  process.stdout.write(
+    `  Settle: ${outcome.settled} of ${outcome.total} finding(s) settled \u2014 label merge-approved, no model call
+`
+  );
+  return { verdict: outcome.verdict, findingsCount: outcome.remaining.length, commentUrl };
+}
+async function liveHead(deps, prNumber) {
+  if (!deps.lookupHeadSha) return null;
+  try {
+    const sha = await deps.lookupHeadSha(prNumber);
+    return sha === "" ? null : sha;
+  } catch {
+    return null;
+  }
+}
+function ownThreads(threads, sticky) {
+  const bot = bare(sticky.author?.login ?? "");
+  if (bot === "") return [];
+  return threads.filter((t) => bare(t.botLogin) === bot);
+}
+function bare(login) {
+  return login.replace(/\[bot\]$/, "");
+}
+
 // src/pipeline.ts
 async function runReview(deps) {
   const { inputs, octokit, context: context3 } = deps;
@@ -43614,6 +43803,7 @@ async function runReview(deps) {
   if (!event || event.pr_number === void 0) {
     return { verdict: "skip", findingsCount: 0, commentUrl: "" };
   }
+  if (event.settle === true) return runDismissRecompute(deps, event.pr_number);
   const target = {
     owner: context3.repo.owner,
     repo: context3.repo.repo,
@@ -45204,6 +45394,16 @@ function baseRefLookup(octokit) {
     return data.base.ref;
   };
 }
+function headShaLookup(octokit) {
+  return async (prNumber) => {
+    const { data } = await octokit.rest.pulls.get({
+      owner: context2.repo.owner,
+      repo: context2.repo.repo,
+      pull_number: prNumber
+    });
+    return data.head.sha;
+  };
+}
 async function postErrorComment(octokit, message) {
   const ctx = context2;
   const url = `${ctx.serverUrl}/${ctx.repo.owner}/${ctx.repo.repo}/actions/runs/${ctx.runId}`;
@@ -45237,6 +45437,7 @@ async function main() {
       context: buildContext(),
       lookupPermission: permissionLookup(octokit),
       lookupBaseRef: baseRefLookup(octokit),
+      lookupHeadSha: headShaLookup(octokit),
       // The composite SAST steps write gitleaks/opengrep SARIF here; the pipeline reads it.
       ...process.env["TOOLU_SARIF_DIR"] ? { sarifDir: process.env["TOOLU_SARIF_DIR"] } : {}
     });

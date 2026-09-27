@@ -153,6 +153,31 @@ export function prContext(headSha: string): GithubContext {
   };
 }
 
+/** A `pull_request_review_comment` context: `body` replying (in_reply_to_id) on the
+ *  inline thread whose root comment is `inReplyTo` — the settle-pass trigger. */
+export function settleContext(headSha: string, body: string, inReplyTo: number): GithubContext {
+  return {
+    eventName: "pull_request_review_comment",
+    payload: {
+      action: "created",
+      pull_request: { number: 7, base: { ref: "main" }, head: { sha: headSha } },
+      comment: {
+        id: 43,
+        body,
+        in_reply_to_id: inReplyTo,
+        user: { login: "human-dev", type: "User" },
+      },
+      repository: { id: 4242 },
+    },
+    repo: { owner: "test-org", repo: "test-repo" },
+    sha: headSha,
+    headSha,
+    serverUrl: "https://github.com",
+    runId: 12346,
+    repoId: 4242,
+  };
+}
+
 /** An `@toolu …` issue_comment context (the `review`/`resume` re-triggers). */
 export function commentContext(headSha: string, body: string): GithubContext {
   return {

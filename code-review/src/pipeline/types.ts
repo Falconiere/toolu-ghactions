@@ -81,6 +81,9 @@ export interface ReviewDeps {
   lookupPermission?: (commenter: string) => Promise<string>;
   /** PR base-ref lookup for an @mention re-trigger (best-effort). */
   lookupBaseRef?: (prNumber: number) => Promise<string>;
+  /** LIVE PR head-sha lookup for the settle pass (pipeline/dismissRecompute.ts) —
+   *  absent or throwing means the pass changes nothing (fail closed). */
+  lookupHeadSha?: (prNumber: number) => Promise<string>;
   /** Clock for the state history timestamp + duration (default Date.now). */
   now?: () => number;
   /** Dir of deterministic-scanner SARIF (TOOLU_SARIF_DIR from the composite steps);

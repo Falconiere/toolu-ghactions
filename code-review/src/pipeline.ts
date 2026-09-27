@@ -31,6 +31,7 @@ import type { PriorSticky } from "./pipeline/sticky.js";
 import type { IncrementalScope } from "./review/incremental.js";
 import { reviewAndValidate } from "./pipeline/reviewCall.js";
 import { publish } from "./pipeline/publish.js";
+import { runDismissRecompute } from "./pipeline/dismissRecompute.js";
 import { skipBody, noopBody } from "./pipeline/bodies.js";
 import type { GithubContext, PipelineOctokit, ReviewDeps, ReviewResult } from "./pipeline/types.js";
 
@@ -61,6 +62,8 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
   if (!event || event.pr_number === undefined) {
     return { verdict: "skip", findingsCount: 0, commentUrl: "" };
   }
+  // A thread reply settles, it never reviews: no git, no model (pipeline/dismissRecompute.ts).
+  if (event.settle === true) return runDismissRecompute(deps, event.pr_number);
   const target: RunTarget = {
     owner: context.repo.owner,
     repo: context.repo.repo,

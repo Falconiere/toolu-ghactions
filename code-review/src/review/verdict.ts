@@ -259,7 +259,7 @@ export function resolveVerdict(
 }
 
 /** Map the verdict to its PR label slug + human badge (the parity-critical table). */
-function labelAndBadge(
+export function labelAndBadge(
   verdict: ProviderResult["verdict"],
   failure?: ProviderResult["failure"],
 ): { label: string; badge: string } {
