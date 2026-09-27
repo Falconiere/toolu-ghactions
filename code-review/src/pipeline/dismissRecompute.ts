@@ -39,7 +39,12 @@ export async function runDismissRecompute(
   const target: CommentTarget = { owner: context.repo.owner, repo: context.repo.repo, prNumber };
   if (!inputs.reviewMemory) return skip("REVIEW_MEMORY is off — no stored findings to recompute");
 
-  const sticky = await findSticky(octokit, target).catch(() => null);
+  let sticky: StickyComment | null;
+  try {
+    sticky = await findSticky(octokit, target);
+  } catch (err) {
+    return skip(`could not list PR comments (${err instanceof Error ? err.message : String(err)})`);
+  }
   if (sticky === null) return skip("no sticky review comment");
   if (sticky.author?.type !== "Bot") return skip("sticky comment is not bot-authored");
 

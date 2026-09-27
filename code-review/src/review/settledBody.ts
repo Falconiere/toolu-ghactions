@@ -14,7 +14,9 @@ import { labelAndBadge } from "./verdict.js";
 import type { RecomputeOutcome } from "./recompute.js";
 
 const VERDICT_LINE = /^\*\*Verdict:\*\* .*$/m;
-const SETTLED_NOTE = /\n\n> ✅ \*\*Settled:\*\* [^\n]*/;
+// Anchored to the verdict line: a note is only ever the paragraph right below it, so a
+// finding whose text happens to contain the same words is never touched.
+const SETTLED_NOTE = /^(\*\*Verdict:\*\* .*)\n\n> ✅ \*\*Settled:\*\* [^\n]*/m;
 const IN_PROGRESS = /^### PR Review in Progress$/m;
 
 /**
@@ -26,7 +28,7 @@ export function patchSettledBody(
   outcome: Extract<RecomputeOutcome, { kind: "approve" }>,
 ): string | null {
   if (IN_PROGRESS.test(body) || !VERDICT_LINE.test(body)) return null;
-  let out = body.replace(SETTLED_NOTE, "");
+  let out = body.replace(SETTLED_NOTE, "$1");
   if (outcome.verdict === "approved") {
     const swapped = swapLabel(out);
     if (swapped === null) return null;

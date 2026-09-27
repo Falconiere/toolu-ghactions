@@ -43698,11 +43698,11 @@ function clusterGroups(findings, clusters) {
 
 // src/review/settledBody.ts
 var VERDICT_LINE = /^\*\*Verdict:\*\* .*$/m;
-var SETTLED_NOTE = /\n\n> ✅ \*\*Settled:\*\* [^\n]*/;
+var SETTLED_NOTE = /^(\*\*Verdict:\*\* .*)\n\n> ✅ \*\*Settled:\*\* [^\n]*/m;
 var IN_PROGRESS = /^### PR Review in Progress$/m;
 function patchSettledBody(body, outcome) {
   if (IN_PROGRESS.test(body) || !VERDICT_LINE.test(body)) return null;
-  let out = body.replace(SETTLED_NOTE, "");
+  let out = body.replace(SETTLED_NOTE, "$1");
   if (outcome.verdict === "approved") {
     const swapped = swapLabel(out);
     if (swapped === null) return null;
@@ -43737,7 +43737,12 @@ async function runDismissRecompute(deps, prNumber) {
   const { inputs, octokit, context: context3 } = deps;
   const target = { owner: context3.repo.owner, repo: context3.repo.repo, prNumber };
   if (!inputs.reviewMemory) return skip("REVIEW_MEMORY is off \u2014 no stored findings to recompute");
-  const sticky = await findSticky(octokit, target).catch(() => null);
+  let sticky;
+  try {
+    sticky = await findSticky(octokit, target);
+  } catch (err) {
+    return skip(`could not list PR comments (${err instanceof Error ? err.message : String(err)})`);
+  }
   if (sticky === null) return skip("no sticky review comment");
   if (sticky.author?.type !== "Bot") return skip("sticky comment is not bot-authored");
   const headSha = await liveHead(deps, prNumber);
