@@ -70,6 +70,23 @@ describe("findSticky", () => {
     expect(sticky?.body).toContain("toolu-review-state:v1");
   });
 
+  it("carries the sticky's author and url — the settle pass trusts only a Bot author", async () => {
+    const page = comments("comments-page").map((c) =>
+      c.id === 777 ? { ...c, user: { login: "toolu-code-review[bot]", type: "Bot" } } : c,
+    );
+    const { client } = fakeClient(page);
+    const sticky = await findSticky(client, TARGET);
+    expect(sticky?.author).toEqual({ login: "toolu-code-review[bot]", type: "Bot" });
+    expect(sticky?.url).toBe("https://github.com/test-org/test-repo/issues/42#issuecomment-777");
+  });
+
+  it("reports an empty author type when GitHub omits it, and no author for a null user", async () => {
+    const recorded = await findSticky(fakeClient(comments("comments-page")).client, TARGET);
+    expect(recorded?.author).toEqual({ login: "toolu-code-review[bot]", type: "" });
+    const ghost = comments("comments-page").map((c) => (c.id === 777 ? { ...c, user: null } : c));
+    expect((await findSticky(fakeClient(ghost).client, TARGET))?.author).toBeUndefined();
+  });
+
   it("falls back to a legacy-header comment when NO marker exists", async () => {
     const { client } = fakeClient(comments("legacy-only"));
     const sticky = await findSticky(client, TARGET);

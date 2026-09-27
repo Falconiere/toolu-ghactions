@@ -280,7 +280,9 @@ function warnBareModelId(model: string): void {
  *
  * Resolves the flat PROVIDER/MODEL_ID/API_KEY contract: PROVIDER defaults to
  * "openrouter" (every other value throws), MODEL_ID defaults to {@link DEFAULT_MODEL},
- * and an empty API_KEY throws (a keyless review would abstain on every call).
+ * and an empty API_KEY throws (a keyless review would abstain on every call) — except
+ * on `pull_request_review_comment`, whose only path is the no-model settle pass
+ * (pipeline/dismissRecompute.ts), so a settle workflow needs no model secret.
  */
 export function readInputs(): ActionInputs {
   const provider = resolveProviderId(core.getInput("PROVIDER"));
@@ -288,7 +290,7 @@ export function readInputs(): ActionInputs {
   const model = core.getInput("MODEL_ID").trim() || DEFAULT_MODEL;
 
   const apiKey = core.getInput("API_KEY").trim();
-  if (apiKey === "") {
+  if (apiKey === "" && process.env["GITHUB_EVENT_NAME"] !== "pull_request_review_comment") {
     throw new Error(`API_KEY is required (the ${provider} API key).`);
   }
   // AFTER the API_KEY guard: a run that is about to die on a missing key must not first

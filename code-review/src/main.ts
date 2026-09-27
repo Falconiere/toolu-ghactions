@@ -104,6 +104,19 @@ function baseRefLookup(octokit: ReturnType<typeof github.getOctokit>) {
   };
 }
 
+/** Look up a PR's LIVE head sha via the pulls API (the settle pass's freshness check;
+ *  a throw makes that pass change nothing). */
+function headShaLookup(octokit: ReturnType<typeof github.getOctokit>) {
+  return async (prNumber: number): Promise<string> => {
+    const { data } = await octokit.rest.pulls.get({
+      owner: github.context.repo.owner,
+      repo: github.context.repo.repo,
+      pull_number: prNumber,
+    });
+    return data.head.sha;
+  };
+}
+
 /** Post a best-effort error comment when the pipeline crashes before posting one. */
 async function postErrorComment(
   octokit: ReturnType<typeof github.getOctokit>,
@@ -143,6 +156,7 @@ async function main(): Promise<void> {
       context: buildContext(),
       lookupPermission: permissionLookup(octokit),
       lookupBaseRef: baseRefLookup(octokit),
+      lookupHeadSha: headShaLookup(octokit),
       // The composite SAST steps write gitleaks/opengrep SARIF here; the pipeline reads it.
       ...(process.env["TOOLU_SARIF_DIR"] ? { sarifDir: process.env["TOOLU_SARIF_DIR"] } : {}),
     });

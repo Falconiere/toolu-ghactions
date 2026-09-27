@@ -1,0 +1,26 @@
+{
+  "action": "created",
+  "comment": {
+    "id": 2468013579,
+    "pull_request_review_id": 1357924680,
+    "in_reply_to_id": 2468000001,
+    "path": "src/f0.ts",
+    "line": 1,
+    "body": "@toolu dismiss — intentional, see ADR-12",
+    "user": { "login": "human-dev", "id": 1001, "type": "User" },
+    "author_association": "MEMBER",
+    "created_at": "2026-09-27T20:00:00Z",
+    "html_url": "https://github.com/test-org/test-repo/pull/42#discussion_r2468013579"
+  },
+  "pull_request": {
+    "number": 42,
+    "state": "open",
+    "title": "feat: add login",
+    "body": "Adds the login form.",
+    "user": { "login": "pr-author", "id": 1002, "type": "User" },
+    "head": { "ref": "feat/add-login", "sha": "abc123def456" },
+    "base": { "ref": "main", "sha": "0011223344556677" }
+  },
+  "repository": { "id": 4242, "full_name": "test-org/test-repo" },
+  "sender": { "login": "human-dev", "id": 1001, "type": "User" }
+}

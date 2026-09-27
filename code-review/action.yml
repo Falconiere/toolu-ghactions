@@ -21,7 +21,7 @@ inputs:
     description: 'OpenRouter model id, namespaced "<vendor>/<model>". Defaults to deepseek/deepseek-v4-pro.'
     required: false
   API_KEY:
-    description: 'OpenRouter API key (Authorization: Bearer). Required. Prefer passing via a step-level env: block for better secret hygiene.'
+    description: 'OpenRouter API key (Authorization: Bearer). Required — except on a `pull_request_review_comment` run, the no-model settle pass, which never reads it. Prefer passing via a step-level env: block for better secret hygiene.'
     required: true
   JEV_ENABLED:
     description: 'Opt in to Jev finding assessment and risk routing. Requires PROVIDER=openrouter; reuses API_KEY and the shared review deadline.'
@@ -186,7 +186,11 @@ runs:
     # and uploads to the Code Scanning tab. Every scanner step is best-effort
     # (continue-on-error / `|| true`): a scanner or install failure degrades to an
     # LLM-only review — it must never break the consumer's PR. ---
+    # A `pull_request_review_comment` run is the no-model SETTLE pass (a reply on a bot
+    # thread recomputes the verdict from stored findings) — it reviews no code, so every
+    # scanner / SARIF step below is skipped on that event.
     - name: Install scanners (pinned release binaries)
+      if: ${{ github.event_name != 'pull_request_review_comment' }}
       shell: bash
       continue-on-error: true
       run: |
@@ -205,7 +209,7 @@ runs:
           || echo "::warning::opengrep install failed — SAST will be skipped"
         echo "$RUNNER_TEMP/toolu-bin" >> "$GITHUB_PATH"
     - name: Secret scan (gitleaks → SARIF)
-      if: ${{ inputs.RUN_SECRET_SCAN == 'true' }}
+      if: ${{ inputs.RUN_SECRET_SCAN == 'true' && github.event_name != 'pull_request_review_comment' }}
       shell: bash
       run: |
         # --no-git: scan the checked-out tree, NOT the full history (which re-flags
@@ -217,7 +221,7 @@ runs:
                --report-path "$RUNNER_TEMP/gitleaks.sarif" --exit-code 0 \
           || true
     - name: SAST (opengrep → SARIF)
-      if: ${{ inputs.RUN_SAST == 'true' }}
+      if: ${{ inputs.RUN_SAST == 'true' && github.event_name != 'pull_request_review_comment' }}
       shell: bash
       run: |
         # Exclude build output / deps in the CONSUMER's checkout — generated, not
@@ -242,14 +246,14 @@ runs:
     # directory to the mirror root, so mirror-action.sh rewrites `$/code-review/`
     # to `$/` when publishing.
     - name: Sanitize SARIF (clamp sub-1 regions)
-      if: ${{ always() }}
+      if: ${{ always() && github.event_name != 'pull_request_review_comment' }}
       continue-on-error: true   # best-effort like the scanners — never break the review
       uses: $/code-review/sanitize-sarif
       with:
         SRC_DIR: ${{ runner.temp }}
         DEST_DIR: ${{ runner.temp }}/toolu-sarif-upload
     - name: Upload SARIF to Code Scanning
-      if: ${{ always() }}
+      if: ${{ always() && github.event_name != 'pull_request_review_comment' }}
       continue-on-error: true   # fork PRs / missing `security-events: write` → skip; the review still runs
       uses: github/codeql-action/upload-sarif@v4
       with:
