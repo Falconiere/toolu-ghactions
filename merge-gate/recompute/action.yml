@@ -1,0 +1,46 @@
+# recompute/ — merge-gate's read-only settle recompute (#123). Internal: invoked by the
+# parent composite (../action.yml) via the `$/` self-repository syntax; not for direct
+# consumer use. It reads the last code-review round stored in the sticky comment's
+# marker, drops the findings settled on their threads (resolved, `@toolu dismiss`, or
+# argued out), and reports whether the `merge-approved` label would resolve to approved
+# on the PR's live head. No model call and no GitHub writes. Built from code-review's
+# sources (code-review/src/gate/) by code-review/build.mjs — never edit index.cjs.
+#
+# node24: the runner supplies its bundled Node, so this works on self-hosted runners
+# with no node on PATH. Input names use underscores: the runner maps them to
+# INPUT_<NAME> without touching dashes.
+name: 'Toolu Merge Gate — settle recompute (internal)'
+description: 'Internal node entry for the merge-gate composite. Use the parent action, not this one.'
+inputs:
+  TOKEN:
+    description: 'Token that reads the PR comments, review threads, head and collaborator permissions.'
+    required: true
+  PR:
+    description: 'Pull request number.'
+    required: true
+  APPROVE_BELOW:
+    description: 'Mirror of code-review APPROVE_BELOW.'
+    required: false
+    default: 'nit'
+  TRIGGER_PHRASE:
+    description: 'Mirror of code-review TRIGGER_PHRASE.'
+    required: false
+    default: '@toolu'
+  MIN_TRIGGER_PERMISSION:
+    description: 'Mirror of code-review MIN_TRIGGER_PERMISSION.'
+    required: false
+    default: 'write'
+outputs:
+  outcome:
+    description: 'approve when every blocking finding of the last review is settled on the live head; else unchanged'
+  reason:
+    description: 'Why the outcome is unchanged (empty on approve)'
+  verdict:
+    description: 'The recomputed comment verdict on approve: approved, or changes for an advisory remainder'
+  settled:
+    description: 'Findings settled since the review'
+  total:
+    description: 'Findings the review stored'
+runs:
+  using: 'node24'
+  main: 'index.cjs'

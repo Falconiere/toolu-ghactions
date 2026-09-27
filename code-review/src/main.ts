@@ -16,6 +16,7 @@ import { shouldBlock } from "./review/gate.js";
 import { mintAppToken } from "./github/appToken.js";
 import { createAppAuth } from "@octokit/auth-app";
 import type { EventPayload } from "./github/event.js";
+import { baseRefLookup, headShaLookup, permissionLookup } from "./github/lookups.js";
 
 /**
  * The PR author's login, resolved from whichever payload path the triggering
@@ -80,43 +81,6 @@ async function resolveToken(inputs: ActionInputs): Promise<string> {
   return inputs.token;
 }
 
-/** Look up a commenter's repo permission via the collaborators API (fail-closed on throw). */
-function permissionLookup(octokit: ReturnType<typeof github.getOctokit>) {
-  return async (commenter: string): Promise<string> => {
-    const { data } = await octokit.rest.repos.getCollaboratorPermissionLevel({
-      owner: github.context.repo.owner,
-      repo: github.context.repo.repo,
-      username: commenter,
-    });
-    return data.permission;
-  };
-}
-
-/** Look up a PR's base ref via the pulls API (best-effort; a throw → ""). */
-function baseRefLookup(octokit: ReturnType<typeof github.getOctokit>) {
-  return async (prNumber: number): Promise<string> => {
-    const { data } = await octokit.rest.pulls.get({
-      owner: github.context.repo.owner,
-      repo: github.context.repo.repo,
-      pull_number: prNumber,
-    });
-    return data.base.ref;
-  };
-}
-
-/** Look up a PR's LIVE head sha via the pulls API (the settle pass's freshness check;
- *  a throw makes that pass change nothing). */
-function headShaLookup(octokit: ReturnType<typeof github.getOctokit>) {
-  return async (prNumber: number): Promise<string> => {
-    const { data } = await octokit.rest.pulls.get({
-      owner: github.context.repo.owner,
-      repo: github.context.repo.repo,
-      pull_number: prNumber,
-    });
-    return data.head.sha;
-  };
-}
-
 /** Post a best-effort error comment when the pipeline crashes before posting one. */
 async function postErrorComment(
   octokit: ReturnType<typeof github.getOctokit>,
@@ -154,9 +118,9 @@ async function main(): Promise<void> {
       inputs,
       octokit,
       context: buildContext(),
-      lookupPermission: permissionLookup(octokit),
-      lookupBaseRef: baseRefLookup(octokit),
-      lookupHeadSha: headShaLookup(octokit),
+      lookupPermission: permissionLookup(octokit, github.context.repo),
+      lookupBaseRef: baseRefLookup(octokit, github.context.repo),
+      lookupHeadSha: headShaLookup(octokit, github.context.repo),
       // The composite SAST steps write gitleaks/opengrep SARIF here; the pipeline reads it.
       ...(process.env["TOOLU_SARIF_DIR"] ? { sarifDir: process.env["TOOLU_SARIF_DIR"] } : {}),
     });
