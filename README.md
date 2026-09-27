@@ -31,6 +31,7 @@ AI coding agents open pull requests faster than human review scales. The discipl
 |---|---|---|---|
 | 🔍 | [**code-review**](./code-review/README.md) | AI pull-request review against an 8-dimension checklist, running one model via OpenRouter (any OpenAI-compatible id) on the Vercel AI SDK. Posts a structured verdict and inline suggestions. | — |
 | 🌐 | [**cloudflare-tunnel**](./cloudflare-tunnel/README.md) | Expose a runner port to the public internet through a Cloudflare Tunnel — quick or named — for live preview and visual review. | `start` · `stop` · `wait` |
+| 🚦 | [**merge-gate**](./merge-gate/README.md) | A required check that stays red until a pull request is ready to auto-merge: `code-review` approved it (the `merge-approved` label) and every review thread has a reply from someone other than its opener. | — |
 | 📱 | [**expo-builder**](./expo-builder/README.md) | Build signed Expo Android APK/AABs with `expo prebuild` + Gradle — **no Expo/EAS account, no eas-cli** — and ship them to GitHub Releases or a Google Play track. | `build-android` · `deploy-github-release` · `deploy-google-play` |
 
 Each action is self-contained and independently versioned; take both or lift one.
@@ -78,6 +79,23 @@ Model selection, custom checklists, project-convention scanning, and the full in
 ```
 
 Named tunnels, outputs, and troubleshooting → **[`cloudflare-tunnel/README.md`](./cloudflare-tunnel/README.md)**.
+
+### merge-gate
+
+Run it after `code-review`, then mark `merge-gate` Required in branch protection:
+
+```yaml
+  merge-gate:
+    needs: review
+    if: ${{ !cancelled() && !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: falconiere/toolu-ghactions/merge-gate@v8
+```
+
+The second workflow that re-checks on replies and label changes, plus the branch-protection settings → **[`merge-gate/README.md`](./merge-gate/README.md)**.
 
 ### expo-builder
 
@@ -141,6 +159,9 @@ Each action is listed on the GitHub Marketplace from its own mirror repo — [`t
 │   ├── start/ stop/ wait/  # Composite sub-actions (run on the runner host)
 │   ├── src/                # start.sh / stop.sh / wait.sh / install-cloudflared.sh
 │   └── __tests__/          # Hermetic bats test suite
+├── merge-gate/             # Auto-merge readiness check (composite, bash)
+│   ├── src/                # merge-gate.sh
+│   └── __tests__/          # bats suite replaying recorded GitHub API responses
 ├── expo-builder/           # Expo Android build + release (no EAS account)
 │   ├── build-android/      # Composite: prebuild → init-script signing → Gradle
 │   ├── deploy-github-release/  # Composite: gh release + sha256sums.txt
@@ -167,13 +188,13 @@ node build.mjs          # bundle src/ → run/index.cjs + sanitize-sarif/index.c
 
 ```bash
 # Run the bash suites (requires bats, jq, git)
-bats cloudflare-tunnel/__tests__/*.bats scripts/__tests__/*.bats expo-builder/*/__tests__/*.bats
+bats cloudflare-tunnel/__tests__/*.bats scripts/__tests__/*.bats expo-builder/*/__tests__/*.bats merge-gate/__tests__/*.bats
 
 # Lint shell scripts (warnings and above block CI)
-shellcheck --severity=warning cloudflare-tunnel/src/*.sh scripts/*.sh expo-builder/*/src/*.sh
+shellcheck --severity=warning cloudflare-tunnel/src/*.sh scripts/*.sh expo-builder/*/src/*.sh merge-gate/src/*.sh
 
 # Validate action.yml against GitHub's schema
-npx @action-validator/cli code-review/action.yml cloudflare-tunnel/*/action.yml expo-builder/*/action.yml
+npx @action-validator/cli code-review/action.yml cloudflare-tunnel/*/action.yml expo-builder/*/action.yml merge-gate/action.yml
 ```
 
 `code-review` tests use **real recorded fixtures** (recorded model responses, GitHub API payloads, real git repos) — no mocks, no API key needed. A CI check rebuilds `run/index.cjs` + `sanitize-sarif/index.cjs` and fails if the committed bundles have drifted. See **[CONTRIBUTING.md](./CONTRIBUTING.md)**.

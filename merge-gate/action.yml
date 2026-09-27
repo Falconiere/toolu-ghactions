@@ -1,0 +1,27 @@
+name: 'Toolu Merge Gate'
+description: |
+  Fails until a pull request is ready to auto-merge: it carries the
+  `merge-approved` label the code-review action sets on an approved verdict,
+  and every review thread has a reply from someone other than its opener. Mark
+  the job's check Required in branch protection, next to required
+  conversation resolution, so auto-merge waits for it.
+author: 'Falconiere'
+branding:
+  icon: 'git-merge'
+  color: 'green'
+
+inputs:
+  github-token:
+    description: 'Token used to read the pull request labels and review threads. Needs `pull-requests: read`.'
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.pull_request.number }}
+      run: bash "$GITHUB_ACTION_PATH/src/merge-gate.sh"

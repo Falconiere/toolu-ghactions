@@ -44,3 +44,25 @@ jobs:
           # above — a default change must not silently move this repo's reviews.
           JEV_ENABLED: 'true'
           JEV_MODEL_ID: typesafe/jev-1.13
+
+  # The `merge-gate` required check, evaluated after the reviewer has posted its
+  # threads and set its label, so a push is never judged against the previous
+  # commit's findings. merge-gate.yml re-evaluates the same check when a thread
+  # gets a reply or a label changes by hand. `!cancelled()`, not `always()`: a
+  # red or skipped `review` (a fork PR) must still yield a verdict here, but a
+  # run superseded by a newer push must not. Dogfoods the LOCAL action, like
+  # `review`; it needs no secret, so fork PRs run it too.
+  merge-gate:
+    needs: review
+    if: ${{ !cancelled() && !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          sparse-checkout: merge-gate
+      - uses: ./merge-gate
