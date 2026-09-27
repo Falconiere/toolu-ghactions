@@ -33,4 +33,4 @@ pre-push:
       run: "bun run typecheck"
     - name: bundle-sync
       root: "code-review/"
-      run: "bun run build && git diff --quiet -- run/index.cjs sanitize-sarif/index.cjs || { echo 'bundles out of sync — run: cd code-review && bun run build, then commit run/index.cjs and sanitize-sarif/index.cjs'; exit 1; }"
+      run: "bun run build && git diff --quiet -- run/index.cjs sanitize-sarif/index.cjs ../merge-gate/recompute/index.cjs || { echo 'bundles out of sync — run: cd code-review && bun run build, then commit run/index.cjs, sanitize-sarif/index.cjs and ../merge-gate/recompute/index.cjs'; exit 1; }"

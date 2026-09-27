@@ -65,7 +65,9 @@ jobs:
           fi
           area() { grep -qE "$1" <<<"$files" && echo true || echo false; }
           {
-            echo "code_review=$(area '^code-review/')"
+            # merge-gate/recompute/ is a code-review build output: an edit to it alone
+            # must still run code-review's bundle-sync check.
+            echo "code_review=$(area '^(code-review/|merge-gate/recompute/)')"
             echo "tunnel=$(area '^cloudflare-tunnel/')"
             echo "expo=$(area '^expo-builder/')"
             echo "scripts=$(area '^scripts/')"
@@ -114,9 +116,10 @@ jobs:
         if: ${{ env.RUN == 'true' }}
         run: bun run build
       - name: bundles are in sync with src
-        # The committed run/index.cjs + sanitize-sarif/index.cjs must match a fresh
-        # build — consumers run the checked-in bundles, not the TS sources. Fail if
-        # `bun run build` produced any change.
+        # The committed run/index.cjs + sanitize-sarif/index.cjs (and
+        # ../merge-gate/recompute/index.cjs, merge-gate's settle recompute, built from
+        # these same sources) must match a fresh build — consumers run the checked-in
+        # bundles, not the TS sources. Fail if `bun run build` produced any change.
         if: ${{ env.RUN == 'true' }}
         # Full-tree on purpose: a future bundle added to build.mjs is covered
         # without remembering to extend a pathspec.

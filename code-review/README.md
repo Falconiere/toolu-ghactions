@@ -681,6 +681,11 @@ be read, or `REVIEW_MEMORY` is off.
   `merge-gate` and branch protection read; a reply that settles nothing
   reports `skip` and must not stand in for the review's own check.
 
+[`merge-gate`](../merge-gate/README.md#settled-findings) runs the same recompute on its own,
+read-only, whenever the label is missing. So its required check turns green on the reply
+itself even without this workflow, or when this workflow's label write lands after the
+gate has already read the labels.
+
 ## Review memory
 
 If a push rewrites history and the stored review tree is missing locally, the
