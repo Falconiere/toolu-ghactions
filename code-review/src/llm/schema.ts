@@ -5,6 +5,9 @@
 // is a drift from the deployed bash contract.
 import { z } from "zod";
 
+/** The five-level finding severity scale, highest first. */
+export type Severity = "blocker" | "high" | "medium" | "low" | "nit";
+
 /**
  * A single review finding. `path`, `line`, `severity`, `text` are required
  * (matching build-request.sh's FINDING_ITEM.required); everything else is
@@ -133,7 +136,7 @@ const VERDICT_ALIASES: Record<string, "approved" | "changes"> = {
  * UNAMBIGUOUSLY onto the five-level scale are listed — an unrecognized severity cannot
  * be ranked or gated on, so recovery drops that finding rather than inventing a level.
  */
-const SEVERITY_ALIASES: Record<string, "blocker" | "high" | "medium" | "low" | "nit"> = {
+export const SEVERITY_ALIASES: Record<string, Severity> = {
   blocker: "blocker",
   blocking: "blocker",
   critical: "blocker",

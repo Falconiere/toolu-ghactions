@@ -18,7 +18,8 @@ import {
   PROVIDER_ID,
   canonicalProviderId,
 } from "./llm/providers.js";
-import { parseFailOn, type BlockableVerdict } from "./review/gate.js";
+import { parseApproveBelow, parseFailOn, type BlockableVerdict } from "./review/gate.js";
+import type { Severity } from "./llm/schema.js";
 import { splitGlobs } from "./git/globs.js";
 
 /** Minimum confidence floor for the validate gate (high|medium). */
@@ -97,6 +98,9 @@ export interface ActionInputs {
   maxRounds: number;
   /** Verdicts that should fail the job (parsed from FAIL_ON; defaults to blocking on "changes"). */
   failOn: ReadonlySet<BlockableVerdict>;
+  /** Lowest finding severity that still withholds the merge-approved label (parsed
+   *  from APPROVE_BELOW; defaults to "nit", preserving "any finding blocks"). */
+  approveBelow: Severity;
   /** Comment verbosity: "compact" (default) collapses the checklist and renders recap
    *  buckets as refs; "full" restores the multi-line checklist and recap text. */
   verbosity: "compact" | "full";
@@ -339,6 +343,7 @@ export function readInputs(): ActionInputs {
       "https://raw.githubusercontent.com/falconiere/toolu-ghactions/main/code-review/assets/logo.png",
     reviewMemory: readBool("REVIEW_MEMORY", true),
     failOn: parseFailOn(core.getInput("FAIL_ON") || "changes"),
+    approveBelow: parseApproveBelow(core.getInput("APPROVE_BELOW")),
     verbosity: readVerbosity(),
     touluApiKey: core.getInput("TOOLU_API_KEY").trim(),
     touluApiUrl: core.getInput("TOOLU_API_URL").trim() || "https://api.toolu.sh",

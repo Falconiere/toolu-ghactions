@@ -3,6 +3,7 @@
 // so branch protection can block the PR). Pure + side-effect-free except for a
 // single core.warning when an input token is unrecognized.
 import * as core from "@actions/core";
+import { SEVERITY_ALIASES, type Severity } from "@/llm/schema.js";
 
 /** Verdicts that may be configured to fail the job. "approved"/"skip" can never block. */
 export type BlockableVerdict = "changes" | "error";
@@ -78,4 +79,62 @@ export function applyRoundCap(opts: {
   if (priorRounds + 1 < maxRounds) return { verdict, capped: false };
   if (findings.some((f) => f.severity === "blocker")) return { verdict, capped: false };
   return { verdict: "approved", capped: true };
+}
+
+/** Severity rank, lowest first — mirrors "blocker > high > medium > low > nit". */
+const SEVERITY_RANK: Record<Severity, number> = { nit: 0, low: 1, medium: 2, high: 3, blocker: 4 };
+
+const SEVERITIES: readonly Severity[] = ["blocker", "high", "medium", "low", "nit"];
+
+/** Type guard narrowing an arbitrary string to a known Severity, so a finding's
+ *  (unvalidated at this layer) severity can index {@link SEVERITY_RANK} safely. */
+function isSeverity(value: string): value is Severity {
+  return SEVERITIES.some((s) => s === value);
+}
+
+/**
+ * Parse the APPROVE_BELOW input into a Severity: the lowest severity that still
+ * withholds `merge-approved`. Case/synonym-insensitive via SEVERITY_ALIASES (the
+ * same normalization Finding.severity itself goes through), so "critical" resolves
+ * to "blocker". Empty or unrecognized input falls back to "nit" — the lowest
+ * severity, which preserves "any finding blocks" (nothing ranks below it) — with a
+ * single core.warning naming an unrecognized non-empty token.
+ */
+export function parseApproveBelow(raw: string): Severity {
+  const token = raw.trim().toLowerCase();
+  if (token === "") return "nit";
+  const resolved = SEVERITY_ALIASES[token];
+  if (resolved !== undefined) return resolved;
+  core.warning(
+    `APPROVE_BELOW: unrecognized severity '${raw}' — valid values are 'blocker', 'high', 'medium', 'low', or 'nit'. Falling back to 'nit'.`,
+  );
+  return "nit";
+}
+
+/**
+ * The label-only verdict: `verdict` unchanged unless it is "changes" AND every
+ * finding's severity ranks strictly below `approveBelow`, in which case the
+ * label should read "approved" instead. "approved"/"skip"/"error" always pass
+ * through unchanged — this only ever turns a "changes" into an "approved" for
+ * label purposes; it never touches a verdict already fail-closed to "error"
+ * (an incomplete/partial review), and never invents a new "changes".
+ *
+ * A finding whose severity does not resolve to a known rank (should not happen
+ * post-schema-validation) is treated as blocking, so malformed input fails closed
+ * rather than silently going advisory.
+ */
+export function resolveLabelVerdict(opts: {
+  verdict: "approved" | "changes" | "skip" | "error";
+  findings: ReadonlyArray<{ severity?: string }>;
+  approveBelow: Severity;
+}): "approved" | "changes" | "skip" | "error" {
+  const { verdict, findings, approveBelow } = opts;
+  if (verdict !== "changes") return verdict;
+  const threshold = SEVERITY_RANK[approveBelow];
+  const blocking = findings.some((f) => {
+    const rank =
+      f.severity !== undefined && isSeverity(f.severity) ? SEVERITY_RANK[f.severity] : undefined;
+    return rank === undefined || rank >= threshold;
+  });
+  return blocking ? "changes" : "approved";
 }

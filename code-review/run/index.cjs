@@ -30498,6 +30498,136 @@ function resolveModel(opts) {
   })(opts.model);
 }
 
+// src/llm/schema.ts
+var Finding = external_exports.object({
+  path: external_exports.string(),
+  line: external_exports.number().int(),
+  end_line: external_exports.number().int().optional(),
+  severity: external_exports.enum(["blocker", "high", "medium", "low", "nit"]),
+  category: external_exports.string().optional(),
+  confidence: external_exports.enum(["high", "medium"]).optional(),
+  quoted_line: external_exports.string().optional(),
+  suggestion: external_exports.string().optional().describe(
+    "Replacement CODE ONLY \u2014 the exact source text to substitute for lines [line..end_line]. GitHub renders it as a committable 'Suggested change', so it must be literal, directly-applicable code, never prose, commentary, or an instruction like 'remove this line'. Explanations go in `text`. Omit this field entirely when there is no clean code replacement."
+  ),
+  // Provenance: which layer surfaced this finding. Absent → an LLM-discovered finding
+  // (rendered as "llm"); set to a tool name when the model confirms a deterministic
+  // (gitleaks/opengrep) finding it was asked to triage.
+  source: external_exports.enum(["llm", "gitleaks", "opengrep", "eslint"]).optional(),
+  text: external_exports.string()
+});
+var Verdict = external_exports.object({
+  // Bounded: review_plan is emitted FIRST, so an unbounded plan eats the output
+  // budget before findings and starves them under truncation. The prompt asks for
+  // ≤ 2 short sentences (≤ 280 chars) and the JSON-schema maxLength nudges the model,
+  // but in JSON mode the provider only receives response_format:{type:"json_object"} —
+  // the schema (hence maxLength) is NOT enforced during decoding. So the cap is a soft
+  // backstop: an over-length plan is TRUNCATED via .catch rather than failing
+  // validation, which would otherwise throw the whole (complete, valid) review away as
+  // an abstention.
+  review_plan: external_exports.string().max(280).catch(({ input }) => typeof input === "string" ? input.slice(0, 280) : ""),
+  verdict: external_exports.enum(["approved", "changes"]),
+  findings: external_exports.array(Finding),
+  // Soft-capped like review_plan: other_checks is emitted AFTER findings, so in JSON
+  // mode its maxLength is a prompt nudge only, never enforced during decoding. The
+  // .catch TRUNCATES an over-length blurb to 600 rather than rejecting the whole (valid)
+  // review, and ALSO handles the absent-key case (a length-truncated response cut before
+  // this field) → "", preserving the prior .default("") truncation-resilience semantics.
+  other_checks: external_exports.string().max(600).catch(({ input }) => typeof input === "string" ? input.slice(0, 600) : ""),
+  top_must_fix: external_exports.array(external_exports.string()).default([])
+});
+var PartialVerdict = external_exports.object({
+  // Decorative fields: `.catch` drops a wrong-typed value (models routinely emit null
+  // here) instead of failing the parse, which would sink a recovery over prose.
+  review_plan: external_exports.string().optional().catch(void 0),
+  // `unknown` with NO `.catch`, deliberately — do not "fix" this to match its neighbours.
+  // The whole point of recovery is to rescue an off-enum verdict ("request_changes"),
+  // so the value must reach {@link normalizeVerdict} intact; it accepts any type and
+  // returns null when unmappable. A `.catch` here would silently discard exactly the
+  // strings recovery exists to map.
+  verdict: external_exports.unknown().optional(),
+  // NOT caught, deliberately: findings is load-bearing. A `findings` that is not an
+  // array must fail the whole recovery, because silently reading it as "no findings"
+  // would turn defects the model DID raise into a clean review.
+  findings: external_exports.array(external_exports.unknown()).optional(),
+  other_checks: external_exports.string().optional().catch(void 0),
+  top_must_fix: external_exports.array(external_exports.unknown()).optional().catch(void 0)
+});
+var VERDICT_ALIASES = {
+  approved: "approved",
+  approve: "approved",
+  approval: "approved",
+  accept: "approved",
+  accepted: "approved",
+  lgtm: "approved",
+  pass: "approved",
+  changes: "changes",
+  change: "changes",
+  requestchanges: "changes",
+  changesrequested: "changes",
+  requestedchanges: "changes",
+  reject: "changes",
+  rejected: "changes",
+  block: "changes",
+  blocked: "changes"
+};
+var SEVERITY_ALIASES = {
+  blocker: "blocker",
+  blocking: "blocker",
+  critical: "blocker",
+  fatal: "blocker",
+  high: "high",
+  major: "high",
+  error: "high",
+  medium: "medium",
+  moderate: "medium",
+  warning: "medium",
+  warn: "medium",
+  low: "low",
+  minor: "low",
+  info: "low",
+  informational: "low",
+  nit: "nit",
+  nitpick: "nit",
+  style: "nit"
+};
+function aliasKey(value) {
+  if (typeof value !== "string") return null;
+  const key = value.toLowerCase().replace(/[^a-z]/g, "");
+  return key === "" ? null : key;
+}
+function normalizeVerdict(value) {
+  const key = aliasKey(value);
+  return key === null ? null : VERDICT_ALIASES[key] ?? null;
+}
+function normalizeLine(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? Math.trunc(value) : null;
+  if (typeof value !== "string") return null;
+  const match = /^\s*(-?\d+)/.exec(value);
+  return match?.[1] === void 0 ? null : Number.parseInt(match[1], 10);
+}
+function normalizeFinding(raw) {
+  const asObject = external_exports.record(external_exports.unknown()).safeParse(raw);
+  if (!asObject.success) return raw;
+  const out = { ...asObject.data };
+  const line = normalizeLine(out["line"]);
+  if (line === null) delete out["line"];
+  else out["line"] = line;
+  const endLine = normalizeLine(out["end_line"]);
+  if (endLine === null) delete out["end_line"];
+  else out["end_line"] = endLine;
+  const severity = aliasKey(out["severity"]);
+  if (severity !== null && SEVERITY_ALIASES[severity] !== void 0) {
+    out["severity"] = SEVERITY_ALIASES[severity];
+  }
+  if (out["confidence"] !== "high" && out["confidence"] !== "medium") delete out["confidence"];
+  const source = out["source"];
+  if (source !== "llm" && source !== "gitleaks" && source !== "opengrep" && source !== "eslint") {
+    delete out["source"];
+  }
+  return out;
+}
+
 // src/review/gate.ts
 var RECOGNIZED = /* @__PURE__ */ new Set(["none", "changes", "error"]);
 function parseFailOn(raw) {
@@ -30526,6 +30656,31 @@ function applyRoundCap(opts) {
   if (priorRounds + 1 < maxRounds) return { verdict, capped: false };
   if (findings.some((f) => f.severity === "blocker")) return { verdict, capped: false };
   return { verdict: "approved", capped: true };
+}
+var SEVERITY_RANK = { nit: 0, low: 1, medium: 2, high: 3, blocker: 4 };
+var SEVERITIES = ["blocker", "high", "medium", "low", "nit"];
+function isSeverity(value) {
+  return SEVERITIES.some((s) => s === value);
+}
+function parseApproveBelow(raw) {
+  const token = raw.trim().toLowerCase();
+  if (token === "") return "nit";
+  const resolved = SEVERITY_ALIASES[token];
+  if (resolved !== void 0) return resolved;
+  warning(
+    `APPROVE_BELOW: unrecognized severity '${raw}' \u2014 valid values are 'blocker', 'high', 'medium', 'low', or 'nit'. Falling back to 'nit'.`
+  );
+  return "nit";
+}
+function resolveLabelVerdict(opts) {
+  const { verdict, findings, approveBelow } = opts;
+  if (verdict !== "changes") return verdict;
+  const threshold = SEVERITY_RANK[approveBelow];
+  const blocking = findings.some((f) => {
+    const rank = f.severity !== void 0 && isSeverity(f.severity) ? SEVERITY_RANK[f.severity] : void 0;
+    return rank === void 0 || rank >= threshold;
+  });
+  return blocking ? "changes" : "approved";
 }
 
 // src/git/globs.ts
@@ -30676,6 +30831,7 @@ function readInputs() {
     botLogoUrl: getInput("BOT_LOGO_URL") || "https://raw.githubusercontent.com/falconiere/toolu-ghactions/main/code-review/assets/logo.png",
     reviewMemory: readBool("REVIEW_MEMORY", true),
     failOn: parseFailOn(getInput("FAIL_ON") || "changes"),
+    approveBelow: parseApproveBelow(getInput("APPROVE_BELOW")),
     verbosity: readVerbosity(),
     touluApiKey: getInput("TOOLU_API_KEY").trim(),
     touluApiUrl: getInput("TOOLU_API_URL").trim() || "https://api.toolu.sh"
@@ -39263,136 +39419,6 @@ function atEndOfBlockComment(text2, i) {
   return text2[i] === "*" && text2[i + 1] === "/";
 }
 
-// src/llm/schema.ts
-var Finding = external_exports.object({
-  path: external_exports.string(),
-  line: external_exports.number().int(),
-  end_line: external_exports.number().int().optional(),
-  severity: external_exports.enum(["blocker", "high", "medium", "low", "nit"]),
-  category: external_exports.string().optional(),
-  confidence: external_exports.enum(["high", "medium"]).optional(),
-  quoted_line: external_exports.string().optional(),
-  suggestion: external_exports.string().optional().describe(
-    "Replacement CODE ONLY \u2014 the exact source text to substitute for lines [line..end_line]. GitHub renders it as a committable 'Suggested change', so it must be literal, directly-applicable code, never prose, commentary, or an instruction like 'remove this line'. Explanations go in `text`. Omit this field entirely when there is no clean code replacement."
-  ),
-  // Provenance: which layer surfaced this finding. Absent → an LLM-discovered finding
-  // (rendered as "llm"); set to a tool name when the model confirms a deterministic
-  // (gitleaks/opengrep) finding it was asked to triage.
-  source: external_exports.enum(["llm", "gitleaks", "opengrep", "eslint"]).optional(),
-  text: external_exports.string()
-});
-var Verdict = external_exports.object({
-  // Bounded: review_plan is emitted FIRST, so an unbounded plan eats the output
-  // budget before findings and starves them under truncation. The prompt asks for
-  // ≤ 2 short sentences (≤ 280 chars) and the JSON-schema maxLength nudges the model,
-  // but in JSON mode the provider only receives response_format:{type:"json_object"} —
-  // the schema (hence maxLength) is NOT enforced during decoding. So the cap is a soft
-  // backstop: an over-length plan is TRUNCATED via .catch rather than failing
-  // validation, which would otherwise throw the whole (complete, valid) review away as
-  // an abstention.
-  review_plan: external_exports.string().max(280).catch(({ input }) => typeof input === "string" ? input.slice(0, 280) : ""),
-  verdict: external_exports.enum(["approved", "changes"]),
-  findings: external_exports.array(Finding),
-  // Soft-capped like review_plan: other_checks is emitted AFTER findings, so in JSON
-  // mode its maxLength is a prompt nudge only, never enforced during decoding. The
-  // .catch TRUNCATES an over-length blurb to 600 rather than rejecting the whole (valid)
-  // review, and ALSO handles the absent-key case (a length-truncated response cut before
-  // this field) → "", preserving the prior .default("") truncation-resilience semantics.
-  other_checks: external_exports.string().max(600).catch(({ input }) => typeof input === "string" ? input.slice(0, 600) : ""),
-  top_must_fix: external_exports.array(external_exports.string()).default([])
-});
-var PartialVerdict = external_exports.object({
-  // Decorative fields: `.catch` drops a wrong-typed value (models routinely emit null
-  // here) instead of failing the parse, which would sink a recovery over prose.
-  review_plan: external_exports.string().optional().catch(void 0),
-  // `unknown` with NO `.catch`, deliberately — do not "fix" this to match its neighbours.
-  // The whole point of recovery is to rescue an off-enum verdict ("request_changes"),
-  // so the value must reach {@link normalizeVerdict} intact; it accepts any type and
-  // returns null when unmappable. A `.catch` here would silently discard exactly the
-  // strings recovery exists to map.
-  verdict: external_exports.unknown().optional(),
-  // NOT caught, deliberately: findings is load-bearing. A `findings` that is not an
-  // array must fail the whole recovery, because silently reading it as "no findings"
-  // would turn defects the model DID raise into a clean review.
-  findings: external_exports.array(external_exports.unknown()).optional(),
-  other_checks: external_exports.string().optional().catch(void 0),
-  top_must_fix: external_exports.array(external_exports.unknown()).optional().catch(void 0)
-});
-var VERDICT_ALIASES = {
-  approved: "approved",
-  approve: "approved",
-  approval: "approved",
-  accept: "approved",
-  accepted: "approved",
-  lgtm: "approved",
-  pass: "approved",
-  changes: "changes",
-  change: "changes",
-  requestchanges: "changes",
-  changesrequested: "changes",
-  requestedchanges: "changes",
-  reject: "changes",
-  rejected: "changes",
-  block: "changes",
-  blocked: "changes"
-};
-var SEVERITY_ALIASES = {
-  blocker: "blocker",
-  blocking: "blocker",
-  critical: "blocker",
-  fatal: "blocker",
-  high: "high",
-  major: "high",
-  error: "high",
-  medium: "medium",
-  moderate: "medium",
-  warning: "medium",
-  warn: "medium",
-  low: "low",
-  minor: "low",
-  info: "low",
-  informational: "low",
-  nit: "nit",
-  nitpick: "nit",
-  style: "nit"
-};
-function aliasKey(value) {
-  if (typeof value !== "string") return null;
-  const key = value.toLowerCase().replace(/[^a-z]/g, "");
-  return key === "" ? null : key;
-}
-function normalizeVerdict(value) {
-  const key = aliasKey(value);
-  return key === null ? null : VERDICT_ALIASES[key] ?? null;
-}
-function normalizeLine(value) {
-  if (typeof value === "number") return Number.isFinite(value) ? Math.trunc(value) : null;
-  if (typeof value !== "string") return null;
-  const match = /^\s*(-?\d+)/.exec(value);
-  return match?.[1] === void 0 ? null : Number.parseInt(match[1], 10);
-}
-function normalizeFinding(raw) {
-  const asObject = external_exports.record(external_exports.unknown()).safeParse(raw);
-  if (!asObject.success) return raw;
-  const out = { ...asObject.data };
-  const line = normalizeLine(out["line"]);
-  if (line === null) delete out["line"];
-  else out["line"] = line;
-  const endLine = normalizeLine(out["end_line"]);
-  if (endLine === null) delete out["end_line"];
-  else out["end_line"] = endLine;
-  const severity = aliasKey(out["severity"]);
-  if (severity !== null && SEVERITY_ALIASES[severity] !== void 0) {
-    out["severity"] = SEVERITY_ALIASES[severity];
-  }
-  if (out["confidence"] !== "high" && out["confidence"] !== "medium") delete out["confidence"];
-  const source = out["source"];
-  if (source !== "llm" && source !== "gitleaks" && source !== "opengrep" && source !== "eslint") {
-    delete out["source"];
-  }
-  return out;
-}
-
 // src/llm/budget.ts
 var MAX_TOKEN_CEILING = 131072;
 var MAX_ESCALATIONS = 4;
@@ -39684,7 +39710,7 @@ function hangBackoff(attempt, wallDeadline) {
 }
 
 // src/review/findings.ts
-var SEVERITY_RANK = {
+var SEVERITY_RANK2 = {
   blocker: 0,
   high: 1,
   medium: 2,
@@ -39713,7 +39739,7 @@ function buildTruncatedFindingsSection(findings, keep, jobUrl2) {
 ${note}`;
 }
 function severitySorted(findings) {
-  return [...findings].sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]);
+  return [...findings].sort((a, b) => SEVERITY_RANK2[a.severity] - SEVERITY_RANK2[b.severity]);
 }
 function renderGroups(ordered) {
   const counts = /* @__PURE__ */ new Map();
@@ -39923,7 +39949,7 @@ function dedup(findings) {
     if (existing === void 0) {
       byKey.set(key, f);
       order.push(key);
-    } else if (SEVERITY_RANK[f.severity] < SEVERITY_RANK[existing.severity]) {
+    } else if (SEVERITY_RANK2[f.severity] < SEVERITY_RANK2[existing.severity]) {
       byKey.set(key, { ...existing, severity: f.severity });
     }
   }
@@ -42443,7 +42469,7 @@ function buildMechanicalSection(mechanical, llmErrored) {
 `;
 }
 function buildTopMustFixSection(findings) {
-  return [...findings].sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]).slice(0, TOP_MUST_FIX_MAX).map((finding) => `- \`${finding.path}:${finding.line}\` \u2014 ${finding.text}`).join("\n");
+  return [...findings].sort((a, b) => SEVERITY_RANK2[a.severity] - SEVERITY_RANK2[b.severity]).slice(0, TOP_MUST_FIX_MAX).map((finding) => `- \`${finding.path}:${finding.line}\` \u2014 ${finding.text}`).join("\n");
 }
 function buildSeveritySummary(findings) {
   const counts = { blocker: 0, high: 0, medium: 0, low: 0, nit: 0 };
@@ -43131,7 +43157,7 @@ function matchingSettledThreads(f, priorThreads) {
 function settlementOf(t) {
   return t.dismissal ?? "resolved";
 }
-function isSeverity(v) {
+function isSeverity2(v) {
   return v === "blocker" || v === "high" || v === "medium" || v === "low" || v === "nit";
 }
 function isSource(v) {
@@ -43156,7 +43182,7 @@ function enrichFromPrior(thread, prior) {
     fp: thread.fp,
     path: thread.path,
     line: thread.line,
-    severity: isSeverity(severity) ? severity : void 0,
+    severity: isSeverity2(severity) ? severity : void 0,
     category: typeof category === "string" ? category : void 0,
     source: isSource(source) ? source : void 0
   };
@@ -43503,7 +43529,12 @@ async function publish(input) {
     clusters: reduction.clustered.filter((c) => findings.some((f) => f.fp === c.exemplar.fp))
   });
   const commentUrl = await upsertComment(octokit, target, body, input.stickyId);
-  await setVerdictLabel(octokit, verdict, target, { manageLabels: inputs.manageLabels });
+  const labelVerdict = resolveLabelVerdict({
+    verdict,
+    findings,
+    approveBelow: inputs.approveBelow
+  });
+  await setVerdictLabel(octokit, labelVerdict, target, { manageLabels: inputs.manageLabels });
   await reportRun({
     input,
     applied: expandApplied(inline.applied, reduction),

@@ -17,6 +17,7 @@ import type { ReviewState } from "@/state.js";
 import { upsertComment } from "@/github/comment.js";
 import { postInlineReview } from "@/github/review.js";
 import { setVerdictLabel } from "@/github/label.js";
+import { resolveLabelVerdict } from "@/review/gate.js";
 import {
   ACCEPTED_RESOLUTION_NOTE,
   hasAcceptedResolutionNote,
@@ -163,9 +164,18 @@ export async function publish(input: PublishInput): Promise<ReviewResult> {
   });
 
   const commentUrl = await upsertComment(octokit, target, body, input.stickyId);
+  // The LABEL follows APPROVE_BELOW: a "changes" verdict whose only findings are
+  // strictly below the threshold still reads "changes" in the comment/outputs
+  // (`verdict` below, unchanged), but the label itself may read "approved" — see
+  // review/gate.ts's resolveLabelVerdict doc for why this stays a separate value.
+  const labelVerdict = resolveLabelVerdict({
+    verdict,
+    findings,
+    approveBelow: inputs.approveBelow,
+  });
   // setVerdictLabel never throws — every labels-API call is caught inside
   // github/label.ts and reported via its LabelResult, so no try/catch here.
-  await setVerdictLabel(octokit, verdict, target, { manageLabels: inputs.manageLabels });
+  await setVerdictLabel(octokit, labelVerdict, target, { manageLabels: inputs.manageLabels });
   // AFTER postInline — ordering is load-bearing, see report/report-run.ts's doc.
   // Both sides of the partition carry expanded member lists (report/expand.ts).
   // reportRun() wraps its whole body in try/catch and is documented to never
