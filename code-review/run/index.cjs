@@ -43805,8 +43805,8 @@ async function runDismissRecompute(deps, prNumber) {
     triggerPhrase: inputs.triggerPhrase,
     minPermission: inputs.minTriggerPermission,
     approveBelow: inputs.approveBelow,
-    ...deps.lookupPermission ? { lookupPermission: deps.lookupPermission } : {},
-    ...deps.lookupHeadSha ? { lookupHeadSha: deps.lookupHeadSha } : {}
+    lookupPermission: deps.lookupPermission,
+    lookupHeadSha: deps.lookupHeadSha
   });
   if (evaluation.kind === "skip") {
     const text2 = SKIP_TEXT[evaluation.reason];
