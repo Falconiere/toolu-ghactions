@@ -1,5 +1,12 @@
 # Changelog
 
+## [8.4.0](https://github.com/Falconiere/toolu-ghactions/compare/v8.3.0...v8.4.0) (2026-09-27)
+
+
+### Features
+
+* **merge-gate:** recompute settled findings read-only when merge-approved is missing ([#131](https://github.com/Falconiere/toolu-ghactions/issues/131)) ([dbd9eaa](https://github.com/Falconiere/toolu-ghactions/commit/dbd9eaa76cbdc6e8a0ee8782fd09214f1a04f65d))
+
 ## [8.3.0](https://github.com/Falconiere/toolu-ghactions/compare/v8.2.0...v8.3.0) (2026-09-27)
 
 
