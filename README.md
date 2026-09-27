@@ -31,7 +31,7 @@ AI coding agents open pull requests faster than human review scales. The discipl
 |---|---|---|---|
 | 🔍 | [**code-review**](./code-review/README.md) | AI pull-request review against an 8-dimension checklist, running one model via OpenRouter (any OpenAI-compatible id) on the Vercel AI SDK. Posts a structured verdict and inline suggestions. | — |
 | 🌐 | [**cloudflare-tunnel**](./cloudflare-tunnel/README.md) | Expose a runner port to the public internet through a Cloudflare Tunnel — quick or named — for live preview and visual review. | `start` · `stop` · `wait` |
-| 🚦 | [**merge-gate**](./merge-gate/README.md) | A required check that stays red until a pull request is ready to auto-merge: `code-review` approved it (the `merge-approved` label) and every review thread has a reply from someone other than its opener. | — |
+| 🚦 | [**merge-gate**](./merge-gate/README.md) | A required check that stays red until a pull request is ready to auto-merge: `code-review` approved it (the `merge-approved` label, or every finding of its last review settled on the current head, recomputed read-only with no model call) and every review thread has a reply from someone other than its opener. | — |
 | 📱 | [**expo-builder**](./expo-builder/README.md) | Build signed Expo Android APK/AABs with `expo prebuild` + Gradle — **no Expo/EAS account, no eas-cli** — and ship them to GitHub Releases or a Google Play track. | `build-android` · `deploy-github-release` · `deploy-google-play` |
 
 Each action is self-contained and independently versioned; take both or lift one.
@@ -161,6 +161,7 @@ Each action is listed on the GitHub Marketplace from its own mirror repo — [`t
 │   └── __tests__/          # Hermetic bats test suite
 ├── merge-gate/             # Auto-merge readiness check (composite, bash)
 │   ├── src/                # merge-gate.sh
+│   ├── recompute/          # read-only settle recompute (node24, built from code-review/src/gate)
 │   └── __tests__/          # bats suite replaying recorded GitHub API responses
 ├── expo-builder/           # Expo Android build + release (no EAS account)
 │   ├── build-android/      # Composite: prebuild → init-script signing → Gradle

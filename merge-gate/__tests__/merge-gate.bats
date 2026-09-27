@@ -79,3 +79,87 @@ teardown() { common_teardown; }
     [ "$output" = "::error::unexpected repository 'comemory'" ]
     [ ! -e "$GH_LOG" ]
 }
+
+# --- settled-findings recompute (#123) --------------------------------------
+# SETTLE_* are the outputs of the composite's `recompute` step (merge-gate/recompute,
+# code-review's read-only settle evaluation), exactly as action.yml maps them in.
+
+@test "#307: request-changes, every thread answered, recompute approves → ready without the label" {
+    stub_gh_pr 307
+    SETTLE_OUTCOME=approve SETTLE_REASON= SETTLE_VERDICT=approved SETTLE_SETTLED=3 SETTLE_TOTAL=3 PR=307 run bash "$SCRIPT"
+    [ "$status" -eq 0 ]
+    [ "$output" = 'PR #307 is ready to auto-merge: every blocking finding of the last review is settled (3 of 3 settled, no model call) and every review thread answered.' ]
+    [ "$(cat "$GITHUB_STEP_SUMMARY")" = "$output" ]
+}
+
+@test "#307: an advisory remainder (verdict changes) is named, not claimed settled" {
+    stub_gh_pr 307
+    SETTLE_OUTCOME=approve SETTLE_VERDICT=changes SETTLE_SETTLED=1 SETTLE_TOTAL=3 PR=307 run bash "$SCRIPT"
+    [ "$status" -eq 0 ]
+    [ "$output" = 'PR #307 is ready to auto-merge: every blocking finding of the last review is settled (1 of 3 settled, the rest below approve-below, no model call) and every review thread answered.' ]
+}
+
+@test "#307: recompute finds a newer push (stale-head) → not ready, and the reason is named" {
+    stub_gh_pr 307
+    SETTLE_OUTCOME=unchanged SETTLE_REASON=stale-head SETTLE_SETTLED=0 SETTLE_TOTAL=0 PR=307 run bash "$SCRIPT"
+    [ "$status" -eq 1 ]
+    [ "$output" = '::error::label `merge-approved` is missing; the Code Review action adds it when its verdict is approved (settled-findings recompute: stale-head)' ]
+}
+
+@test "#307: recompute finds an incomplete review → not ready, and the reason is named" {
+    stub_gh_pr 307
+    SETTLE_OUTCOME=unchanged SETTLE_REASON=incomplete PR=307 run bash "$SCRIPT"
+    [ "$status" -eq 1 ]
+    [ "$output" = '::error::label `merge-approved` is missing; the Code Review action adds it when its verdict is approved (settled-findings recompute: incomplete)' ]
+}
+
+@test "#307: a reason token with digits is named too" {
+    stub_gh_pr 307
+    SETTLE_OUTCOME=unchanged SETTLE_REASON=http-404 PR=307 run bash "$SCRIPT"
+    [ "$status" -eq 1 ]
+    [ "$output" = '::error::label `merge-approved` is missing; the Code Review action adds it when its verdict is approved (settled-findings recompute: http-404)' ]
+}
+
+@test "#307: a crashed recompute step (empty outputs) → today's missing-label line" {
+    stub_gh_pr 307
+    SETTLE_OUTCOME= SETTLE_REASON= PR=307 run bash "$SCRIPT"
+    [ "$status" -eq 1 ]
+    [ "$output" = '::error::label `merge-approved` is missing; the Code Review action adds it when its verdict is approved' ]
+}
+
+@test "#307: an unexpected reason value is not echoed into the annotation" {
+    stub_gh_pr 307
+    SETTLE_OUTCOME=unchanged SETTLE_REASON='x%0A::error::forged' PR=307 run bash "$SCRIPT"
+    [ "$status" -eq 1 ]
+    [ "$output" = '::error::label `merge-approved` is missing; the Code Review action adds it when its verdict is approved' ]
+}
+
+@test "#304: recompute approves but a thread is unanswered → not ready on the thread only" {
+    stub_gh_pr 304
+    SETTLE_OUTCOME=approve SETTLE_SETTLED=1 SETTLE_TOTAL=1 PR=304 run bash "$SCRIPT"
+    [ "$status" -eq 1 ]
+    [ "$output" = "::error::review thread has no reply: CHANGELOG.md: $(first_comment_url 304 0)" ]
+}
+
+@test "#289: the label is present, so an unchanged recompute is ignored" {
+    stub_gh_pr 289
+    SETTLE_OUTCOME=unchanged SETTLE_REASON=not-changes PR=289 run bash "$SCRIPT"
+    [ "$status" -eq 0 ]
+    [ "$output" = 'PR #289 is ready to auto-merge: labeled `merge-approved` and every review thread answered.' ]
+}
+
+@test "action.yml runs the read-only recompute first and hands its outputs to the gate" {
+    action="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)/action.yml"
+    uses_line="$(grep -n 'uses: \$/merge-gate/recompute$' "$action" | cut -d: -f1)"
+    gate_line="$(grep -n 'src/merge-gate.sh' "$action" | cut -d: -f1)"
+    [ -n "$uses_line" ] && [ -n "$gate_line" ] && [ "$uses_line" -lt "$gate_line" ]
+    grep -q '^ *id: recompute$' "$action"
+    grep -q '^ *continue-on-error: true$' "$action"
+    grep -q "if: \${{ inputs.settle-recompute == 'true' }}" "$action"
+    for out in outcome reason verdict settled total; do
+        upper="$(tr '[:lower:]' '[:upper:]' <<<"$out")"
+        grep -q "SETTLE_${upper}: \${{ steps.recompute.outputs.${out} }}" "$action"
+    done
+    [ -f "$(dirname "$action")/recompute/action.yml" ]
+    grep -q "main: 'index.cjs'" "$(dirname "$action")/recompute/action.yml"
+}

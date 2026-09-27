@@ -1,4 +1,6 @@
-// build.mjs — bundle the action into run/index.cjs and sanitize-sarif/index.cjs
+// build.mjs — bundle the action into run/index.cjs and sanitize-sarif/index.cjs, and
+// merge-gate's read-only settle recompute into ../merge-gate/recompute/index.cjs (it
+// shares this action's recompute sources, so it is built — and sync-checked — here),
 // with esbuild. esbuild (not ncc) because the Vercel AI SDK and its deps are
 // ESM-only and esbuild bundles ESM inputs into a self-contained CJS file
 // reliably. The output is CJS (uses require()), so it MUST carry the .cjs
@@ -30,3 +32,10 @@ await build({
   ...common,
 });
 console.log("built sanitize-sarif/index.cjs");
+
+await build({
+  entryPoints: ["src/gate/settleCheckMain.ts"],
+  outfile: "../merge-gate/recompute/index.cjs",
+  ...common,
+});
+console.log("built ../merge-gate/recompute/index.cjs");

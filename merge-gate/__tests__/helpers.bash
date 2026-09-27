@@ -6,6 +6,8 @@
 #   labels-comemory-<pr>.json   gh api repos/Falconiere/comemory/issues/<pr>/labels?per_page=100
 #   threads-comemory-<pr>.json  gh api graphql --paginate --slurp (the query in src/merge-gate.sh)
 #   labels-404.{stdout,stderr}  the same labels call against a PR that does not exist
+# comemory#307 (issue #123's motivating PR: `request-changes`, all 64 threads answered)
+# was recorded 2026-09-27 with the same two calls.
 # The script under test runs exactly as CI runs it; only `gh` is replayed.
 common_setup() {
     BATS_TEST_TMPDIR="${BATS_TEST_TMPDIR:-$(mktemp -d)}"

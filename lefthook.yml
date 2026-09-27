@@ -7,7 +7,9 @@
 #
 # pre-commit is FAST (oxlint --fix + oxfmt on staged TS only — no type-aware, which
 # needs whole-program analysis). pre-push runs the FULL gate incl. type-aware lint,
-# and rebuilds the committed dist bundle, failing if it drifted from source.
+# and rebuilds the committed dist bundles, failing if they drifted from source. The
+# bundle diff runs from the repo ROOT: git runs hooks with GIT_DIR set, so from
+# code-review/ a `../merge-gate/...` pathspec would be "outside repository".
 
 pre-commit:
   parallel: true
@@ -33,4 +35,4 @@ pre-push:
       run: "bun run typecheck"
     - name: bundle-sync
       root: "code-review/"
-      run: "bun run build && git diff --quiet -- run/index.cjs sanitize-sarif/index.cjs || { echo 'bundles out of sync — run: cd code-review && bun run build, then commit run/index.cjs and sanitize-sarif/index.cjs'; exit 1; }"
+      run: "bun run build && cd .. && git diff --quiet -- code-review/run/index.cjs code-review/sanitize-sarif/index.cjs merge-gate/recompute/index.cjs || { echo 'bundles out of sync — run: cd code-review && bun run build, then commit code-review/run/index.cjs, code-review/sanitize-sarif/index.cjs and merge-gate/recompute/index.cjs'; exit 1; }"
