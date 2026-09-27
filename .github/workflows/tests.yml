@@ -23,6 +23,7 @@ jobs:
       tunnel: ${{ steps.filter.outputs.tunnel }}
       expo: ${{ steps.filter.outputs.expo }}
       scripts: ${{ steps.filter.outputs.scripts }}
+      merge_gate: ${{ steps.filter.outputs.merge_gate }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -35,7 +36,7 @@ jobs:
         run: |
           set -uo pipefail
           # Fail-open: ANY error (or a non-PR event) runs the full suite. This job
-          # gates the 5 required checks; it must never exit non-zero or emit a
+          # gates the required checks below; it must never exit non-zero or emit a
           # false "unchanged" that green-lights a required check without running it.
           emit_all() {
             {
@@ -43,6 +44,7 @@ jobs:
               echo "tunnel=true"
               echo "expo=true"
               echo "scripts=true"
+              echo "merge_gate=true"
             } >>"$GITHUB_OUTPUT"
             exit 0
           }
@@ -67,6 +69,7 @@ jobs:
             echo "tunnel=$(area '^cloudflare-tunnel/')"
             echo "expo=$(area '^expo-builder/')"
             echo "scripts=$(area '^scripts/')"
+            echo "merge_gate=$(area '^merge-gate/')"
           } >>"$GITHUB_OUTPUT"
 
   code-review:
@@ -155,6 +158,31 @@ jobs:
       - name: shellcheck
         if: ${{ env.RUN == 'true' }}
         run: shellcheck --severity=warning scripts/*.sh
+
+  merge-gate-test:
+    name: merge-gate bats + shellcheck + action-validator
+    needs: changes
+    runs-on: ubuntu-latest
+    env:
+      RUN: ${{ needs.changes.outputs.merge_gate == 'true' || github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@v5
+        if: ${{ env.RUN == 'true' }}
+      - name: Install bats + jq
+        if: ${{ env.RUN == 'true' }}
+        uses: ./.github/actions/setup-bats
+      - name: bats
+        if: ${{ env.RUN == 'true' }}
+        run: bats merge-gate/__tests__/*.bats
+      - name: shellcheck
+        if: ${{ env.RUN == 'true' }}
+        run: shellcheck --severity=warning merge-gate/src/*.sh
+      - name: Install action-validator
+        if: ${{ env.RUN == 'true' }}
+        run: npm i -g @action-validator/cli
+      - name: action-validator
+        if: ${{ env.RUN == 'true' }}
+        run: action-validator merge-gate/action.yml
 
   tunnel-test:
     name: tunnel bats (${{ matrix.os }})
