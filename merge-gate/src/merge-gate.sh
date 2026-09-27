@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # merge-gate.sh — fail the `merge-gate` check until a pull request is ready to
 # auto-merge: it carries the `merge-approved` label (or the composite's read-only
-# recompute found every finding of the last review settled on the live head), and
-# every review thread has a reply from someone other than the account that opened it. Green CI and
-# resolved threads are left to branch protection (required checks and required
-# conversation resolution); this gate checks only what GitHub cannot express.
+# recompute found every blocking finding of the last review settled on the live
+# head), and every review thread has a reply from someone other than the account
+# that opened it. Green CI and resolved threads are left to branch protection
+# (required checks and required conversation resolution); this gate checks only
+# what GitHub cannot express.
 #
 # env : GH_TOKEN (needs pull-requests: read), REPO (owner/name), PR (number),
 #       GITHUB_STEP_SUMMARY (optional; the verdict is appended when set),
-#       SETTLE_OUTCOME / SETTLE_REASON / SETTLE_SETTLED / SETTLE_TOTAL (optional; the
-#       outputs of the composite's `recompute` step — merge-gate/recompute)
+#       SETTLE_OUTCOME / SETTLE_REASON / SETTLE_VERDICT / SETTLE_SETTLED /
+#       SETTLE_TOTAL (optional; the outputs of the composite's `recompute` step —
+#       merge-gate/recompute)
 # exit: 0 ready to merge; 1 not ready, bad input, or an unreadable API.
 set -euo pipefail
 
@@ -113,7 +115,11 @@ done <<<"$unanswered"
 if [ "${#problems[@]}" -eq 0 ]; then
   if [ "$settled_by_recompute" -eq 1 ]; then
     count() { case "$1" in ""|*[!0-9]*) echo "?" ;; *) echo "$1" ;; esac; }
-    echo "PR #$PR is ready to auto-merge: every finding of the last review is settled ($(count "${SETTLE_SETTLED:-}") of $(count "${SETTLE_TOTAL:-}"), no model call) and every review thread answered." \
+    # Verdict `changes` = the rest of the findings are below `approve-below`
+    # (advisory), so only the blocking ones were settled.
+    rest=""
+    [ "${SETTLE_VERDICT:-}" = "changes" ] && rest=", the rest below approve-below"
+    echo "PR #$PR is ready to auto-merge: every blocking finding of the last review is settled ($(count "${SETTLE_SETTLED:-}") of $(count "${SETTLE_TOTAL:-}") settled$rest, no model call) and every review thread answered." \
       | tee -a "$summary"
   else
     echo "PR #$PR is ready to auto-merge: labeled \`merge-approved\` and every review thread answered." \

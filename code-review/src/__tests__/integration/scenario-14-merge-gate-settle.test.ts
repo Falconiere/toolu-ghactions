@@ -32,7 +32,7 @@ function check(round: Round, over: Partial<SettleEvalDeps> = {}) {
   });
 }
 
-/** The round's stored state with `patch` applied, served from a fresh store. */
+/** A fresh store serving `body` as the only sticky (optionally under `user`). */
 function storeWith(round: Round, body: string, user?: CommentUser) {
   return fakeOctokit({
     existing: [{ id: 1, body, ...(user ? { user } : {}) }],

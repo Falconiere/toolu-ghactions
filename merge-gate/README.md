@@ -77,7 +77,7 @@ When the label is missing, this action first runs a small read-only recompute (a
 
 1. It reads the last completed review round from the code-review sticky comment's memory marker. The sticky must be posted by a bot and must not be a review in progress.
 2. It drops the findings settled on the bot's own threads: resolved, answered with `@toolu dismiss`, or argued out. These are the same rules and the same permission gate the review applies.
-3. If nothing blocking remains under `approve-below`, the label requirement is met. The success line then reads `every finding of the last review is settled (<n> of <m>, no model call)`.
+3. If nothing blocking remains under `approve-below`, the label requirement is met. The success line then reads `every blocking finding of the last review is settled (<n> of <m> settled, no model call)`, and adds `the rest below approve-below` when advisory findings remain.
 
 It **fails closed**: the missing-label error stays, followed by `(settled-findings recompute: <reason>)`, when:
 

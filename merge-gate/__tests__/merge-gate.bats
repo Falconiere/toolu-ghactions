@@ -86,10 +86,17 @@ teardown() { common_teardown; }
 
 @test "#307: request-changes, every thread answered, recompute approves → ready without the label" {
     stub_gh_pr 307
-    SETTLE_OUTCOME=approve SETTLE_REASON= SETTLE_SETTLED=3 SETTLE_TOTAL=3 PR=307 run bash "$SCRIPT"
+    SETTLE_OUTCOME=approve SETTLE_REASON= SETTLE_VERDICT=approved SETTLE_SETTLED=3 SETTLE_TOTAL=3 PR=307 run bash "$SCRIPT"
     [ "$status" -eq 0 ]
-    [ "$output" = 'PR #307 is ready to auto-merge: every finding of the last review is settled (3 of 3, no model call) and every review thread answered.' ]
+    [ "$output" = 'PR #307 is ready to auto-merge: every blocking finding of the last review is settled (3 of 3 settled, no model call) and every review thread answered.' ]
     [ "$(cat "$GITHUB_STEP_SUMMARY")" = "$output" ]
+}
+
+@test "#307: an advisory remainder (verdict changes) is named, not claimed settled" {
+    stub_gh_pr 307
+    SETTLE_OUTCOME=approve SETTLE_VERDICT=changes SETTLE_SETTLED=1 SETTLE_TOTAL=3 PR=307 run bash "$SCRIPT"
+    [ "$status" -eq 0 ]
+    [ "$output" = 'PR #307 is ready to auto-merge: every blocking finding of the last review is settled (1 of 3 settled, the rest below approve-below, no model call) and every review thread answered.' ]
 }
 
 @test "#307: recompute finds a newer push (stale-head) → not ready, and the reason is named" {
@@ -142,7 +149,7 @@ teardown() { common_teardown; }
     grep -q '^ *id: recompute$' "$action"
     grep -q '^ *continue-on-error: true$' "$action"
     grep -q "if: \${{ inputs.settle-recompute == 'true' }}" "$action"
-    for out in outcome reason settled total; do
+    for out in outcome reason verdict settled total; do
         upper="$(tr '[:lower:]' '[:upper:]' <<<"$out")"
         grep -q "SETTLE_${upper}: \${{ steps.recompute.outputs.${out} }}" "$action"
     done

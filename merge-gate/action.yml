@@ -58,6 +58,7 @@ runs:
         PR: ${{ github.event.pull_request.number }}
         SETTLE_OUTCOME: ${{ steps.recompute.outputs.outcome }}
         SETTLE_REASON: ${{ steps.recompute.outputs.reason }}
+        SETTLE_VERDICT: ${{ steps.recompute.outputs.verdict }}
         SETTLE_SETTLED: ${{ steps.recompute.outputs.settled }}
         SETTLE_TOTAL: ${{ steps.recompute.outputs.total }}
       run: bash "$GITHUB_ACTION_PATH/src/merge-gate.sh"
