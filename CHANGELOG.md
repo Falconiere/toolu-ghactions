@@ -1,5 +1,12 @@
 # Changelog
 
+## [8.2.0](https://github.com/Falconiere/toolu-ghactions/compare/v8.1.0...v8.2.0) (2026-09-27)
+
+
+### Features
+
+* **code-review:** add APPROVE_BELOW severity threshold for merge-approved ([#127](https://github.com/Falconiere/toolu-ghactions/issues/127)) ([da01c7f](https://github.com/Falconiere/toolu-ghactions/commit/da01c7fa3e34cb8a7cf7c4bd7c11a675262ddb07))
+
 ## [8.1.0](https://github.com/Falconiere/toolu-ghactions/compare/v8.0.2...v8.1.0) (2026-09-27)
 
 
