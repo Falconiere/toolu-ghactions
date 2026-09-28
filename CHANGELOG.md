@@ -1,5 +1,12 @@
 # Changelog
 
+## [8.4.1](https://github.com/Falconiere/toolu-ghactions/compare/v8.4.0...v8.4.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* **code-review:** drop findings that conclude there is no defect ([#133](https://github.com/Falconiere/toolu-ghactions/issues/133)) ([55352c6](https://github.com/Falconiere/toolu-ghactions/commit/55352c6acbec536d3d22a951385734e98bb5eb19))
+
 ## [8.4.0](https://github.com/Falconiere/toolu-ghactions/compare/v8.3.0...v8.4.0) (2026-09-27)
 
 
