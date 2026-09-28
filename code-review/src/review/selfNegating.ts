@@ -13,6 +13,14 @@
 // FINAL sentence, because a concede-then-accuse finding ("This is fine. The real
 // bug is the missing await on line 12.") must keep its actionable claim.
 //
+// The final sentence is also split into CLAUSES (comemory PR #307: models reason
+// inside the finding and conclude only at its end — "… is safe. No defect,
+// abstain.", "…; the direct write is a narrow simulation acceptable for testing
+// the client-side refusal."). Its LAST clause may be a no-defect conclusion; its
+// FIRST clause may be one only when no contrastive or causal clause follows, so
+// "No defect, but `as` is a lossy cast." keeps its claim. Clause patterns are
+// anchored full-clause matches too, and an affirmation never carries a negation.
+//
 // Deliberately FULL-SENTENCE matching, never substring: "Clamping to 0 here is
 // not acceptable for negative counts." contains "acceptable" but is not, in full,
 // the word "acceptable" — a substring match would wrongly drop a real finding. The
@@ -52,6 +60,37 @@ const FINAL_ONLY_PATTERNS: readonly RegExp[] = [
   /^fine$/i,
   /^a theoretical edge case, not a practical concern$/i,
 ];
+
+/** Clause boundary inside a sentence: `,` `;` `:` or a spaced dash. */
+const CLAUSE_SPLIT = /\s*[,;:]\s+|\s+[—–-]{1,2}\s+/;
+
+/** "no [≤2 qualifiers] defect|risk|…", optionally "observed"/"evident"/… and a
+ *  trailing "from|in|… <scope>" — "No deadlock risk", "no defect observed from
+ *  diff", "no defect in the production code path". The noun list is what keeps
+ *  "No bounds check guards the index" (a real defect) out. */
+const NO_DEFECT_CLAUSE =
+  /^(?:(?:thus|so|therefore|hence|overall)\s+)?no\s+(?:[\w-]+\s+){0,2}?(?:defects?|issues?|problems?|bugs?|risks?|concerns?|violations?|regressions?)(?:\s+(?:observed|evident|evidenced|visible|found|present|apparent|introduced|here))?(?:\s+(?:from|in|within|on|for|at)\s+.+)?$/i;
+
+/** "no excessive|unbounded|significant <thing> [evidenced]" — denies the defect's
+ *  magnitude, which a real finding never does. */
+const NO_EXCESS_CLAUSE = /^no\s+(?:excessive|unbounded|significant)\s+[\w-]+(?:\s+[\w-]+){0,2}$/i;
+
+/** "<short subject> is|are [≤4 words] acceptable|safe|… [for|in|as <scope>]". */
+const AFFIRMATION_CLAUSE =
+  /^(?:[\w`'().:&-]+\s+){1,6}(?:is|are)\s+(?:[\w-]+\s+){0,4}?(?:acceptable|safe|correct|consistent|fine|harmless)(?:\s+(?:for|in|as)\s+.+)?$/i;
+
+/** A bare verdict word left as the last clause ("… — consistent.", "No defect, abstain."). */
+const BARE_CONCLUSION = /^(?:consistent|safe|correct|harmless|abstain(?:ing)?)$/i;
+
+/** "This is a false positive" — the model's triage rejecting a scanner hit. */
+const FALSE_POSITIVE = /^(?:an?\s+)?false positive$/i;
+
+/** Negation inside an affirmation flips it: "is not acceptable for negative counts". */
+const NEGATION = /\b(?:not|never|no)\b|n't\b/i;
+
+/** A later clause that carries a claim of its own: "No defect, but …", "…, so X panics". */
+const CONTINUATION =
+  /\b(?:but|however|although|though|yet|except|still|so|because|since|which|causing|leading)\b/i;
 
 /** PR #125's praise without an explicit "No findings". Match the WHOLE text so
  * a separate defect sentence cannot be hidden by a later compliment. */
@@ -111,6 +150,30 @@ export function isSelfNegating(text: string): boolean {
   return sentences.some((sentence, i) => {
     const stripped = stripSentence(sentence);
     if (NEGATION_PATTERNS.some((p) => p.test(stripped))) return true;
-    return i === lastIndex && FINAL_ONLY_PATTERNS.some((p) => p.test(stripped));
+    if (i !== lastIndex) return false;
+    return FINAL_ONLY_PATTERNS.some((p) => p.test(stripped)) || concludesNoDefect(stripped);
   });
+}
+
+/** The final sentence's clause rule (see the header): its last clause concludes no
+ *  defect, or its first clause does and nothing after it carries a claim. */
+function concludesNoDefect(sentence: string): boolean {
+  const clauses = sentence
+    .split(CLAUSE_SPLIT)
+    .map(stripSentence)
+    .filter((c) => c !== "");
+  const first = clauses[0];
+  const last = clauses.at(-1);
+  if (first === undefined || last === undefined) return false;
+  if (
+    NO_DEFECT_CLAUSE.test(last) ||
+    NO_EXCESS_CLAUSE.test(last) ||
+    BARE_CONCLUSION.test(last) ||
+    FALSE_POSITIVE.test(last) ||
+    (AFFIRMATION_CLAUSE.test(last) && !NEGATION.test(last))
+  ) {
+    return true;
+  }
+  const rest = clauses.slice(1).join(" ");
+  return (NO_DEFECT_CLAUSE.test(first) || FALSE_POSITIVE.test(first)) && !CONTINUATION.test(rest);
 }

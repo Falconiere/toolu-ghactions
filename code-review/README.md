@@ -34,7 +34,10 @@ with:
 
 Requests use [OpenRouter's System One endpoint](https://openrouter.ai/docs/guides/community/typesafe-sdk),
 never a direct TypeSafe API or separate credential. Baseline package review and
-source validation finish first. Incomplete baseline coverage skips enhancements.
+source validation finish first. Incomplete baseline coverage (any partial package or
+unreviewed file) skips enhancements; the note then reads
+`N skipped (baseline coverage incomplete)`, or `(wall deadline reached)` when the
+deadline expired first.
 Every enhancement request, retry and recheck shares the original `MAX_WALL_MS`
 deadline. Runtime defaults, package cap, concurrency and resume behavior remain unchanged.
 
@@ -323,7 +326,11 @@ line numbers and low-confidence findings are dropped, findings are deduplicated 
 `(path, line, end_line, text-fingerprint)` keeping the highest severity, and each
 is anchored to a real changed line. Fresh LLM findings must quote source text from
 their cited line; missing or mismatched evidence leaves the affected coverage
-unreviewed rather than turning an unsupported claim into a clean approval. Existing
+unreviewed rather than turning an unsupported claim into a clean approval. A finding
+the model withdraws (`conclusion: "no_defect"`, written after its `text`) or whose own
+text concludes there is no defect ("… is safe. No defect, abstain.", "No deadlock
+risk.") is dropped before posting: it opens no thread, adds to no severity count, and
+cannot hold a "changes" verdict. Existing
 stored findings remain compatible. Top-N recommendations use only surviving findings.
 Settled findings are removed as whole repeated-finding groups before source
 validation, so their stale quotes cannot make a completed review incomplete.

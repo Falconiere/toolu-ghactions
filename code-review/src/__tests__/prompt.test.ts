@@ -642,6 +642,12 @@ describe("prompt token and evidence contract", () => {
     expect(CHECKLIST_TEXT).toContain('other_checks: ""');
     expect(CHECKLIST_TEXT).toContain("top_must_fix: []");
   });
+  it("asks for `conclusion` as the LAST finding key, with no_defect as the explicit withdrawal", () => {
+    // comemory PR #307: the model reasons inside `text` and concludes "No defect,
+    // abstain." only at its end — `conclusion` is written after it so it can withdraw.
+    expect(CHECKLIST_TEXT).toContain("text, suggestion?, conclusion}");
+    expect(CHECKLIST_TEXT).toContain('conclusion: write it last: "defect", or "no_defect"');
+  });
   it("fences a repository diff containing backticks without leaking its content", () => {
     const env = buildPrompt({
       checklistPath: CHECKLIST_PATH,

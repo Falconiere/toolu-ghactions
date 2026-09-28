@@ -64,7 +64,9 @@ Return JSON only:
 - review_plan: at most two short sentences, ≤280 characters.
 - verdict: "changes" for actionable defects requiring correction; otherwise "approved".
 - findings: array of {path, line, end_line?, quoted_line, severity, confidence,
-  category?, source?, text, suggestion?}. severity: blocker|high|medium|low|nit;
-  confidence: high|medium; source: llm|gitleaks|opengrep|eslint (default llm).
-- other_checks: "" (unused; do not spend tokens on passed-check commentary).
+  category?, source?, text, suggestion?, conclusion}. severity: blocker|high|medium|low|nit;
+  confidence: high|medium; source: llm|gitleaks|opengrep|eslint (default llm);
+  conclusion: write it last: "defect", or "no_defect" if your text found nothing
+  wrong (the finding is discarded).
+- other_checks: "" (unused).
 - top_must_fix: [] (derived from validated findings downstream).

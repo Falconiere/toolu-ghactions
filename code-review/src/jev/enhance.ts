@@ -25,6 +25,8 @@ export interface EnhancementSummary {
   additionalReviews: number;
   unavailable: number;
   skipped: number;
+  /** Why the whole enhancement was skipped up front; absent when it ran. */
+  skipReason?: "incomplete-baseline" | "deadline";
   calls: number;
   elapsedMs: number;
   assessments: Omit<Assessment, "answers">[];
@@ -118,6 +120,7 @@ export async function enhance(input: EnhancementInput): Promise<{
   };
   if (!input.complete || wallTimeLeft(input.options.wallDeadline) <= 0) {
     summary.skipped = Math.max(1, input.packages.length);
+    summary.skipReason = input.complete ? "deadline" : "incomplete-baseline";
     return finish(input.findings);
   }
   const risks: Parameters<typeof selectRiskPackages>[0] = [];
@@ -243,5 +246,11 @@ export async function enhance(input: EnhancementInput): Promise<{
 }
 /** Compact deterministic visibility that survives removal of model commentary. */
 export function enhancementNote(s: EnhancementSummary): string {
-  return `Jev: ${s.assessed} assessments; ${s.rechecked} findings rechecked; ${s.dismissed} confirmed dismissals; ${s.additionalReviews} additional package reviews; ${s.unavailable} unavailable; ${s.skipped} skipped.`;
+  const reason =
+    s.skipReason === "incomplete-baseline"
+      ? " (baseline coverage incomplete)"
+      : s.skipReason === "deadline"
+        ? " (wall deadline reached)"
+        : "";
+  return `Jev: ${s.assessed} assessments; ${s.rechecked} findings rechecked; ${s.dismissed} confirmed dismissals; ${s.additionalReviews} additional package reviews; ${s.unavailable} unavailable; ${s.skipped} skipped${reason}.`;
 }

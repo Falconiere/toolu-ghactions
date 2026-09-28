@@ -1,0 +1,661 @@
+{
+  "repository": "Falconiere/comemory",
+  "pull": 307,
+  "commit": "fa490c85d0df7095a0d88c861d0d870572b7b07f",
+  "note": "Every top-level code-review@v8 inline comment on the PR, fetched 2026-09-27 via the pulls comments API. `text` is the rendered body minus the severity/category prefix, the suggestion block and the fingerprint marker. `expected: drop` marks the 14 comments whose own conclusion is that there is no defect. `source` holds the post-change line text at `commit` for the four findings the latest summary comment (issuecomment-5857256243) published.",
+  "source": {
+    "src/domains/memories/store.rs": {
+      "158": "    pub fn save(&self, guard: &SaveGuard, p: SaveParams<'_>) -> Result<MemoryRecord> {"
+    },
+    "src/domains/sync/drain/session.rs": {
+      "123": "}"
+    },
+    "src/domains/sync/exchange/import_write.rs": {
+      "43": "    )?;"
+    },
+    "src/domains/sync/drain/tests/status.rs": {
+      "93": "    use crate::domains::sync::replica::restore_state::{self, State};"
+    }
+  },
+  "comments": [
+    {
+      "id": 4115928203,
+      "path": "src/config/validate.rs",
+      "line": 294,
+      "severity": "medium",
+      "category": null,
+      "expected": "drop",
+      "text": "The validation that `sync.pause_wait` is not zero is placed inside `fn validate`, but this function runs under `Config::validate_strict()`. Reviewing the PR diff and the existing code, `sync.pause_wait` is consumed by `sync.pause_wait_duration()` which calls `parse_duration`. The test `a_zero_pause_wait_is_refused_rather_than_failing_busy_on_any_contention` in `src/config/tests/sync.rs` asserts the loaded config with `pause_wait = \"0s\"` is refused. However, `Config::defaults` is never validated by itself; the test method chain uses `with_file` and `expect_err`. If `with_file` only calls `validate` (the strict path), then it correctly refuses a zero duration. But `parse_duration` itself could also fail on `\"0s\"`? Actually, `\"0s\"` would likely parse successfully as zero-duration. Therefore the `validate` code is the only gate preventing a zero-duration pause_wait from being used. If `with_file` path does call `validate`, then this is fine; if not, the zero-duration could slip through. However, looking at `src/config.rs` (not fully shown), we cannot assume it doesn't go through `validate`. But we can observe that the test `a_zero_pause_wait_is_refused...` uses `.with_file` and expects an error — the test would be meaningless if `.with_file` did not call validation, so we assume it does. Thus, no defect from the validation logic itself."
+    },
+    {
+      "id": 4115928206,
+      "path": "src/domains/maintenance/doctor.rs",
+      "line": 138,
+      "severity": "high",
+      "category": "Correctness",
+      "expected": "keep",
+      "text": "`unwritable_report` now returns `Result<Report>` but the caller ignores the `Result` and returns `Ok(Report)` unconditionally. An error from `checks::Extras::unwritable` (which calls `checks_replica::store_health`) is silently swallowed, making `run` return a successful `Report` when it should propagate the failure."
+    },
+    {
+      "id": 4115928209,
+      "path": "src/domains/sync/replica/bootstrap.rs",
+      "line": 146,
+      "severity": "high",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`seed_one` previously used `conn.transaction()?` (an immediate deferred transaction) and committed it. The new `commit` calls `write_transaction(conn)?` on a connection that was already obtained via `ctx.conn()?` (line L145). `write_transaction` typically begins an IMMEDIATE or EXCLUSIVE transaction. If `ctx` holds a non-write-locked `Connection` reference, this is fine. However, `advance` (bootstrap.rs L90) calls `seed_one` in a loop, acquiring `ctx.conn()?` each iteration. The old code began a deferred transaction, which would not conflict with reads. An `IMMEDIATE` transaction may contend with other concurrent readers if the connection is shared across threads; inside a single-threaded test harness it works, but the stronger lock could cause busy errors in production if the DB is shared. No evidence of concurrent access shown, but the change from deferred to immediate/exclusive increases lock contention risk with no visible reason in the diff."
+    },
+    {
+      "id": 4115928210,
+      "path": "src/domains/sync/replica/changes.rs",
+      "line": 42,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`changes::run` now calls `seed_trash::advance` and `seed_documents::advance` **after** `validate::check_cursor`. The `check_cursor` function (validate.rs) guards against an incoming cursor that is ahead of the stream. The seed advances write new journal rows and outbox entries. If `check_cursor` fails, the route returns an error before the seeds run — that is safe. However, the design doc says seeding gates the advertised replica capability: a peer that calls `/v1/sync/replica/changes` before the engine has finished seeding will receive a partial feed. The README and `bootstrap.rs` doc comments state that `replica-v1` is not advertised until bootstrap reaches `complete`. With `seed_trash` and `seed_documents` added here unconditionally without checking their completion state, an incomplete seed could still serve a changes response, contradicting the stated guarantee. The surrounding capability advertisement logic (in `routes`) may gate the route itself, but the diff does not show that. If the route is reachable before seeding completes, the manifests would advertise the protocol while the feed is incomplete. No evidence of the routes layer rejecting requests before seed completion is shown."
+    },
+    {
+      "id": 4115928212,
+      "path": "src/utilities/file_lock.rs",
+      "line": 83,
+      "severity": "high",
+      "category": "CORRECTNESS",
+      "expected": "keep",
+      "text": "The deadline comparison is inverted: `deadline.saturating_duration_since(Instant::now())` returns the time *since* the deadline has passed, which is zero before the deadline and positive after. The loop therefore never sleeps and immediately exits with `Ok(None)` on the first iteration, making `acquire_within` functionally identical to `try_acquire` — the timeout never waits."
+    },
+    {
+      "id": 4115928214,
+      "path": "src/store/erase_rows.rs",
+      "line": 253,
+      "severity": "medium",
+      "category": "CORRECTNESS",
+      "expected": "keep",
+      "text": "`with_secure_delete` takes `&mut Connection`, but `pragma_query_value` and `pragma_update` borrow `conn` immutably via `&self`. The `&mut self` methods come from a helper trait or a custom wrapper that does not exist in rusqlite's `Connection`. If this compiles, the connection's pragma update is silently ineffective or the trait impl does not actually guarantee exclusivity. Either the signature should accept `&Connection` (which `pragma_query_value` and `pragma_update` require), or the mutability assumption is wrong and concurrent access across threads could race on the pragma."
+    },
+    {
+      "id": 4115928215,
+      "path": "src/store/readiness.rs",
+      "line": 68,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "The fallback path in `open_probe` opens the database as immutable via `immutable_uri` constructing a `file:` URI by escaping `%`, `?`, `#` only. On Windows, absolute paths (`C:\\...`) contain `:` which is not escaped and is an invalid character in a URI path segment per RFC 3986, causing `Connection::open_with_flags` to fail with `SQLITE_CANTOPEN` on any absolute Windows path."
+    },
+    {
+      "id": 4115928218,
+      "path": "src/store/connection.rs",
+      "line": 56,
+      "severity": "low",
+      "category": "performance",
+      "expected": "keep",
+      "text": "`secure_delete=ON` forces SQLite to overwrite freed pages with zeros on every delete (not just an explicit erase), including transient deletes during ordinary soft-delete, gc, and rebuild copy operations. The PR brief and design claim this guards against forensic recovery of erased content in freed pages, but it also doubles the I/O cost of every ordinary DELETE in the entire store. This is a substantial hot-path performance regression with no opt-out; the comment on L49-52 does not acknowledge the cost."
+    },
+    {
+      "id": 4115928222,
+      "path": "tests/common/replica_support.rs",
+      "line": 347,
+      "severity": "low",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "The call to MemoryStore::save now includes a guard parameter, but the function's error handling remains bare '.expect(\"markdown lands\")'. If the guard acquisition succeeds but save fails (e.g., disk full), the test will panic but the lock guard will still be dropped correctly. This is acceptable test code, but the redundant lock acquisition pattern for a helper that simulates a killed process may be misleading: the interrupted_save helper is meant to simulate a kill between markdown write and DB commit, and holding a global lock during this simulation changes the nature of the simulated state."
+    },
+    {
+      "id": 4115958590,
+      "path": "src/domains/maintenance/rebuild.rs",
+      "line": 127,
+      "severity": "high",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`replace_into(self, live)` moves `self` and calls `replace_in_place::replace_in_place`. If that returns `Err`, the `Staged` is already consumed; Drop does not run. The `.tmp` file and its sidecars are never removed on the error return path, violating the documented guarantee and leaving a partial database on disk that a future rebuild will reuse (the cleanup on L159 only runs before stage, not after a failed replace)."
+    },
+    {
+      "id": 4115958598,
+      "path": "src/serve/routes/meta.rs",
+      "line": 41,
+      "severity": "medium",
+      "category": "CORRECTNESS",
+      "expected": "drop",
+      "text": "`backup` is added to CLI_ONLY to prevent HTTP requests from triggering backup operations, consistent with the comment that backup can write to the database an HTTP request must never trigger. However, the comment says 'restore' or 'create', but `backup` subcommand typically includes `restore`. The intent matches the design, no reachable defect."
+    },
+    {
+      "id": 4115958599,
+      "path": "src/serve/routes/maint/admin.rs",
+      "line": 145,
+      "severity": "high",
+      "category": "CORRECTNESS",
+      "expected": "drop",
+      "text": "Rebuild previously called `maintenance::rebuild::run(&mut ctx, …)` using `Ctx::lazy`. Now `maintenance::rebuild::stage + staged.replace_into` where `stage` receives paths and cfg only, and `replace_into` takes `&mut Connection`. The `replace_into` method writes into the shared connection, which is consistent with the comment's claim of in-place replacement. No defect observed from diff."
+    },
+    {
+      "id": 4115958602,
+      "path": "src/serve/routes/maint/admin.rs",
+      "line": 147,
+      "severity": "high",
+      "category": "CORRECTNESS",
+      "expected": "drop",
+      "text": "`staged.replace_into(&mut conn)?` — the `conn` is obtained from `job_state.conn()?` which acquires the application's shared connection. The rebuild previously used `job_state.swap_conn`; now `replace_into` writes directly into that connection's database while it is running. This is exactly the documented behavior, no defect evident."
+    },
+    {
+      "id": 4115984389,
+      "path": "src/domains/sync/drain/replica_pass_seed.rs",
+      "line": 28,
+      "severity": "high",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`seed_local` calls `Ctx::borrowed(paths, cfg, conn)` every iteration, but `conn` is `&mut Connection` and the loop runs up to 150 batches (3×MAX_BATCHES) in one pass. `Ctx::borrowed` is documented as \"take a shared borrow of the given connection\". If it derives `Connection` via `&mut` inside the pass, it may violate the borrow rules or conflict with pushes and pulls that also use the same `conn`. A single `Ctx` constructed before the loop and passed to each seed would match all other internal callers."
+    },
+    {
+      "id": 4115984397,
+      "path": "src/serve/routes/maint/erase.rs",
+      "line": 47,
+      "severity": "blocker",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`erase` calls `guard_mutating` but the function is `guard_mutating`? The import at line 18 brings `guard_mutating`, and line 44 uses `guard_mutating`. There is no `guard_mutating` export in this crate; the existing mutating routes use `guard_mutating`. If this compiles and runs, it is a different function with unknown semantics. More likely it is a typo that causes a compile error — the only export is `guard_mutating`. The route will not build, blocking the PR."
+    },
+    {
+      "id": 4115984401,
+      "path": "src/serve/routes/sync.rs",
+      "line": 200,
+      "severity": "high",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`refuse_unverified` is added in the legacy sync `handle` — but the newly introduced `seed_trash::advance` and `seed_documents::advance` inside `changes::run` (src/domains/sync/replica/changes.rs L43-44) are called via `GET /api/v1/sync/changes` which goes through this same `handle`. `refuse_unverified` runs first, so those seeds are gated. However, the `POST /api/v1/sync/import` handler (also via `handle`) calls `refuse_unverified` AFTER write gating but BEFORE `exchange::import`, which itself does not call `identity::ensure` or `restore_state::admit`. The design says every replica route core must funnel through `admit`; the import path only calls `refuse_unverified`, missing the identity check."
+    },
+    {
+      "id": 4115984404,
+      "path": "src/serve/routes/sync_replica.rs",
+      "line": 222,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`admit` calls `identity::ensure`, which may take `memory-save.lock` then `identity.lock`. The `handle` in sync_replica.rs acquires `state.conn()` (the shared connection mutex) BEFORE calling `admit`, while `admit` acquires file locks. If the lock acquisition inside `admit` blocks, it holds the shared database mutex for the duration, stalling every other request. The existing drain paths and the bootstrap/identity design run `ensure` BEFORE acquiring the database connection."
+    },
+    {
+      "id": 4115984406,
+      "path": "src/store/erase_rows.rs",
+      "line": 236,
+      "severity": "medium",
+      "category": "CORRECTNESS",
+      "expected": "keep",
+      "text": "Calling `optimize` on `FtsIndex::Edges` writes `INSERT INTO edge_fts(edge_fts) VALUES('optimize')` into a content table — not a virtual FTS table — because `edge_fts` is declared as an ordinary content table (schema_core.rs). An INSERT into a regular table that lacks an `edge_fts` column will fail with a SQLite error, breaking the derived-state refresh path and potentially the gc/erase pipeline. The caller iterates `all_fts_indexes` which includes `Edges`."
+    },
+    {
+      "id": 4115984409,
+      "path": "src/store/seed_scan.rs",
+      "line": 74,
+      "severity": "high",
+      "category": "performance",
+      "expected": "drop",
+      "text": "The query_map iterator is collected into a Vec inside `unshared_documents_after`, which is a seed scan limited to `limit` items. Each row deserializes three Strings by copying. This is the designed pattern and `limit` bounds the work; no excessive hot-path allocation evidenced."
+    },
+    {
+      "id": 4115998332,
+      "path": "src/store/schema_history.rs",
+      "line": 78,
+      "severity": "medium",
+      "category": "CORRECTNESS",
+      "expected": "keep",
+      "text": "The new `staged_rows` column on `GcRuns` is declared in the Rust struct but is absent from the migration `0029_replica_recovery.sql` DROPPED-COLUMN class. Migration 0029 rebuilds the `gc_runs` table via create-copy-drop-rename but its snapshot and SQL diff are not shown. If the rebuild omitted the column, the ORM will generate insert/select statements with a column SQLite does not recognize, causing runtime `SQLITE_ERROR` on every GC run record write. The declared markers test (`migration_integrity_declared_markers_match_a_real_migrated_db`) exercises a real migrated database spawned from `connection::open` which runs all migrations; it must have passed locally. Without the 0029 SQL content I cannot confirm the rebuild includes the column, but the struct declaration without visible migration support is a red flag that either the column is missing from the DDL or the test was run on a stale build."
+    },
+    {
+      "id": 4115998337,
+      "path": "tests/cli__backup.rs",
+      "line": 167,
+      "severity": "low",
+      "category": "TEST COVERAGE",
+      "expected": "drop",
+      "text": "The test `a_restore_killed_mid_swap_finishes_on_rerun` opens a separate `rusqlite::Connection` to hold a write lock while a child restore process runs, then calls `child.kill()` and `drop(blocker)` after releasing the lock. The `wait_for_swap` function polls `restore.pending` JSON and the absence of `memories.restore`, sleeping up to 2 minutes. If the child process exits before reaching the swap phase (e.g., due to an unexpected error), the test panics via `panic!(\"the restore never reached its swap\")`. This is reasonable for a contract test, but the open `rusqlite::Connection` shares no `busy_timeout` or WAL pragmas with the live server connection — on WAL the IMMEDIATE transaction takes RESERVED lock, so concurrent readers proceed but another writer blocks. The test relies on the child process's `--json backup restore --confirm` acquiring the write lock and blocking; that is what the timeout guards. No defect in the production code path."
+    },
+    {
+      "id": 4115998340,
+      "path": "src/domains/sync/exchange/import_rules.rs",
+      "line": 90,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`apply_tombstone` passes `pause_wait` to a `delete` operation that now acquires `memory-save.lock` before writing, but `apply_tombstone` is called inside `import_write` which already holds the database mutex and may hold `memory-save.lock` through `write_new_memory`/`patch_frontmatter` (now calling `acquire_within`). Concurrent lock acquisition order differs across call paths, introducing a deadlock risk when the same lock is sought again under the same shared state."
+    },
+    {
+      "id": 4116045795,
+      "path": "src/domains/maintenance/tests/erase.rs",
+      "line": 69,
+      "severity": "medium",
+      "category": "correctness/test_coverage",
+      "expected": "keep",
+      "text": "The erase test's `files_holding` helper (line 48) calls `fs::read(&path).unwrap_or_default()` which silently ignores I/O errors. Tests like `a_live_memory_is_tombstoned_then_erased_and_its_text_is_in_no_file` (line 144) assert no file holds TOKEN after erase. If `fs::read` fails on any file, that file is silently skipped and the token could survive the erase without the assertion detecting it."
+    },
+    {
+      "id": 4116045813,
+      "path": "src/domains/sync/exchange_gate.rs",
+      "line": 38,
+      "severity": "high",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "The `Doc comment` states *Pause the exchange, waiting up to `wait` for a pass already running to finish.* However, `acquire_within` returns `Ok(None)` after the deadline elapses — meaning the `ExchangePause` is **never** acquired when the lock is held past the bound, and the function returns `Error::Busy`. The doc should reflect that the function *fails with Busy* rather than blocks indefinitely, or the implementation should loop/block to match the doc. As written the doc misleads callers about the blocking semantics."
+    },
+    {
+      "id": 4116045820,
+      "path": "src/domains/sync/tests/exchange_gate.rs",
+      "line": 30,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "drop",
+      "text": "In test `a_held_pause_blocks_a_pass_until_it_drops`, the spawned thread calls `auto::hold_pass_lock` with `pass_paths` (cloned Paths). `hold_pass_lock` attempts to acquire `sync.lock` (modelled as a `FileLock`). The test then asserts that `rx.recv_timeout(300ms)` fails, proving the pass does NOT start. However, `hold_pass_lock` itself returns a handle; without the function source shown, it is unclear whether it returns *only* after acquiring the lock (blocking) or returns an error immediately. If it returns an error (Busy) and `.expect(\"pass lock\")` panics, the test will panic rather than return `Err`. But it only expects success, and the assertion is that the send never fires, so the logic holds. The test is correct for the documented blocking semantics."
+    },
+    {
+      "id": 4116045824,
+      "path": "src/store/replica_journal.rs",
+      "line": 272,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`set_identity` updates `replica_stream` and `replica_device` single-row tables, expecting each to have exactly one row (id=1). If a database has more than one row in either table (e.g., due to a bug, manual manipulation, or a migration that inserted extra rows), the update would modify ALL matching rows, and the check `streams == 0 || devices == 0` would still pass, silently updating multiple rows. This could lead to incorrect identity propagation. The function should assert `streams == 1 && devices == 1` instead of only checking for zero to guarantee singleton semantics."
+    },
+    {
+      "id": 4116082282,
+      "path": "src/cli/rebuild.rs",
+      "line": 48,
+      "severity": "high",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`rebuild::run` now calls `super::load_config` which was previously unused (the old code used `Config::defaults()`). The `super::load_config` import is missing from the diff; the file's existing `use` items only bring in `resolve_data_dir`, `maintenance`, `prelude`, and it removed `use crate::config::Config;`. Without an import for `super::load_config` (defined in `src/cli.rs` but must be brought into scope), the call will fail to compile."
+    },
+    {
+      "id": 4116082291,
+      "path": "src/domains/maintenance/backup_merge.rs",
+      "line": 50,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "drop",
+      "text": "`lines_into` passes a `&SaveGuard` as `guard`, but `apply_locked` requires a `&SaveGuard` and the caller `run` acquires the lock before calling `lines_into`. This compiles, but the merge's `lines_into` is also called from `backup_restore::stage` which passes the same guard acquired there. The signature and call are consistent."
+    },
+    {
+      "id": 4116082293,
+      "path": "src/domains/memories/store.rs",
+      "line": 185,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`purge_trash_copy` receives `guard` but the signature in `store_trash.rs` matches `_guard`. The argument's value is passed and held for the call duration; there is no reentrant acquisition on the same lock. No defect, but the argument could be named `_guard` for consistency with the caller's other calls to `_guard` methods."
+    },
+    {
+      "id": 4116082295,
+      "path": "src/store/candidate_observations.rs",
+      "line": 313,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`redact_memory_candidates` returns `Result<u64>` but `conn.execute` returns `Result<usize>`. `changed as u64` truncates on platforms where `usize` > `u64` (rare), but more importantly, it silently truncates a row count that exceeds `u64::MAX` (impossible in practice). However, `as` on a negative `usize` (which `conn.execute` will never return on success) would produce a garbage `u64`. The real risk is low, but the pattern is inconsistent with other modules (e.g., `candidate_observations.rs` line 313 uses `as u64`, while `activity_share.rs` uses `u64::try_from`). This is not a defect in behavior for any realistic row count, but `as` is a lossy cast."
+    },
+    {
+      "id": 4116107429,
+      "path": "src/domains/maintenance/backup_merge.rs",
+      "line": 116,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`read_ready` calls `pending_path(paths).try_exists()`, which also requires the unstable `try_exists` feature on stable Rust, causing a compile failure on stable toolchains."
+    },
+    {
+      "id": 4116107433,
+      "path": "src/domains/maintenance/backup_restore.rs",
+      "line": 89,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`prepare` uses `try_exists()` on `live_db`, an unstable API on stable Rust, causing a compile failure."
+    },
+    {
+      "id": 4116107437,
+      "path": "src/domains/maintenance/backup_restore.rs",
+      "line": 92,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "Similarly `prepare` calls `try_exists()` on `pre_memories`, another unstable-API invocation on stable Rust."
+    },
+    {
+      "id": 4116107441,
+      "path": "src/domains/maintenance/backup_restore.rs",
+      "line": 112,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`stage` also uses `try_exists()` when checking the copy source, same unstable-API compile failure."
+    },
+    {
+      "id": 4116107446,
+      "path": "src/domains/maintenance/backup_restore.rs",
+      "line": 161,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`establish` uses `try_exists()` on `live_db`, same unstable-API compile failure."
+    },
+    {
+      "id": 4116107447,
+      "path": "src/domains/maintenance/backup_restore.rs",
+      "line": 171,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`refuse_page_size` calls `try_exists()` on `live`, another unstable-API compile failure."
+    },
+    {
+      "id": 4116107452,
+      "path": "src/domains/maintenance/backup_restore.rs",
+      "line": 232,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`report` uses `try_exists()` on the kept snapshot paths, same unstable-API compile failure."
+    },
+    {
+      "id": 4116107454,
+      "path": "src/domains/maintenance/backup_swap.rs",
+      "line": 116,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`finish` uses `try_exists()` on `staged_db`, unstable API that fails compilation on stable Rust."
+    },
+    {
+      "id": 4116107457,
+      "path": "src/domains/maintenance/backup_swap.rs",
+      "line": 117,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "Similarly `finish` uses `try_exists()` on `live_db`, unstable-API compile failure."
+    },
+    {
+      "id": 4116107462,
+      "path": "src/domains/maintenance/backup_swap.rs",
+      "line": 136,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`move_memories` uses `try_exists()` on `staged_memories`, unstable-API compile failure."
+    },
+    {
+      "id": 4116107470,
+      "path": "src/domains/maintenance/backup_swap.rs",
+      "line": 139,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`move_memories` uses `try_exists()` on `live_memories`, unstable-API compile failure."
+    },
+    {
+      "id": 4116107475,
+      "path": "src/domains/maintenance/backup_swap.rs",
+      "line": 140,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`move_memories` uses `try_exists()` on `pre_memories`, unstable-API compile failure."
+    },
+    {
+      "id": 4116107479,
+      "path": "src/domains/sync/daemon/worker.rs",
+      "line": 172,
+      "severity": "high",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "The pass gate in `run` probes `StoreReadiness::Ready` by calling the raw `readiness::probe`, but then assigns `summary.store` from `probe_store` which checks for `RestoreUnverified`. An unverified-for-life store (restore_state set with no pending markdown) will be `StoreReadiness::Ready` from the raw probe, bypass the `!ready` guard, and start exchanging despite the coordinator's design requiring the unverified state to block replication until `merge-erasures`. The ready check must consume the same enriched `probe_store` result used for `summary.store`."
+    },
+    {
+      "id": 4116107483,
+      "path": "src/domains/sync/drain/replica_pass.rs",
+      "line": 175,
+      "severity": "high",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`self.seed_local(conn)?` is called on `&self` (the impl declaring `seed_local` is `impl Pass<'_>`, not `impl<'a> Pass<'a>`). However `seed_local` takes `&mut Connection`. Caller `prepare` already has `conn: &mut Connection` in scope, so calling `self.seed_local(conn)` reborrows `conn` as `&mut Connection`, and inside `seed_local` another `Ctx::borrowed(..., conn)` takes `&mut Connection`. Since `seed_local` is `&self`, the borrow of `conn` through `Ctx::borrowed` must be `&mut Connection` lasting for the duration of `seed_local` — but the existing `conn` in `prepare`'s scope may be used again after the call (e.g. `adopt::events((step.paths, step.cfg), conn, ...)` immediately after). Rust will reject the double mutable borrow unless the lifetimes are carefully structured; `Ctx::borrowed` on `&mut Connection` inside a `&self` method captures a mutable reference that precludes later uses of `conn`. If the compiler currently accepts this, it is due to NLL reborrowing, but this is fragile and at odds with typical Rust patterns. More critically, `seed_local` is declared as `pub(super) fn seed_local(&self, conn: &mut Connection) -> Result<()>` in the `impl Pass<'_>` inline module block, yet the outer `impl<'a> Pass<'a>` where `prepare` lives already borrows `conn` mutably. The `&self` vs `&mut self` receiver mismatch is a compilation error: `seed_local` borrows `self` immutably but produces a `Ctx::borrowed` that captures `&mut Connection` — the compiler will refuse a `&self` method that takes `&mut Connection` and stores it."
+    },
+    {
+      "id": 4116107485,
+      "path": "src/domains/sync/replica/identity.rs",
+      "line": 306,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`Stamped::read` takes `&Connection` but `establish` calls it with the shared `&Connection` from `conn: &Connection` — this is a shared/immutable reference. However, within `establish` → `manifest_from_database`, `stamp` is called with `conn` (also `&Connection`), which calls `schema_meta::upsert` requiring an `&mut Connection` (since it writes). The `establish` function signature takes `conn: &Connection`, so the call to `stamp(conn, erasures)` on line 209 will NOT compile — `stamp` requires a mutable connection to write. This prevents the entire identity module from compiling, blocking the PR."
+    },
+    {
+      "id": 4116107488,
+      "path": "src/domains/sync/replica/identity.rs",
+      "line": 209,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`manifest_from_database` signature takes `conn: &Connection` (line 203) but calls `stamp(conn, erasures)` on line 209. `stamp` calls `schema_meta::upsert` which requires `&mut Connection`. The borrow is immutable, so this will not compile. The function must take `&mut Connection` to pass to `stamp`."
+    },
+    {
+      "id": 4116107491,
+      "path": "src/store/readiness.rs",
+      "line": 90,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "Percent encoding a literal '%25' double-encodes the '%' character. The correct encoding for '%' in a URI is '%25'; the code produces '%2525', which SQLite will decode back to '%25' rather than the original '%'. This means a database path containing an actual '%' is escaped incorrectly, causing `open_with_flags` to fail on such paths."
+    },
+    {
+      "id": 4116178827,
+      "path": "tests/common/legacy_engine.rs",
+      "line": 31,
+      "severity": "high",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`CARGO_MANIFEST_DIR` is the test target's own manifest directory (the workspace root for `tests/` virtual manifest), not the manifest directory of this crate. The legacy-engine pin file lives in `comemory/scripts/replication/`, which is under the `comemory` crate root. In a workspace, `concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/scripts/replication/legacy-engine.json\")` resolves to `<repo_root>/scripts/...` under `tests/common/`, which may not exist. The test will fail to read the pin file when run directly from the workspace root with the usual e.g. `cargo test -p tests --test replica_recovery`."
+    },
+    {
+      "id": 4116199053,
+      "path": "src/domains/maintenance/README.md",
+      "line": 47,
+      "severity": "low",
+      "category": "doc/comment accuracy",
+      "expected": "keep",
+      "text": "The README table row for `erase.rs` describes `apply_locked` as \"lock-free transaction\" but the diff elsewhere shows `erase::run` acquiring `memory-save.lock` (and the description itself states the entry point takes locks). This contradicts the claim that the inner transaction is lock-free and misleads readers about the locking contract."
+    },
+    {
+      "id": 4116199056,
+      "path": "src/domains/maintenance/rebuild.rs",
+      "line": 210,
+      "severity": "low",
+      "category": "security",
+      "expected": "keep",
+      "text": "The widening of `snapshot_before_swap_inner` from private to `pub(crate)` exposes a function that opens a database and performs a `VACUUM INTO` to a caller-supplied destination path, bypassing the caller's lock discipline. If an internal caller supplies an untrusted or unchecked destination (e.g., a symlinked path), this could allow overwriting arbitrary files outside the data directory."
+    },
+    {
+      "id": 4116238358,
+      "path": "src/domains/maintenance/tests/rebuild.rs",
+      "line": 738,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "The comment on line 737 says `300ms` would read as 300 minutes. This implies the duration parser interprets `ms` as minutes. The test sets `pause_wait = \"1s\"` and then waits for at least `Duration::from_secs(1)`. If the parser treats `s` as seconds, this is fine. But the comment's warning about `300ms` suggests a possible parsing bug where `ms` suffixes are misinterpreted. This could cause tests using `ms` to silently pass with very long waits, masking defects. The test itself uses `1s` correctly, but the comment flags a latent risk in the parser that other tests or production code relying on `ms` could hit."
+    },
+    {
+      "id": 4116359563,
+      "path": "migrations/0030_restore_unverified_network_state.sql",
+      "line": 4,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`PRAGMA foreign_keys = OFF` disables all foreign-key defer/enforce for the whole connection during the migration. Migration 0030 also runs inside `store::migrate`'s migration loop; if any other migration or the 0030 itself has a deferred FK violation, it will silently succeed. This is the usual migration boilerplate, but the rebuild creates a new table with a different CHECK constraint — no `INSERT … SELECT` could trip a foreign-key violation here — so the pragma is unnecessary and adds the general risk of hiding a real FK defect in another migration run immediately before/after 0030."
+    },
+    {
+      "id": 4116359564,
+      "path": "src/store/migrate.rs",
+      "line": 43,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "CURRENT_VERSION jumps from \"28\" to \"30\" with no \"29\". Migration 0029 is listed in list.rs but its key is never present in CURRENT_VERSION, so the migration counter test `migration_count_matches_current_version` and the strict version check in `preflight` will mismatch — the database records version \"29\" after applying migration 0029 while CURRENT_VERSION remains \"30\". The skipped integer leaves a permanent gap: a future migration entry for version 29 cannot be added because the version string is already claimed by 0030, and a probing coordinator sees a version inconsistency."
+    },
+    {
+      "id": 4116359565,
+      "path": "src/store/gc_learning.rs",
+      "line": 32,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "drop",
+      "text": "`gc_learning::evict_before` now calls `replica_redaction::redact` (which requires `&Connection` / a transaction inside) and then `clear_replay_of`. However `redact` internally takes `&tx` and calls commit/deletes on it? Looking at replica_redaction source (not shown), `redact` returns digests. The `tx` is an unchecked transaction from `conn`. If `redact` commits or closes `tx` internally, `clear_replay_of` and the following DELETEs would fail with `SQLITE_ERROR` (transaction already closed). Based on the old code, `redact` USED to operate inside the caller's transaction and not commit — the old `evict_before` called `redact(&tx, …)` followed by DELETEs and then `tx.commit()`. The new code does the same pattern. No defect visible from diff alone; but `clear_replay_of` now operates on `&tx` which is still open — consistent."
+    },
+    {
+      "id": 4116485638,
+      "path": "src/domains/maintenance/erase.rs",
+      "line": 161,
+      "severity": "high",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "The check `db_path().exists()` silently treats a permission/IO error as 'does not exist', creating a database and writing an identity for nothing. An erase on a corrupted permission should fail, not create a database. Use `try_exists()` to distinguish a genuine absence from an unreadable path; a permission error should propagate as `Err`."
+    },
+    {
+      "id": 4116485639,
+      "path": "src/domains/maintenance/backup.rs",
+      "line": 156,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`create` uses `try_exists()` for the database but calls `std::fs::create_dir_all(&dir)` before opening the connection. If the target backup directory already exists as a non-directory (e.g., a file), `create_dir_all` returns `Ok(())` (per POSIX, it treats an existing non-directory as success) but the subsequent `VACUUM INTO` will fail with a confusing SQLite error. The check on L167 only tests for DB/DESCRIPTOR_FILE existence, not the directory type. Check that `dir` is a directory or does not exist before proceeding."
+    },
+    {
+      "id": 4116485642,
+      "path": "src/domains/maintenance/backup_merge.rs",
+      "line": 83,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`run` calls `manifest.established(identity.erasures)` with the identity's count AFTER acquiring the memory-save and identity locks. If the manifest is not established, `merge_erasures` returns `Error::Conflict` but the locks are still held until the guard drops — no harm, but it holds the locks longer than necessary for a validation that could be done before lock acquisition. The validation could be moved before `save_lock::acquire_within` to release locks sooner on a refused merge."
+    },
+    {
+      "id": 4116485645,
+      "path": "src/domains/maintenance/backup_restore.rs",
+      "line": 40,
+      "severity": "high",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`run` checks `same_dir` only when a pending swap exists. If the pending restore's source directory has been deleted/moved, `same_dir` falls back to comparing the raw paths (L205). If the raw paths match but the directory no longer exists, the code proceeds to `swap::finish` which will fail with a filesystem error on the missing staged files. The error message advises the operator to 'finish it first', but the swap cannot be finished because the source is gone. The `Pending` record should be discarded when the source is verified to no longer exist, allowing the new restore to proceed."
+    },
+    {
+      "id": 4116485647,
+      "path": "src/domains/maintenance/erase.rs",
+      "line": 161,
+      "severity": "low",
+      "category": "doc/comment accuracy",
+      "expected": "keep",
+      "text": "The comment on lines 159-161 says 'A data directory with no database holds nothing to erase, and opening one here would create it — an erase of nothing must write nothing.' The check uses `exists()` not `try_exists()`, so a permission error is misinterpreted as 'no database' and the function proceeds to return NotFound without creating a database — exactly matching the comment, but the comment does not warn that permission errors are silently treated as absence. This is minor, but the doc is misleading."
+    },
+    {
+      "id": 4116485651,
+      "path": "src/domains/sync/daemon/server.rs",
+      "line": 123,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`ctx.state.set_store(store)` takes `&self` behind a `Mutex`, but the returned `Readiness` is read from `ctx.state.readiness()` which will include the LIVE `Readiness` struct with the newly set store field. Since `set_store` only updates one field under the lock and `readiness` clones the full struct, the daemon's next readiness snapshot reflects the re‑probed store health. However, `set_store` is documented only in the dismissed thread (coordinator readiness) as updating a shared snapshot; verify it matches the Mutex-protected `State` write path — it compiles but the helper is not shown in diff. The finding is the worker pass gating in worker.rs; this line is the proximate cause of the status re‑probe working but the worker NOT using the same `probe_store` health decision, making the status report"
+    },
+    {
+      "id": 4116485654,
+      "path": "src/store/replica_redaction.rs",
+      "line": 135,
+      "severity": "high",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "The `NOT_OWED` clause is a negative term `digest NOT IN (...)` ANDed directly with `redacted_at IS NULL`. A row whose `digest` IS NULL (a tombstone feed row, or a payload row without a digest) makes the whole NOT-IN predicate evaluate to NULL (unknown), which then ANDs to NULL, causing the WHERE clause to reject the row. This hides rows that should be expired — specifically any journal copy whose digest is NULL — by silently skipping them in `PastRetention`."
+    },
+    {
+      "id": 4116616503,
+      "path": "src/domains/maintenance/backup_merge.rs",
+      "line": 96,
+      "severity": "high",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "The erasure count is set to `max(identity.erasures, manifest_lines_count)`, ignoring the `entities_erased` returned by `lines_into`. Since `lines_into` can erase entities not named in the manifest (when the manifest contains only event/digest entries with no entity to erase, or when the merge re-erases entities already counted in identity.erasures), the new count may be lower than the actual number of distinct erasures performed. This undercounting will cause the erasure manifest to be considered 'torn' or 'short' when later verified against the identity stamp."
+    },
+    {
+      "id": 4116616510,
+      "path": "src/domains/maintenance/rebuild.rs",
+      "line": 103,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`run` passes `ctx.paths` (a `&Paths`) to `stage`. `stage` acquires `save_lock::acquire_within(paths, wait)?` and `exchange_gate::pause(paths, wait)?`, storing the guards in `Staged`. `run` then opens `replace_in_place::open_destination(&ctx.paths.db_path(), pause_wait)?`. Between `stage` returning and `open_destination` opening the live database, no lock protects the live DB path — another process could delete or rename it. However `open_destination` opens with `SQLITE_OPEN_READ_WRITE | SQLITE_OPEN_CREATE`, so it creates the file if missing. If the live DB was deleted between staging and opening, the replace would write into a fresh empty database, losing the pre-rebuild snapshot taken inside `stage`. This is a TOCTOU race: the pre-rebuild snapshot ran while the live DB existed, then the live DB is replaced in place — but if it was deleted after the snapshot, the replace creates a new file and the snapshot is orphaned. The pause guards protect against concurrent writes during markdown walk, not against filesystem mutation of the live DB path between stage and replace. The probability is low but the window is real."
+    },
+    {
+      "id": 4116616517,
+      "path": "src/store/migrate/list.rs",
+      "line": 283,
+      "severity": "low",
+      "category": "security",
+      "expected": "drop",
+      "text": "gitleaks flagged `generic-api-key` at line 213 of this file. Line 213 in the post-change file is the `fingerprint: \"fp\".to_string()` line inside the test `load_policy` function (`src/store/tests/code_graph_edges.rs`, not shown in this diff chunk). The gitleaks alert references `src/store/migrate/list.rs:213`, which maps to the `markers: &[\"0030_restore_unverified_network_state\"]` line inside the `Migration` entry. The literal `\"0030_restore_unverified_network_state\"` is a migration marker string, not a credential. This is a false positive."
+    },
+    {
+      "id": 4117000701,
+      "path": "src/serve.rs",
+      "line": 111,
+      "severity": "high",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "`open_recorded` is called without importing the `store_health` module. The `use` block at line 19 was changed to `use crate::store::{Connection, repo_marker_roots, store_health};`, but the diff only shows `use crate::store::{Connection, repo_marker_roots, store_health};` added. The function `store_health::open_recorded` is not in scope—`store_health` is a module name, not an `use`d name. The file will fail to compile."
+    },
+    {
+      "id": 4117017458,
+      "path": "src/config/sync.rs",
+      "line": 361,
+      "severity": "high",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "The `ms` branch produces `Duration::from_millis(n)`, but the `s`, `m`, `h`, and `d` branches produce `Duration::from_secs(…)`. This means `5ms` returns 5 milliseconds (0.005 seconds) while every other unit returns whole seconds. The design doc and uses (`pause_wait = \"500ms\"` loaded from a config file) treat `Nms` as N milliseconds, but the `checked_mul` + `from_secs` pattern in the other arms creates an inconsistency: if a caller that accepts sub-second walls applied the same parsing logic later, adding a `ms` branch would give a different multiplier than `5ms == Duration::from_millis(5)` vs `5s == Duration::from_secs(5)` — the existing `ms` test `a_sub_second_pause_wait_loads_through_the_config_file` expects `Duration::from_millis(500)` and gets it only because `ms` is special-cased. The inconsistency itself is not a live defect (every call site uses the same single parser), but a future `parse_duration` consumer that computes `n * 1000` could produce seconds for `ms` while this branch returns millis. The real defect is that the function signature states it"
+    },
+    {
+      "id": 4117017462,
+      "path": "src/domains/maintenance/tests/rebuild.rs",
+      "line": 738,
+      "severity": "low",
+      "category": "test",
+      "expected": "drop",
+      "text": "The gitleaks scanner flagged line 442 of this file as `generic-api-key`. The flagged text is the `\"300ms\"` duration literal on line 738, not a credential. This is a false positive — no secret is present."
+    },
+    {
+      "id": 4117024334,
+      "path": "src/domains/memories/store.rs",
+      "line": 158,
+      "severity": "high",
+      "category": "correctness",
+      "expected": "keep",
+      "text": "The `save` method changed to require `guard: &SaveGuard` but the guard is never used inside the method body. It is only passed through to `purge_trash_copy`. The caller `save_persist::persist` passes a single guard, and `save::run_with` acquires exactly one guard and passes it to `persist`. The change is mechanically correct but the unused parameter is misleading and could indicate the original design intended for the guard to provide exclusive access to more of the method body. However, the method already operates without holding any lock beyond `memory-save.lock`, which is already held by the caller via the guard parameter. The parameter is documented as compiler-checked proof, which is the intended pattern. This is not a defect per se — the compiler enforces the proof — but the unused-parameter warning may be suppressed by naming it `_guard`, which the sibling methods `rewrite`, `purge_trash_copy`, `restore`, and `delete` already do for consistency. Failing to follow the established `_guard` convention leads to a compiler warning and inconsistency with the pattern documented in the README."
+    },
+    {
+      "id": 4117024341,
+      "path": "src/domains/sync/drain/session.rs",
+      "line": 123,
+      "severity": "high",
+      "category": "correctness",
+      "expected": "drop",
+      "text": "`admit` takes `conn: &mut Connection` but calls `sync_exchange::load(conn, &key)?` and `record(conn, row, &refused, \"\")?` which require `&Connection` (rusqlite's `execute` works through `&self`, so a shared reborrow works). The reborrow of `&mut Connection` to `&Connection` inside a single Rust scope is safe. No defect, abstain."
+    },
+    {
+      "id": 4117024344,
+      "path": "src/domains/sync/exchange/import_write.rs",
+      "line": 43,
+      "severity": "medium",
+      "category": "correctness",
+      "expected": "drop",
+      "text": "`write_new_memory` acquires `memory-save.lock` via `save_lock::acquire_within` and passes the guard to `store.save(&guard, ...)`. The dismissed finding at `erase_rows.rs:236` confirmed that saving requires the guard. However, `import_write::patch_frontmatter` also acquires the lock (line 97) before `store.rewrite(&guard, &rec)`. Both are inside the drain import path, which already holds the shared database mutex. The order is the same as other write paths: shared connection mutex → memory-save.lock. No deadlock risk."
+    },
+    {
+      "id": 4117024346,
+      "path": "src/domains/sync/drain/tests/status.rs",
+      "line": 93,
+      "severity": "low",
+      "category": "test coverage",
+      "expected": "drop",
+      "text": "Test `an_upstream_whose_restore_is_unverified_holds_the_exchange` directly opens the upstream engine's database with `connection::open` and calls `restore_state::set`. This bypasses the upstream's own lock discipline and writes to its database while the live engine may be accepting saves. The test is an integration-level fixture; the direct write is a narrow simulation acceptable for testing the client-side refusal."
+    }
+  ]
+}

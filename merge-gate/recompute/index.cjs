@@ -28201,7 +28201,15 @@ var Finding = external_exports.object({
   // (rendered as "llm"); set to a tool name when the model confirms a deterministic
   // (gitleaks/opengrep) finding it was asked to triage.
   source: external_exports.enum(["llm", "gitleaks", "opengrep", "eslint"]).optional(),
-  text: external_exports.string()
+  text: external_exports.string(),
+  // Written LAST, after `text`: models reason inside `text` and often reach "no
+  // defect" only at its end (comemory PR #307: "… is safe. No defect, abstain."),
+  // after they have already committed to emitting the finding. This is the explicit
+  // way to withdraw it; review/validate.ts drops `no_defect`. Absent = `defect`, so
+  // recorded responses and custom prompts stay compatible.
+  conclusion: external_exports.enum(["defect", "no_defect"]).optional().describe(
+    'Write LAST, after text. "no_defect" when your text concluded nothing is wrong; the finding is then discarded.'
+  )
 });
 var Verdict = external_exports.object({
   // Bounded: review_plan is emitted FIRST, so an unbounded plan eats the output

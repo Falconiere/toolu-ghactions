@@ -37,6 +37,18 @@ export const Finding = z.object({
   // (gitleaks/opengrep) finding it was asked to triage.
   source: z.enum(["llm", "gitleaks", "opengrep", "eslint"]).optional(),
   text: z.string(),
+  // Written LAST, after `text`: models reason inside `text` and often reach "no
+  // defect" only at its end (comemory PR #307: "… is safe. No defect, abstain."),
+  // after they have already committed to emitting the finding. This is the explicit
+  // way to withdraw it; review/validate.ts drops `no_defect`. Absent = `defect`, so
+  // recorded responses and custom prompts stay compatible.
+  conclusion: z
+    .enum(["defect", "no_defect"])
+    .optional()
+    .describe(
+      'Write LAST, after text. "no_defect" when your text concluded nothing is ' +
+        "wrong; the finding is then discarded.",
+    ),
 });
 
 /**
@@ -219,6 +231,7 @@ export function normalizeFinding(raw: unknown): unknown {
   if (source !== "llm" && source !== "gitleaks" && source !== "opengrep" && source !== "eslint") {
     delete out["source"];
   }
+  if (out["conclusion"] !== "defect" && out["conclusion"] !== "no_defect") delete out["conclusion"];
   return out;
 }
 

@@ -30514,7 +30514,15 @@ var Finding = external_exports.object({
   // (rendered as "llm"); set to a tool name when the model confirms a deterministic
   // (gitleaks/opengrep) finding it was asked to triage.
   source: external_exports.enum(["llm", "gitleaks", "opengrep", "eslint"]).optional(),
-  text: external_exports.string()
+  text: external_exports.string(),
+  // Written LAST, after `text`: models reason inside `text` and often reach "no
+  // defect" only at its end (comemory PR #307: "… is safe. No defect, abstain."),
+  // after they have already committed to emitting the finding. This is the explicit
+  // way to withdraw it; review/validate.ts drops `no_defect`. Absent = `defect`, so
+  // recorded responses and custom prompts stay compatible.
+  conclusion: external_exports.enum(["defect", "no_defect"]).optional().describe(
+    'Write LAST, after text. "no_defect" when your text concluded nothing is wrong; the finding is then discarded.'
+  )
 });
 var Verdict = external_exports.object({
   // Bounded: review_plan is emitted FIRST, so an unbounded plan eats the output
@@ -30625,6 +30633,7 @@ function normalizeFinding(raw) {
   if (source !== "llm" && source !== "gitleaks" && source !== "opengrep" && source !== "eslint") {
     delete out["source"];
   }
+  if (out["conclusion"] !== "defect" && out["conclusion"] !== "no_defect") delete out["conclusion"];
   return out;
 }
 
@@ -39822,6 +39831,14 @@ var FINAL_ONLY_PATTERNS = [
   /^fine$/i,
   /^a theoretical edge case, not a practical concern$/i
 ];
+var CLAUSE_SPLIT = /\s*[,;:]\s+|\s+[—–-]{1,2}\s+/;
+var NO_DEFECT_CLAUSE = /^(?:(?:thus|so|therefore|hence|overall)\s+)?no\s+(?:[\w-]+\s+){0,2}?(?:defects?|issues?|problems?|bugs?|risks?|concerns?|violations?|regressions?)(?:\s+(?:observed|evident|evidenced|visible|found|present|apparent|introduced|here))?(?:\s+(?:from|in|within|on|for|at)\s+.+)?$/i;
+var NO_EXCESS_CLAUSE = /^no\s+(?:excessive|unbounded|significant)\s+[\w-]+(?:\s+[\w-]+){0,2}$/i;
+var AFFIRMATION_CLAUSE = /^(?:[\w`'().:&-]+\s+){1,6}(?:is|are)\s+(?:[\w-]+\s+){0,4}?(?:acceptable|safe|correct|consistent|fine|harmless)(?:\s+(?:for|in|as)\s+.+)?$/i;
+var BARE_CONCLUSION = /^(?:consistent|safe|correct|harmless|abstain(?:ing)?)$/i;
+var FALSE_POSITIVE = /^(?:an?\s+)?false positive$/i;
+var NEGATION = /\b(?:not|never|no)\b|n't\b/i;
+var CONTINUATION = /\b(?:but|however|although|though|yet|except|still|so|because|since|which|causing|leading)\b/i;
 var PRAISE_ONLY_PATTERNS = [
   /^the [^.!?]+ call is unchanged\. it is still called after [^.!?]+, which is correct because [^.!?]+\.$/i,
   /^the [^.!?]+ env var is still set after [^.!?]+\. this is correct and matches [^.!?]+\.$/i
@@ -39853,8 +39870,20 @@ function isSelfNegating(text2) {
   return sentences.some((sentence, i) => {
     const stripped = stripSentence(sentence);
     if (NEGATION_PATTERNS.some((p) => p.test(stripped))) return true;
-    return i === lastIndex && FINAL_ONLY_PATTERNS.some((p) => p.test(stripped));
+    if (i !== lastIndex) return false;
+    return FINAL_ONLY_PATTERNS.some((p) => p.test(stripped)) || concludesNoDefect(stripped);
   });
+}
+function concludesNoDefect(sentence) {
+  const clauses = sentence.split(CLAUSE_SPLIT).map(stripSentence).filter((c) => c !== "");
+  const first = clauses[0];
+  const last = clauses.at(-1);
+  if (first === void 0 || last === void 0) return false;
+  if (NO_DEFECT_CLAUSE.test(last) || NO_EXCESS_CLAUSE.test(last) || BARE_CONCLUSION.test(last) || FALSE_POSITIVE.test(last) || AFFIRMATION_CLAUSE.test(last) && !NEGATION.test(last)) {
+    return true;
+  }
+  const rest = clauses.slice(1).join(" ");
+  return (NO_DEFECT_CLAUSE.test(first) || FALSE_POSITIVE.test(first)) && !CONTINUATION.test(rest);
 }
 
 // src/review/validate.ts
@@ -39872,7 +39901,7 @@ function validateFindings(findings, changedLinesByPath, minConfidence, lineTextB
   for (const f of findings) {
     const changedSet = changedSetByPath.get(f.path) ?? EMPTY_CHANGED;
     if (!changedSet.has(f.line)) continue;
-    if (isSelfNegating(f.text)) {
+    if (f.conclusion === "no_defect" || isSelfNegating(f.text)) {
       selfNegating++;
       continue;
     }
@@ -40218,6 +40247,7 @@ async function enhance(input) {
   };
   if (!input.complete || wallTimeLeft(input.options.wallDeadline) <= 0) {
     summary2.skipped = Math.max(1, input.packages.length);
+    summary2.skipReason = input.complete ? "deadline" : "incomplete-baseline";
     return finish(input.findings);
   }
   const risks = [];
@@ -40327,7 +40357,8 @@ async function enhance(input) {
   return finish([...unique.values()]);
 }
 function enhancementNote(s) {
-  return `Jev: ${s.assessed} assessments; ${s.rechecked} findings rechecked; ${s.dismissed} confirmed dismissals; ${s.additionalReviews} additional package reviews; ${s.unavailable} unavailable; ${s.skipped} skipped.`;
+  const reason = s.skipReason === "incomplete-baseline" ? " (baseline coverage incomplete)" : s.skipReason === "deadline" ? " (wall deadline reached)" : "";
+  return `Jev: ${s.assessed} assessments; ${s.rechecked} findings rechecked; ${s.dismissed} confirmed dismissals; ${s.additionalReviews} additional package reviews; ${s.unavailable} unavailable; ${s.skipped} skipped${reason}.`;
 }
 
 // src/jev/packages.ts
