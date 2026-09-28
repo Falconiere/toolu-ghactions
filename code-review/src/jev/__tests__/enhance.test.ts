@@ -230,7 +230,10 @@ describe("skip reason in the Jev note", () => {
       options: { model: "m", apiKey: "k", wallDeadline: Date.now() - 1 },
     });
     if (!out.summary) throw new Error("expected a summary");
-    expect(enhancementNote(out.summary)).toMatch(/; 16 skipped \(wall deadline reached\)\.$/);
+    expect(out.findings).toEqual(findings);
+    expect(enhancementNote(out.summary)).toBe(
+      "Jev: 0 assessments; 0 findings rechecked; 0 confirmed dismissals; 0 additional package reviews; 0 unavailable; 16 skipped (wall deadline reached).",
+    );
   });
 
   it("leaves the note unchanged when nothing was skipped wholesale", () => {
