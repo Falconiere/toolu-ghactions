@@ -6,8 +6,9 @@
 // Four drops, in order, matching the bash jq pipeline plus the rev-5 noise gate:
 //   1. Anchored — the cited `line` must be a real changed line in the diff for
 //      that path (anti-hallucination). Unanchored findings are dropped.
-//   2. Self-negation (review/selfNegating.ts) — the finding's own text concludes
-//      there is no defect ("No issue.", "This is acceptable. No violation.").
+//   2. Self-negation — the model set `conclusion: "no_defect"`, or the finding's
+//      own text concludes there is no defect (review/selfNegating.ts: "No issue.",
+//      "This is acceptable. No violation.").
 //      Purely structural gates never catch this: the finding is anchored and can
 //      carry high confidence, it just says nothing is wrong. Runs BEFORE the
 //      confidence gate so a high-confidence "No issue." cannot survive it.
@@ -97,11 +98,12 @@ export function validateFindings(
     // 1. Anchored: the cited line must be a real changed line in the diff.
     if (!changedSet.has(f.line)) continue;
 
-    // 2. Self-negation: the finding's own text concludes there is no defect
-    // ("No issue.", "This is acceptable. No violation."). Runs before source
-    // evidence validation so an explicit retraction is recorded as self-negating
-    // noise, not as an unsupported-evidence failure.
-    if (isSelfNegating(f.text)) {
+    // 2. Self-negation: the model withdrew the finding (`conclusion: "no_defect"`)
+    // or its own text concludes there is no defect ("No issue.", "… is safe. No
+    // defect, abstain."). Runs before source evidence validation so an explicit
+    // retraction is recorded as self-negating noise, not as an unsupported-evidence
+    // failure.
+    if (f.conclusion === "no_defect" || isSelfNegating(f.text)) {
       selfNegating++;
       continue;
     }

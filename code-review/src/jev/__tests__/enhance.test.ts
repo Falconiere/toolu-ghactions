@@ -3,7 +3,12 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { Finding } from "@/llm/schema.js";
 import { applyRecheck } from "@/jev/recheck.js";
-import { selectRiskPackages } from "@/jev/enhance.js";
+import {
+  enhance,
+  enhancementNote,
+  selectRiskPackages,
+  type EvidencePackage,
+} from "@/jev/enhance.js";
 
 const recorded = z
   .object({
@@ -173,4 +178,79 @@ it("does not report missing decisions as completed rechecks", () => {
       evidence,
     ).rechecked,
   ).toEqual([]);
+});
+
+// comemory PR #307: "Jev: 0 assessments; … 16 skipped." with no reason — the run had
+// 1/17 chunks cut short and 15 unreviewed files, so the documented completeness gate
+// skipped all 16 completed packages. The note now says why.
+describe("skip reason in the Jev note", () => {
+  const packages: EvidencePackage[] = Array.from({ length: 16 }, () => ({
+    paths: [recorded.source.path],
+    evidence,
+    envelope: { system: "", user: "", max_tokens: 4096, enforce_json_schema: true },
+  }));
+  const diff = {
+    diff: "",
+    files: [],
+    changed_files: [],
+    binary_files: [],
+    dropped_files: [],
+    renames: [],
+    total_lines: 0,
+    total_files: 0,
+    truncated: false,
+    base_sha: "",
+  };
+  const base = {
+    enabled: true,
+    model: "typesafe/jev-1.13",
+    packages,
+    findings,
+    diff,
+    minConfidence: "high" as const,
+  };
+
+  it("names an incomplete baseline and keeps every finding", async () => {
+    const out = await enhance({
+      ...base,
+      complete: false,
+      options: { model: "m", apiKey: "k" },
+    });
+    expect(out.findings).toEqual(findings);
+    if (!out.summary) throw new Error("expected a summary");
+    expect(enhancementNote(out.summary)).toBe(
+      "Jev: 0 assessments; 0 findings rechecked; 0 confirmed dismissals; 0 additional package reviews; 0 unavailable; 16 skipped (baseline coverage incomplete).",
+    );
+  });
+
+  it("names an expired wall deadline", async () => {
+    const out = await enhance({
+      ...base,
+      complete: true,
+      options: { model: "m", apiKey: "k", wallDeadline: Date.now() - 1 },
+    });
+    if (!out.summary) throw new Error("expected a summary");
+    expect(out.findings).toEqual(findings);
+    expect(enhancementNote(out.summary)).toBe(
+      "Jev: 0 assessments; 0 findings rechecked; 0 confirmed dismissals; 0 additional package reviews; 0 unavailable; 16 skipped (wall deadline reached).",
+    );
+  });
+
+  it("leaves the note unchanged when nothing was skipped wholesale", () => {
+    expect(
+      enhancementNote({
+        assessed: 3,
+        rechecked: 1,
+        dismissed: 0,
+        additionalReviews: 0,
+        unavailable: 0,
+        skipped: 0,
+        calls: 2,
+        elapsedMs: 10,
+        assessments: [],
+      }),
+    ).toBe(
+      "Jev: 3 assessments; 1 findings rechecked; 0 confirmed dismissals; 0 additional package reviews; 0 unavailable; 0 skipped.",
+    );
+  });
 });

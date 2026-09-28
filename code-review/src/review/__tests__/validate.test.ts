@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { z } from "zod";
 import { validateFindings } from "@/review/validate.js";
 import type { Finding } from "@/llm/schema.js";
+import { pr307Comment } from "./pr307-evidence.js";
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const PR175_EVIDENCE = z
@@ -359,5 +360,40 @@ describe("validateFindings", () => {
     );
     expect(findings).toHaveLength(1);
     expect(findings[0]?.suggestion).toBeUndefined();
+  });
+});
+
+// Falconiere/comemory PR #307: the model reasons inside `text` and concludes "no
+// defect" only at its end. `conclusion` is its structured way to withdraw.
+describe("validateFindings — Finding.conclusion (PR #307)", () => {
+  /** A recorded PR #307 comment as a finding anchored on its own (changed) line. */
+  function anchored(id: number, conclusion?: Finding["conclusion"]) {
+    const c = pr307Comment(id);
+    const finding: Finding = {
+      path: c.path,
+      line: c.line,
+      severity: c.severity,
+      confidence: "high",
+      source: "llm",
+      text: c.text,
+      ...(conclusion === undefined ? {} : { conclusion }),
+    };
+    return { finding, changedLines: new Map([[c.path, [c.line]]]) };
+  }
+
+  it("drops a no_defect conclusion and counts it as self-negating", () => {
+    const { finding, changedLines } = anchored(4116107429, "no_defect");
+    const result = validateFindings([finding], changedLines, "high");
+    expect(result.findings).toEqual([]);
+    expect(result.selfNegating).toBe(1);
+  });
+
+  it("keeps the same real finding when conclusion is defect or absent", () => {
+    for (const conclusion of ["defect", undefined] as const) {
+      const { finding, changedLines } = anchored(4116107429, conclusion);
+      const result = validateFindings([finding], changedLines, "high");
+      expect(result.findings).toEqual([finding]);
+      expect(result.selfNegating).toBe(0);
+    }
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Verdict, Finding, normalizeFinding, normalizeVerdict } from "@/llm/schema.js";
+import { pr307Comment } from "@/review/__tests__/pr307-evidence.js";
 
 describe("Verdict schema", () => {
   it("parses a valid verdict with findings", () => {
@@ -242,5 +243,44 @@ describe("normalizeFinding", () => {
     expect(normalizeFinding("nope")).toBe("nope");
     expect(normalizeFinding(null)).toBeNull();
     expect(normalizeFinding([1, 2])).toEqual([1, 2]);
+  });
+
+  // Real body: Falconiere/comemory PR #307 comment 4117024341, which ends "No defect,
+  // abstain." — the model's own abstention, published as a high finding.
+  const abstained = pr307Comment(4117024341);
+  const rawAbstention = {
+    path: abstained.path,
+    line: abstained.line,
+    severity: abstained.severity,
+    confidence: "high",
+    text: abstained.text,
+  };
+
+  it("keeps an explicit no_defect conclusion so validation can drop the abstention", () => {
+    const parsed = Finding.safeParse(
+      normalizeFinding({ ...rawAbstention, conclusion: "no_defect" }),
+    );
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.conclusion).toBe("no_defect");
+  });
+
+  it("drops an unrecognized conclusion instead of failing the finding", () => {
+    const parsed = Finding.safeParse(normalizeFinding({ ...rawAbstention, conclusion: "maybe" }));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.conclusion).toBeUndefined();
+    const nulled = Finding.safeParse(normalizeFinding({ ...rawAbstention, conclusion: null }));
+    expect(nulled.success).toBe(true);
+    if (nulled.success) expect(nulled.data.conclusion).toBeUndefined();
+  });
+
+  it("accepts conclusion on a Verdict finding", () => {
+    const parsed = Verdict.parse({
+      review_plan: "",
+      verdict: "changes",
+      findings: [{ ...rawAbstention, conclusion: "no_defect" }],
+      other_checks: "",
+      top_must_fix: [],
+    });
+    expect(parsed.findings[0]?.conclusion).toBe("no_defect");
   });
 });
