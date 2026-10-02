@@ -7,8 +7,11 @@ import {
   OPENROUTER_MODELS_URL,
   PROVIDER_ID,
   canonicalProviderId,
+  validateBaseUrl,
   type ProviderId,
 } from "@/llm/providers.js";
+import { parseExtraBody } from "@/llm/extraBody.js";
+import type { JSONValue } from "ai";
 
 /** The default PR the harness targets when `--pr` is omitted (spec §Eval harness). */
 export const DEFAULT_PR = "Falconiere/comemory#72";
@@ -25,6 +28,8 @@ export interface EvalArgs {
   repo: string;
   prNumber: number;
   provider: ProviderId;
+  baseUrl?: string | undefined;
+  extraBody?: Record<string, JSONValue> | undefined;
   model: string;
   maxWallMs: number;
   out: string | null;
@@ -59,10 +64,12 @@ on PATH.
 
 Options:
   --pr <owner/repo#number>   PR to review (default: ${DEFAULT_PR})
-  --provider <id>            "${PROVIDER_ID}" — the only supported backend
+  --provider <id>            "openrouter" or "openai-compatible"
                               (default: openrouter)
-  --model <id>                OpenRouter model id (default: the action's own
+  --model <id>                Model id (OpenRouter default: the action's own
                               ${DEFAULT_MODEL})
+  --base-url <url>            API root for openai-compatible (requires --model)
+  --extra-body <json>         Optional server-specific fields for openai-compatible
   --max-wall-ms <ms>          Soft wall-clock budget forwarded to MAX_WALL_MS
                               (default: 0 = off)
   --compare-jev              Paired baseline/enhanced review of one exact Git tree
@@ -73,7 +80,7 @@ Options:
   --help, -h                  Print this usage and exit 0 (no key/network needed)
 
 Env:
-  API_KEY                     Required for a live run: the OpenRouter API key.
+  API_KEY                     Bearer key; optional for unauthenticated custom endpoints.
 
 Example:
   API_KEY=sk-or-... bun run eval -- --pr Falconiere/comemory#72 \\
@@ -119,6 +126,8 @@ export function parseArgs(argv: readonly string[]): EvalArgs {
   let prRef = DEFAULT_PR;
   let provider: ProviderId = PROVIDER_ID;
   let model: string | null = null;
+  let baseUrl: string | undefined;
+  let rawExtraBody = "";
   let maxWallMs = 0;
   let out: string | null = null;
   let help = false;
@@ -157,7 +166,7 @@ export function parseArgs(argv: readonly string[]): EvalArgs {
           // vendor's OpenRouter namespace is not always its name, so interpolating the
           // spelling the user typed suggests ids OpenRouter does not serve.
           throw new ArgError(
-            `--provider "${raw}" is not supported (${PROVIDER_ID}). ` +
+            `--provider "${raw}" is not supported (${PROVIDER_ID}, openai-compatible). ` +
               `Route a vendor's models through OpenRouter with --model <id>, ` +
               `looked up at ${OPENROUTER_MODELS_URL}.`,
           );
@@ -167,6 +176,12 @@ export function parseArgs(argv: readonly string[]): EvalArgs {
       }
       case "--model":
         model = requireValue(argv, ++i, "--model");
+        break;
+      case "--base-url":
+        baseUrl = requireValue(argv, ++i, "--base-url");
+        break;
+      case "--extra-body":
+        rawExtraBody = requireValue(argv, ++i, "--extra-body");
         break;
       case "--max-wall-ms":
         maxWallMs = requireInt(argv, ++i, "--max-wall-ms");
@@ -195,6 +210,28 @@ export function parseArgs(argv: readonly string[]): EvalArgs {
     };
   }
   const { owner, repo, prNumber } = parsePrRef(prRef);
+  if (provider === "openai-compatible") {
+    if (!baseUrl || !model)
+      throw new ArgError("openai-compatible requires --base-url and --model.");
+    if (compareJev) throw new ArgError("--compare-jev requires openrouter.");
+  } else if (baseUrl) {
+    throw new ArgError("--base-url requires --provider openai-compatible.");
+  }
+  if (baseUrl) {
+    try {
+      baseUrl = validateBaseUrl(baseUrl);
+    } catch (error) {
+      throw new ArgError(error instanceof Error ? error.message : "Invalid --base-url.");
+    }
+  }
+  let extraBody: Record<string, JSONValue> | undefined;
+  try {
+    extraBody = parseExtraBody(rawExtraBody);
+  } catch (error) {
+    throw new ArgError(error instanceof Error ? error.message : "Invalid --extra-body.");
+  }
+  if (extraBody && provider !== "openai-compatible")
+    throw new ArgError("--extra-body requires --provider openai-compatible.");
   return {
     ...comparison,
     help: false,
@@ -202,6 +239,8 @@ export function parseArgs(argv: readonly string[]): EvalArgs {
     repo,
     prNumber,
     provider,
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(extraBody ? { extraBody } : {}),
     model: resolvedModel,
     maxWallMs,
     out,

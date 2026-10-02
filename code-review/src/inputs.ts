@@ -1,22 +1,18 @@
 // inputs.ts — read and normalize every action.yml input into a typed ActionInputs
 // object, ONCE, so the pipeline takes a plain typed object and never reads process.env.
 //
-// FLAT PROVIDER CONTRACT (v4): the action runs a SINGLE model, selected by three flat
-// inputs — PROVIDER, MODEL_ID and API_KEY. The old multi-provider PROVIDERS array and the
-// legacy OPENROUTER_API_KEY/MODEL inputs (plus the
-// MERGE_STRATEGY/FALLBACK_MODEL/REVIEW_MODE/ENFORCE_JSON_SCHEMA no-ops) were removed in
-// v4 — a breaking change. PROVIDER now accepts only "openrouter" (its default): the
-// native vendor backends were removed and their models are reachable as OpenRouter
-// "<vendor>/<model>" ids. MODEL_ID defaults to llm/providers.ts's DEFAULT_MODEL; any
-// other PROVIDER value, or an empty API_KEY, throws so a misconfig fails loud instead of
-// silently abstaining.
+// OpenRouter defaults are preserved. Custom endpoints require an explicit provider,
+// API root and model id, and may omit API_KEY when their server needs no auth.
 import * as core from "@actions/core";
+import type { JSONValue } from "ai";
+import { parseExtraBody } from "./llm/extraBody.js";
 import {
   type ProviderId,
   DEFAULT_MODEL,
   OPENROUTER_MODELS_URL,
   PROVIDER_ID,
   canonicalProviderId,
+  validateBaseUrl,
 } from "./llm/providers.js";
 import { parseApproveBelow, parseFailOn, type BlockableVerdict } from "./review/gate.js";
 import type { Severity } from "./llm/schema.js";
@@ -27,11 +23,15 @@ export type MinConfidence = "high" | "medium";
 
 /** The fully-resolved, typed inputs the pipeline consumes (no env reads downstream). */
 export interface ActionInputs {
-  /** Resolved backend provider; always "openrouter" (the only one wired). */
+  /** Explicit API root for the compatible provider; absent for OpenRouter. */
+  baseUrl?: string | undefined;
+  /** Optional custom server request fields. */
+  extraBody?: Record<string, JSONValue> | undefined;
+  /** Resolved backend provider. */
   provider: ProviderId;
-  /** Effective OpenRouter model id (MODEL_ID | {@link DEFAULT_MODEL}). */
+  /** Effective model id; OpenRouter alone supplies a default. */
   model: string;
-  /** OpenRouter API key (Authorization: Bearer); required, validated non-empty. */
+  /** Bearer key; required for OpenRouter, optional for a custom endpoint. */
   apiKey: string;
   /** Optional OpenRouter-only assessments; omitted means disabled. */
   jevEnabled?: boolean;
@@ -219,14 +219,7 @@ function readMinTriggerPermission(): "write" | "admin" {
     : "write";
 }
 
-/**
- * Resolve and validate the PROVIDER input. Defaults to "openrouter" when omitted and
- * THROWS on every other value — including the native vendor backends this action used to
- * wire ("deepseek", "minimax", "kimi"/"moonshot"), whose models are reachable through
- * OpenRouter under the vendor's own namespace. A workflow still pinned to one of them
- * must fail loud here, pointed at the catalog, rather than silently sending that vendor's
- * key to OpenRouter for a 401 mid-review.
- */
+/** Resolve the explicit backend, preserving OpenRouter as the default. */
 function resolveProviderId(raw: string): ProviderId {
   // Normalized once, here: the empty-default check and the error text both read it.
   // canonicalProviderId normalizes again on its own, so passing it either spelling is
@@ -239,7 +232,7 @@ function resolveProviderId(raw: string): ProviderId {
   // not always its name — suggesting "${p}/<model>" is how `MODEL_ID:"kimi/<model>"`
   // shipped, an id OpenRouter does not serve (it publishes Kimi under "moonshotai").
   throw new Error(
-    `PROVIDER "${p}" is not supported (supported: ${PROVIDER_ID}). ` +
+    `PROVIDER "${p}" is not supported (supported: ${PROVIDER_ID}, openai-compatible). ` +
       `Set PROVIDER:"openrouter" (or omit it) and put the model's OpenRouter id in ` +
       `MODEL_ID — look it up at ${OPENROUTER_MODELS_URL}, since a vendor's OpenRouter ` +
       `namespace is not always its name.`,
@@ -275,28 +268,37 @@ function warnBareModelId(model: string): void {
   }
 }
 
-/**
- * Read every action.yml input and resolve it into a typed {@link ActionInputs}.
- *
- * Resolves the flat PROVIDER/MODEL_ID/API_KEY contract: PROVIDER defaults to
- * "openrouter" (every other value throws), MODEL_ID defaults to {@link DEFAULT_MODEL},
- * and an empty API_KEY throws (a keyless review would abstain on every call) — except
- * on `pull_request_review_comment`, whose only path is the no-model settle pass
- * (pipeline/dismissRecompute.ts), so a settle workflow needs no model secret.
- */
+/** Read and validate action inputs before any model or GitHub work. */
 export function readInputs(): ActionInputs {
   const provider = resolveProviderId(core.getInput("PROVIDER"));
   const jevEnabled = readBool("JEV_ENABLED", false);
-  const model = core.getInput("MODEL_ID").trim() || DEFAULT_MODEL;
+  const rawBaseUrl = core.getInput("BASE_URL").trim();
+  const extraBody = parseExtraBody(core.getInput("EXTRA_BODY"));
+  const rawModel = core.getInput("MODEL_ID").trim();
+  if (provider === "openai-compatible") {
+    if (!rawBaseUrl) throw new Error("BASE_URL is required for PROVIDER=openai-compatible.");
+    if (!rawModel) throw new Error("MODEL_ID is required for PROVIDER=openai-compatible.");
+    if (jevEnabled) throw new Error("JEV_ENABLED requires PROVIDER=openrouter.");
+  } else if (rawBaseUrl) {
+    throw new Error("BASE_URL requires PROVIDER=openai-compatible.");
+  }
+  if (extraBody && provider !== "openai-compatible")
+    throw new Error("EXTRA_BODY requires PROVIDER=openai-compatible.");
+  const baseUrl = rawBaseUrl ? validateBaseUrl(rawBaseUrl) : undefined;
+  const model = provider === "openai-compatible" ? rawModel : rawModel || DEFAULT_MODEL;
 
   const apiKey = core.getInput("API_KEY").trim();
-  if (apiKey === "" && process.env["GITHUB_EVENT_NAME"] !== "pull_request_review_comment") {
+  if (
+    provider === "openrouter" &&
+    apiKey === "" &&
+    process.env["GITHUB_EVENT_NAME"] !== "pull_request_review_comment"
+  ) {
     throw new Error(`API_KEY is required (the ${provider} API key).`);
   }
   // AFTER the API_KEY guard: a run that is about to die on a missing key must not first
   // post a ::warning annotation blaming MODEL_ID, which would outlive the throw on the
   // run summary and point the reader at the wrong input.
-  warnBareModelId(model);
+  if (provider === "openrouter") warnBareModelId(model);
 
   // MAX_TOKENS must be a positive budget; MAX_TOKENS="0"/"-1" is a typo that would
   // 400 → silent abstain, so clamp it to the default with a warning.
@@ -304,6 +306,8 @@ export function readInputs(): ActionInputs {
 
   return {
     provider,
+    baseUrl,
+    extraBody,
     model,
     apiKey,
     jevEnabled,

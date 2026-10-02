@@ -7,7 +7,7 @@
 // and this file owns only the LOOP (timeout/abort, hang retries, budget escalation,
 // salvage, abstain). The export is reviewWithModel().
 //
-// REASONING-OFF: hidden reasoning is DISABLED, because reasoning tokens are billed
+// REASONING-OFF (OpenRouter): hidden reasoning is DISABLED, because reasoning tokens are billed
 // against max_tokens — a thinking model spends the whole budget before emitting a byte of
 // JSON and returns finish_reason "length" with empty content. The spelling lives in
 // providers.ts: OpenRouter's `reasoning:{effort:"none"}` (plus require_parameters) is
@@ -65,9 +65,15 @@ export const MAX_ATTEMPTS = 3;
 
 /** Options for {@link reviewWithModel}: the model id, API key, and test seams. */
 export interface ReviewOptions {
-  /** OpenRouter model id (e.g. "deepseek/deepseek-v4-pro"). */
+  /** Defaults to OpenRouter for existing callers. */
+  provider?: import("./providers.js").ProviderId;
+  /** Explicit API root for the compatible provider. */
+  baseUrl?: string | undefined;
+  /** Custom endpoint request options; OpenRouter rejects these. */
+  extraBody?: Record<string, import("ai").JSONValue> | undefined;
+  /** Model id served by the selected backend. */
   model: string;
-  /** OpenRouter API key (Authorization: Bearer). */
+  /** Bearer key; optional for an unauthenticated custom endpoint. */
   apiKey: string;
   /** Custom fetch — injected by tests to replay recorded responses; real fetch in prod. */
   fetch?: typeof fetch;
@@ -146,6 +152,9 @@ export async function reviewWithModel(
   opts: ReviewOptions,
 ): Promise<ProviderResult> {
   const model = resolveModel({
+    provider: opts.provider,
+    baseUrl: opts.baseUrl,
+    extraBody: opts.extraBody,
     model: opts.model,
     apiKey: opts.apiKey,
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
@@ -290,7 +299,7 @@ export async function reviewWithModel(
 
   // Unreachable: every loop path either returns or continues, and the final attempt
   // always returns. Present so TypeScript sees a total function.
-  return abstain(new Error("OpenRouter request failed"), false);
+  return abstain(new Error("Model request failed"), false);
 }
 
 /**

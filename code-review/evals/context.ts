@@ -12,6 +12,8 @@ import type { FetchedPr } from "./fetch.js";
 export function buildInputs(args: EvalArgs, apiKey: string, baseBranch: string): ActionInputs {
   return {
     provider: args.provider,
+    baseUrl: args.baseUrl,
+    extraBody: args.extraBody,
     model: args.model,
     apiKey,
     maxTokens: 8192,
@@ -43,6 +45,7 @@ export function buildInputs(args: EvalArgs, apiKey: string, baseBranch: string):
     botLogoUrl: "https://example.com/logo.png",
     reviewMemory: true,
     failOn: new Set(),
+    approveBelow: "nit",
     verbosity: "compact",
     touluApiKey: "",
     touluApiUrl: "https://api.toolu.sh",
