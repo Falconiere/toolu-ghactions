@@ -1,5 +1,12 @@
 # Changelog
 
+## [8.5.0](https://github.com/Falconiere/toolu-ghactions/compare/v8.4.1...v8.5.0) (2026-10-02)
+
+
+### Features
+
+* **code-review:** support custom OpenAI-compatible endpoints ([#135](https://github.com/Falconiere/toolu-ghactions/issues/135)) ([6012222](https://github.com/Falconiere/toolu-ghactions/commit/6012222733e2638ef5b9c6c47e744d513b286b7d))
+
 ## [8.4.1](https://github.com/Falconiere/toolu-ghactions/compare/v8.4.0...v8.4.1) (2026-09-28)
 
 
