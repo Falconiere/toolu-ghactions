@@ -3,22 +3,22 @@
 // single seam that keeps reviewWithModel (the review loop) free of transport details:
 // it calls resolveModel() and feeds the returned model to the structured-output call.
 //
-// ONE BACKEND: OpenRouter. The native vendor backends this action once shipped
-// (deepseek, minimax, kimi/moonshot) were removed — every model those vendors publish is
-// reachable through OpenRouter under a "<vendor>/<model>" id, so the second wire contract
-// bought nothing but per-vendor reasoning switches, sampling gates and empty-cut recovery
-// rules to keep working. PROVIDER survives as an input and still accepts only
-// "openrouter": a workflow pinned to a removed vendor must fail loudly with a config
-// error, not silently send that vendor's key here. That error names the CATALOG, never a
-// composed model id — see OPENROUTER_MODELS_URL below for why guessing one is a bug.
+// OpenRouter remains the default; custom API roots use the generic compatible
+// transport so OpenRouter routing/reasoning extras never reach another server.
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import type { LanguageModel } from "ai";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import {
+  defaultSettingsMiddleware,
+  wrapLanguageModel,
+  type JSONValue,
+  type LanguageModel,
+} from "ai";
 
-/** The only backend this action wires. Kept as a type so the input contract, the report
+/** Supported backends. Kept as a type so the input contract, the report
  *  payload and the eval CLI all name the same resolved value. */
-export type ProviderId = "openrouter";
+export type ProviderId = "openrouter" | "openai-compatible";
 
-/** The single supported provider id, in its canonical spelling. */
+/** The default provider id. */
 export const PROVIDER_ID: ProviderId = "openrouter";
 
 /**
@@ -29,11 +29,34 @@ export const DEFAULT_MODEL = "deepseek/deepseek-v4-pro";
 
 /**
  * The canonical {@link ProviderId} for a raw spelling — case-insensitive and trimmed —
- * or undefined when it names anything but OpenRouter. The one resolver every input
+ * or undefined when it names an unsupported backend. The one resolver every input
  * surface (action inputs, the eval CLI) goes through.
  */
 export function canonicalProviderId(raw: string): ProviderId | undefined {
-  return raw.trim().toLowerCase() === PROVIDER_ID ? PROVIDER_ID : undefined;
+  const id = raw.trim().toLowerCase();
+  return id === "openrouter" || id === "openai-compatible" ? id : undefined;
+}
+
+/** Validate an explicit API root without logging embedded credentials. */
+export function validateBaseUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("BASE_URL must be an absolute HTTP(S) API root (including /v1 when needed).");
+  }
+  if (
+    !["http:", "https:"].includes(url.protocol) ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error(
+      "BASE_URL must use HTTP(S), without credentials, query parameters or a fragment.",
+    );
+  }
+  return url.toString().replace(/\/+$/, "");
 }
 
 /**
@@ -60,21 +83,45 @@ const OPENROUTER_EXTRA_BODY = {
 
 /** Options for {@link resolveModel}: model id, key, and a test fetch. */
 export interface ResolveModelOptions {
-  /** The resolved, non-empty OpenRouter model id. */
+  /** Defaults to OpenRouter for existing callers. */
+  provider?: ProviderId;
+  /** API root required for openai-compatible. */
+  baseUrl?: string | undefined;
+  /** Optional server-specific request fields, for custom endpoints only. */
+  extraBody?: Record<string, JSONValue> | undefined;
+  /** The resolved, non-empty model id. */
   model: string;
-  /** The OpenRouter API key (Authorization: Bearer). */
+  /** Bearer API key; empty for an unauthenticated custom endpoint. */
   apiKey: string;
   /** Custom fetch — injected by tests to replay recorded responses; real fetch in prod. */
   fetch?: typeof fetch;
 }
 
 /**
- * Construct the AI SDK model object for `opts.model`, with the OpenRouter request-body
- * extras baked into the client. The returned {@link LanguageModel} is what the structured
+ * Construct the model with the selected backend's wire contract. The returned {@link LanguageModel} is what the structured
  * call consumes.
  */
 export function resolveModel(opts: ResolveModelOptions): LanguageModel {
   const fetchOpt = opts.fetch ? { fetch: opts.fetch } : {};
+  if (opts.provider === "openai-compatible") {
+    if (!opts.baseUrl) throw new Error("BASE_URL is required for PROVIDER=openai-compatible.");
+    const model = createOpenAICompatible({
+      name: "openai-compatible",
+      baseURL: validateBaseUrl(opts.baseUrl),
+      ...(opts.apiKey ? { apiKey: opts.apiKey } : {}),
+      ...fetchOpt,
+    })(opts.model);
+    return opts.extraBody
+      ? wrapLanguageModel({
+          model,
+          middleware: defaultSettingsMiddleware({
+            settings: { providerMetadata: { "openai-compatible": opts.extraBody } },
+          }),
+        })
+      : model;
+  }
+  if (opts.baseUrl) throw new Error("BASE_URL requires PROVIDER=openai-compatible.");
+  if (opts.extraBody) throw new Error("EXTRA_BODY requires PROVIDER=openai-compatible.");
   return createOpenRouter({
     apiKey: opts.apiKey,
     ...fetchOpt,

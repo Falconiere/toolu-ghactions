@@ -66,7 +66,9 @@ describe("parseArgs", () => {
 
   it("rejects an unsupported --provider, naming the supported id and the workaround", () => {
     expect(() => parseArgs(["--provider", "anthropic"])).toThrow(ArgError);
-    expect(() => parseArgs(["--provider", "anthropic"])).toThrow(/\(openrouter\)/);
+    expect(() => parseArgs(["--provider", "anthropic"])).toThrow(
+      /\(openrouter, openai-compatible\)/,
+    );
     expect(() => parseArgs(["--provider", "anthropic"])).toThrow(/--model <id>/);
     expect(() => parseArgs(["--provider", "anthropic"])).toThrow(
       /https:\/\/openrouter\.ai\/models/,
@@ -160,7 +162,7 @@ describe("usage", () => {
 
 it("paired Jev evaluation rejects native providers", () => {
   expect(() => parseArgs(["--compare-jev", "--provider", "deepseek"])).toThrow(
-    /is not supported \(openrouter\)/,
+    /is not supported \(openrouter, openai-compatible\)/,
   );
 });
 
@@ -170,4 +172,51 @@ it("enables paired evaluation with pinned revision overrides", () => {
     headSha: "abc",
     baseSha: "def",
   });
+});
+
+it("passes a custom endpoint through to the live evaluation inputs", () => {
+  expect(
+    parseArgs([
+      "--provider",
+      "openai-compatible",
+      "--base-url",
+      "http://127.0.0.1:8000/v1/",
+      "--model",
+      "qwen3:0.6b",
+      "--extra-body",
+      '{"chat_template_kwargs":{"enable_thinking":false}}',
+    ]),
+  ).toMatchObject({
+    provider: "openai-compatible",
+    baseUrl: "http://127.0.0.1:8000/v1",
+    model: "qwen3:0.6b",
+    extraBody: { chat_template_kwargs: { enable_thinking: false } },
+  });
+});
+
+it("rejects invalid custom options and custom options on OpenRouter", () => {
+  expect(() =>
+    parseArgs(["--extra-body", '{"chat_template_kwargs":{"enable_thinking":false}}']),
+  ).toThrow("--extra-body requires --provider openai-compatible");
+  expect(() => parseArgs(["--extra-body", "[]"])).toThrow("EXTRA_BODY must be a valid JSON object");
+});
+
+it("rejects incomplete custom configuration and Jev comparison with a custom endpoint", () => {
+  expect(() => parseArgs(["--provider", "openai-compatible"])).toThrow(
+    "requires --base-url and --model",
+  );
+  expect(() => parseArgs(["--base-url", "http://127.0.0.1:8000/v1"])).toThrow(
+    "requires --provider openai-compatible",
+  );
+  expect(() =>
+    parseArgs([
+      "--compare-jev",
+      "--provider",
+      "openai-compatible",
+      "--base-url",
+      "http://127.0.0.1:8000/v1",
+      "--model",
+      "qwen3:0.6b",
+    ]),
+  ).toThrow("--compare-jev requires openrouter");
 });

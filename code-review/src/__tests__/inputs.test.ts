@@ -266,7 +266,9 @@ describe("provider contract (PROVIDER / MODEL_ID / API_KEY)", () => {
 
   it("AC-6: an unsupported PROVIDER throws, naming the supported set and the workaround", () => {
     setInput("PROVIDER", "openai");
-    expect(() => readInputs()).toThrow(/is not supported \(supported: openrouter\)/);
+    expect(() => readInputs()).toThrow(
+      /is not supported \(supported: openrouter, openai-compatible\)/,
+    );
     expect(() => readInputs()).toThrow(/PROVIDER:"openrouter"/);
     expect(() => readInputs()).toThrow(/https:\/\/openrouter\.ai\/models/);
   });
@@ -280,7 +282,9 @@ describe("provider contract (PROVIDER / MODEL_ID / API_KEY)", () => {
     for (const removed of ["deepseek", "minimax", "kimi", "moonshot"]) {
       setInput("PROVIDER", removed);
       expect(() => readInputs()).toThrow(
-        new RegExp(`PROVIDER "${removed}" is not supported \\(supported: openrouter\\)`),
+        new RegExp(
+          `PROVIDER "${removed}" is not supported \\(supported: openrouter, openai-compatible\\)`,
+        ),
       );
       expect(() => readInputs()).toThrow(/https:\/\/openrouter\.ai\/models/);
       // Never a guessed namespace built from the spelling the user typed.
@@ -326,6 +330,8 @@ describe("Jev opt-in", () => {
   it("rejects explicitly enabled native providers", () => {
     setInput("JEV_ENABLED", "true");
     setInput("PROVIDER", "deepseek");
-    expect(() => readInputs()).toThrow(/is not supported \(supported: openrouter\)/);
+    expect(() => readInputs()).toThrow(
+      /is not supported \(supported: openrouter, openai-compatible\)/,
+    );
   });
 });

@@ -4,8 +4,8 @@ description: |
   against an 8-dimension checklist (correctness, security, performance, test
   coverage, doc accuracy, tight assertions, migration warnings, and adherence
   to the project's own convention files read from the base ref) and posts a
-  structured verdict with actionable findings. Runs on OpenRouter (any
-  OpenAI-compatible model) via the Vercel AI SDK, with structured-output
+  structured verdict with actionable findings. Runs on OpenRouter or a custom
+  OpenAI-compatible endpoint via the Vercel AI SDK, with structured-output
   validation and retries.
 author: 'Falconiere'
 branding:
@@ -14,15 +14,21 @@ branding:
 
 inputs:
   PROVIDER:
-    description: 'LLM backend. "openrouter" (the default) is the only supported value — any OpenAI-compatible model reachable through OpenRouter. The native vendor backends ("deepseek", "minimax", "kimi"/"moonshot") were REMOVED: route those models through OpenRouter by putting the model''s OpenRouter id in MODEL_ID — look it up at https://openrouter.ai/models, since a vendor''s OpenRouter namespace is not always its name (Kimi publishes under "moonshotai"). Any other value fails with an error.'
+    description: 'LLM backend: "openrouter" (default) or "openai-compatible" for a custom endpoint. Custom endpoints require BASE_URL and MODEL_ID. Native vendor provider names remain unsupported; find their OpenRouter model ids at https://openrouter.ai/models.'
     required: false
     default: 'openrouter'
   MODEL_ID:
-    description: 'OpenRouter model id, namespaced "<vendor>/<model>". Defaults to deepseek/deepseek-v4-pro.'
+    description: 'Model id. OpenRouter defaults to deepseek/deepseek-v4-pro; openai-compatible requires an explicit model id served by your endpoint.'
+    required: false
+  BASE_URL:
+    description: 'API root for PROVIDER=openai-compatible, including /v1 when needed (e.g. http://127.0.0.1:8000/v1). Must be reachable from the CI runner. Do not include /chat/completions, credentials, query parameters or fragments. Rejected for OpenRouter.'
     required: false
   API_KEY:
-    description: 'OpenRouter API key (Authorization: Bearer). Required — except on a `pull_request_review_comment` run, the no-model settle pass, which never reads it. Prefer passing via a step-level env: block for better secret hygiene.'
-    required: true
+    description: 'Bearer API key. Required for OpenRouter except on the no-model pull_request_review_comment settle pass. Optional for a custom endpoint without authentication. Prefer passing via a step-level env: block for better secret hygiene.'
+    required: false
+  EXTRA_BODY:
+    description: 'Optional JSON object of server-specific fields for openai-compatible (e.g. {"chat_template_kwargs":{"enable_thinking":false}} for oMLX). Cannot override model, messages, token budget, temperature, response format, streaming or tools. Rejected for OpenRouter.'
+    required: false
   JEV_ENABLED:
     description: 'Opt in to Jev finding assessment and risk routing. Requires PROVIDER=openrouter; reuses API_KEY and the shared review deadline.'
     required: false
@@ -272,6 +278,8 @@ runs:
         # process.env.INPUT_* directly (@actions/core.getInput), so the composite
         # maps each of its inputs onto the step's env explicitly.
         INPUT_PROVIDER: ${{ inputs.PROVIDER }}
+        INPUT_BASE_URL: ${{ inputs.BASE_URL }}
+        INPUT_EXTRA_BODY: ${{ inputs.EXTRA_BODY }}
         INPUT_JEV_ENABLED: ${{ inputs.JEV_ENABLED }}
         INPUT_JEV_MODEL_ID: ${{ inputs.JEV_MODEL_ID }}
         INPUT_MODEL_ID: ${{ inputs.MODEL_ID }}

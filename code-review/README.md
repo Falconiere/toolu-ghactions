@@ -4,7 +4,7 @@
 
 ### AI code review for every pull request
 
-Audits the diff against an 8-dimension checklist — correctness, security, performance, test coverage, doc accuracy, tight assertions, migration warnings, and adherence to the project's own convention files — by running **one model** through [OpenRouter](https://openrouter.ai) (any OpenAI-compatible model id), via the **[Vercel AI SDK](https://sdk.vercel.ai)** (`generateObject` + Zod: structured output with retries, reasoning disabled). Posts a structured, machine-readable comment with inline, committable suggestions.
+Audits the diff against an 8-dimension checklist — correctness, security, performance, test coverage, doc accuracy, tight assertions, migration warnings, and adherence to the project's own convention files — by running **one model** through [OpenRouter](https://openrouter.ai) or a [custom OpenAI-compatible endpoint](#custom-endpoints-omlx-and-local-models), via the **[Vercel AI SDK](https://sdk.vercel.ai)** (`generateObject` + Zod: structured output with retries; reasoning disabled on OpenRouter). Posts a structured, machine-readable comment with inline, committable suggestions.
 
 [![Release](https://img.shields.io/github/v/release/Falconiere/toolu-ghactions?sort=semver&color=d97757)](https://github.com/Falconiere/toolu-ghactions/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](../LICENSE)
@@ -18,11 +18,74 @@ Audits the diff against an 8-dimension checklist — correctness, security, perf
 
 ---
 
+## Custom endpoints (oMLX and local models)
+
+Set `PROVIDER: openai-compatible`, `BASE_URL` to your API root and `MODEL_ID` to
+an id returned by that server's `/v1/models`. The endpoint must support OpenAI
+Chat Completions, streaming and `response_format: {type: "json_object"}` output.
+The SDK supplies the review schema in the prompt and validates the response with
+Zod; custom servers do not need native JSON schema enforcement.
+Responses still go through the existing review validation, retries and deadlines.
+OpenRouter routing and reasoning extras are not sent to custom servers; configure
+local reasoning behavior with `EXTRA_BODY` or on the server. `API_KEY` is optional for unauthenticated
+servers; when supplied it is sent as a Bearer token. Jev remains OpenRouter-only.
+
+For CI on a self-hosted Mac mini runner with oMLX listening on port 8000:
+
+```yaml
+jobs:
+  review:
+    runs-on: [self-hosted, macOS, ARM64]
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: falconiere/toolu-ghactions/code-review@custom-endpoint
+        with:
+          PROVIDER: openai-compatible
+          BASE_URL: http://127.0.0.1:8000/v1
+          MODEL_ID: Qwen3.5-9B-MLX-4bit
+          API_KEY: ${{ secrets.LOCAL_LLM_API_KEY }} # omit if your server needs no auth
+          EXTRA_BODY: '{"chat_template_kwargs":{"enable_thinking":false}}'
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REQUEST_TIMEOUT_MS: '300000' # local generation can take longer
+          FAIL_ON: none # advisory while evaluating the local model
+```
+
+With a public tunnel, use `BASE_URL: https://omlx.codasignal.com/v1` on a
+GitHub-hosted runner and store the oMLX key in `secrets.LOCAL_LLM_API_KEY`.
+
+The branch pin above is for testing this change; pin a release or commit containing
+it for ongoing use. Port 8000 is an example: use your oMLX server's actual port.
+A GitHub-hosted runner needs network access to your Mac mini through your VPN or
+an authenticated tunnel. Your workstation's `ssh macmini` alias does not make the
+Mac reachable from GitHub CI. With an SSH tunnel established by a prior workflow
+step, use its forwarded local port in `BASE_URL`.
+
+For a live local smoke test, without posting to GitHub:
+
+```bash
+cd code-review
+TOOLU_LIVE_BASE_URL=http://127.0.0.1:8000/v1 \
+TOOLU_LIVE_MODEL=Qwen3.5-9B-MLX-4bit \
+TOOLU_LIVE_EXTRA_BODY='{"chat_template_kwargs":{"enable_thinking":false}}' \
+bun run test -- src/llm/__tests__/custom-endpoint-live.test.ts
+# Supply TOOLU_LIVE_API_KEY in the environment if the endpoint requires auth.
+```
+
+The eval CLI also accepts `--provider openai-compatible --base-url <api-root>
+--model <id> --extra-body '{"chat_template_kwargs":{"enable_thinking":false}}'`;
+`API_KEY` is optional for that provider.
+
 ## Optional Jev assessments (OpenRouter only)
 
 Set `JEV_ENABLED: 'true'` with `PROVIDER: openrouter`. Jev reuses `API_KEY`;
 `JEV_MODEL_ID` defaults to `typesafe/jev-1.13`. The generative reviewer still uses
-`MODEL_ID`. Enabling Jev with a native provider fails input validation.
+`MODEL_ID`. Enabling Jev with `openai-compatible` fails input validation.
 
 ```yaml
 with:
@@ -149,11 +212,12 @@ On every PR push, the action shapes the diff, sends it to the configured model, 
 
 ## Choosing a model
 
-The action runs **one model**, selected with three flat inputs:
+The action runs **one model**, selected with these inputs:
 
-- **`PROVIDER`** — `openrouter`, the default and the only supported value.
-- **`MODEL_ID`** — the OpenRouter model id (defaults to `deepseek/deepseek-v4-pro`).
-- **`API_KEY`** — your OpenRouter API key (**required**).
+- **`PROVIDER`** — `openrouter` (default) or `openai-compatible`.
+- **`MODEL_ID`** — model id; OpenRouter defaults to `deepseek/deepseek-v4-pro`, custom endpoints require it.
+- **`API_KEY`** — Bearer key; required for OpenRouter, optional for unauthenticated custom endpoints.
+- **`BASE_URL`** — required API root for custom endpoints; see [oMLX and local models](#custom-endpoints-omlx-and-local-models).
 
 Anything OpenRouter serves works as long as it's OpenAI-compatible:
 
@@ -206,8 +270,8 @@ differently. Prefer a model with reliable JSON structured output.
 catalog to find the id — it is never silently rerouted, because the vendor key in
 `API_KEY` would only 401 mid-review.
 
-`openrouter` is the only implemented backend; any other `PROVIDER` value fails the
-action with that same error. It names [openrouter.ai/models](https://openrouter.ai/models)
+Use `openai-compatible` with `BASE_URL` for a direct custom server. Unsupported
+`PROVIDER` values fail the action with that same error. It names [openrouter.ai/models](https://openrouter.ai/models)
 rather than composing an id from the value you typed: that composition is precisely
 what produced the unusable `kimi/…` advice this action used to print.
 
@@ -796,9 +860,11 @@ resolution without posting the note again.
 
 | Input | Required | Default | Description |
 |---|---|---|---|
-| `PROVIDER` | no | `openrouter` | Backend to call. `openrouter` is the only supported value — any OpenAI-compatible model via OpenRouter. Any other value, including the removed native vendor backends, fails the action with an error telling you to set `PROVIDER: "openrouter"` and to look the model's id up at [openrouter.ai/models](https://openrouter.ai/models) — it never guesses an id for you, because a vendor's OpenRouter namespace is not always its name. See [Native vendor APIs (removed)](#native-vendor-apis-removed). |
-| `MODEL_ID` | no | `deepseek/deepseek-v4-pro` | OpenRouter model id, namespaced `<vendor>/<model>`. The default has a 1M-token context and 384k max output, so large diffs and verbose reviews rarely truncate. Pick one with reliable JSON structured output. |
-| `API_KEY` | **yes** | — | OpenRouter API key. **Required** — an empty value fails the action, except on a `pull_request_review_comment` run ([the no-model settle pass](#settling-findings-without-a-re-review)). Pass via a step-level `env:`/`secrets` reference for secret hygiene. |
+| `PROVIDER` | no | `openrouter` | `openrouter` or `openai-compatible`. Custom endpoints require `BASE_URL` and `MODEL_ID`. |
+| `MODEL_ID` | no | `deepseek/deepseek-v4-pro` (OpenRouter) | Endpoint model id; required for `openai-compatible`. |
+| `API_KEY` | OpenRouter only | — | Bearer key; optional for an unauthenticated custom endpoint and the no-model settle pass. |
+| `BASE_URL` | custom endpoints only | — | HTTP(S) API root, including `/v1` when needed. Rejected for OpenRouter. |
+| `EXTRA_BODY` | no | — | JSON object of custom server fields, e.g. oMLX `chat_template_kwargs`. Compatible provider only; review wire fields cannot be overridden. |
 | `MAX_TOKENS` | no | `8192` | Max completion-token budget per request (always sent — omitting it makes OpenRouter reserve the model's full output window against your credits and can 402-reject). A response truncated at this limit (`finish_reason: length`) is retried with a doubled budget up to the 131072 ceiling (escalations don't consume hang retries); whatever the outcome, the findings completed before a cut are salvaged. |
 | `MIN_CONFIDENCE` | no | `high` | Drop findings below this confidence at every severity, including blocker/high (`high` or `medium`) |
 | `INLINE_COMMENTS` | no | `true` | Post per-line review comments with committable code suggestions (Reviews API), in addition to the summary comment |
@@ -915,8 +981,9 @@ are unaffected — `APPROVE_BELOW` changes only the label.
 
 ## v8 migration
 
-`@v8` is a **breaking change**: the three native vendor backends are removed and
-`PROVIDER` accepts only `openrouter` (its default). The review itself is unchanged
+The original `@v8` release was a **breaking change**: the three native vendor backends were removed and
+`PROVIDER` accepted only `openrouter`. Custom endpoint support now adds
+`openai-compatible` while preserving that default. The review itself is unchanged
 — same pipeline, same checklist, same comment shape, same input names — but two
 behaviors move with the backends: the `API_KEY` a workflow must supply, and how an
 empty budget-cut response is retried. Both are in the table below; read it rather
@@ -924,7 +991,7 @@ than assuming a pure input rename.
 
 | What changed | Detail |
 |---|---|
-| `PROVIDER` values | `deepseek`, `minimax`, `kimi` and `moonshot` are **rejected**. The action fails with a config error pointing you at [openrouter.ai/models](https://openrouter.ai/models) to find the model's id — it never composes one for you, and never silently reroutes, because the vendor key in `API_KEY` would only 401 mid-review. `openrouter` (the default) is the only accepted value. |
+| `PROVIDER` values | `deepseek`, `minimax`, `kimi` and `moonshot` are **rejected**. The action fails with a config error pointing you at [openrouter.ai/models](https://openrouter.ai/models) to find the model's id — it never composes one for you, and never silently reroutes, because the vendor key in `API_KEY` would only 401 mid-review. `openrouter` remains the default; use `openai-compatible` with `BASE_URL` for a custom API. |
 | `MODEL_ID` | Must be an OpenRouter id, namespaced `<vendor>/<model>`. A bare native id now **warns** at input-read time, naming `MODEL_ID` as the likely cause; the run still proceeds and still fails at the first model call if the id is wrong. See [Native vendor APIs (removed)](#native-vendor-apis-removed) for the id mapping. |
 | `API_KEY` | Now always your **OpenRouter** key. Workflows passing `secrets.DEEPSEEK_API_KEY` / `MINIMAX_API_KEY` / `KIMI_API_KEY` must swap in `secrets.OPENROUTER_API_KEY`. |
 | Empty-budget retries | A response that burned the whole `MAX_TOKENS` budget on hidden reasoning and returned **no content** is no longer retried at a doubled budget — reasoning is off on OpenRouter (`reasoning: {effort: "none"}`), so that shape means the chosen model ignored the switch and a larger budget only buys more of it. A truncation that **did** produce partial output still escalates exactly as before. If you pin a model that reasons unconditionally, raise `MAX_TOKENS` or lower `MAX_CHUNK_LINES` yourself. |

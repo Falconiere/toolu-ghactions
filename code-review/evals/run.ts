@@ -217,7 +217,7 @@ async function main(argv: readonly string[]): Promise<number> {
   }
 
   const apiKey = process.env["API_KEY"] ?? "";
-  if (apiKey === "") {
+  if (apiKey === "" && args.provider === "openrouter") {
     process.stderr.write(
       "API_KEY is required for a live eval run (the same input the action reads).\n" +
         `Set it to your ${args.provider} API key and re-run, e.g.:\n` +

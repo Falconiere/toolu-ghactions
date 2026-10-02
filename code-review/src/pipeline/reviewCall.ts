@@ -281,6 +281,9 @@ function roundLedger(
 /** The model options every model call in this phase shares. */
 function modelOptions(input: ReviewCallInput): ReviewOptions {
   return {
+    provider: input.inputs.provider,
+    baseUrl: input.inputs.baseUrl,
+    extraBody: input.inputs.extraBody,
     model: input.inputs.model,
     apiKey: input.inputs.apiKey,
     timeoutMs: input.inputs.requestTimeoutMs,

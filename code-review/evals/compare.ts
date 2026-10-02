@@ -153,7 +153,7 @@ export async function compareJev(args: EvalArgs, apiKey: string) {
         ((baseline.coverage.unreviewed ?? 0) > 0 || (baseline.coverage.pending ?? 0) > 0)
       )
         break;
-      const { octokit, rec } = fakeOctokit({ patches: {} });
+      const { octokit, rec } = fakeOctokit({ patches: new Map() });
       const calls: {
         kind: string;
         replayed: boolean;
