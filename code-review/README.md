@@ -992,8 +992,8 @@ than assuming a pure input rename.
 | What changed | Detail |
 |---|---|
 | `PROVIDER` values | `deepseek`, `minimax`, `kimi` and `moonshot` are **rejected**. The action fails with a config error pointing you at [openrouter.ai/models](https://openrouter.ai/models) to find the model's id — it never composes one for you, and never silently reroutes, because the vendor key in `API_KEY` would only 401 mid-review. `openrouter` remains the default; use `openai-compatible` with `BASE_URL` for a custom API. |
-| `MODEL_ID` | Must be an OpenRouter id, namespaced `<vendor>/<model>`. A bare native id now **warns** at input-read time, naming `MODEL_ID` as the likely cause; the run still proceeds and still fails at the first model call if the id is wrong. See [Native vendor APIs (removed)](#native-vendor-apis-removed) for the id mapping. |
-| `API_KEY` | Now always your **OpenRouter** key. Workflows passing `secrets.DEEPSEEK_API_KEY` / `MINIMAX_API_KEY` / `KIMI_API_KEY` must swap in `secrets.OPENROUTER_API_KEY`. |
+| `MODEL_ID` | For OpenRouter, use a namespaced `<vendor>/<model>` id. A bare native id **warns** at input-read time; the run proceeds and fails at the first model call if the id is wrong. Custom endpoints require an explicit model id served by that endpoint. See [Native vendor APIs (removed)](#native-vendor-apis-removed) for the OpenRouter mapping. |
+| `API_KEY` | For OpenRouter, workflows passing `secrets.DEEPSEEK_API_KEY` / `MINIMAX_API_KEY` / `KIMI_API_KEY` must swap in `secrets.OPENROUTER_API_KEY`. For a custom endpoint, supply its own Bearer key if it requires authentication. |
 | Empty-budget retries | A response that burned the whole `MAX_TOKENS` budget on hidden reasoning and returned **no content** is no longer retried at a doubled budget — reasoning is off on OpenRouter (`reasoning: {effort: "none"}`), so that shape means the chosen model ignored the switch and a larger budget only buys more of it. A truncation that **did** produce partial output still escalates exactly as before. If you pin a model that reasons unconditionally, raise `MAX_TOKENS` or lower `MAX_CHUNK_LINES` yourself. |
 
 To adopt `@v8`: bump the pin to

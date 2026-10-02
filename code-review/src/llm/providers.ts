@@ -34,7 +34,9 @@ export const DEFAULT_MODEL = "deepseek/deepseek-v4-pro";
  */
 export function canonicalProviderId(raw: string): ProviderId | undefined {
   const id = raw.trim().toLowerCase();
-  return id === "openrouter" || id === "openai-compatible" ? id : undefined;
+  if (id === "openrouter") return "openrouter";
+  if (id === "openai-compatible") return "openai-compatible";
+  return undefined;
 }
 
 /** Validate an explicit API root without logging embedded credentials. */

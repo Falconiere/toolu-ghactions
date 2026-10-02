@@ -285,7 +285,7 @@ export function readInputs(): ActionInputs {
   if (extraBody && provider !== "openai-compatible")
     throw new Error("EXTRA_BODY requires PROVIDER=openai-compatible.");
   const baseUrl = rawBaseUrl ? validateBaseUrl(rawBaseUrl) : undefined;
-  const model = rawModel || DEFAULT_MODEL;
+  const model = provider === "openai-compatible" ? rawModel : rawModel || DEFAULT_MODEL;
 
   const apiKey = core.getInput("API_KEY").trim();
   if (

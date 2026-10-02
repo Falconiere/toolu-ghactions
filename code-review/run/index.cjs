@@ -38307,7 +38307,9 @@ var PROVIDER_ID = "openrouter";
 var DEFAULT_MODEL = "deepseek/deepseek-v4-pro";
 function canonicalProviderId(raw) {
   const id = raw.trim().toLowerCase();
-  return id === "openrouter" || id === "openai-compatible" ? id : void 0;
+  if (id === "openrouter") return "openrouter";
+  if (id === "openai-compatible") return "openai-compatible";
+  return void 0;
 }
 function validateBaseUrl(raw) {
   let url;
@@ -38664,7 +38666,7 @@ function readInputs() {
   if (extraBody && provider !== "openai-compatible")
     throw new Error("EXTRA_BODY requires PROVIDER=openai-compatible.");
   const baseUrl2 = rawBaseUrl ? validateBaseUrl(rawBaseUrl) : void 0;
-  const model = rawModel || DEFAULT_MODEL;
+  const model = provider === "openai-compatible" ? rawModel : rawModel || DEFAULT_MODEL;
   const apiKey = getInput("API_KEY").trim();
   if (provider === "openrouter" && apiKey === "" && process.env["GITHUB_EVENT_NAME"] !== "pull_request_review_comment") {
     throw new Error(`API_KEY is required (the ${provider} API key).`);
