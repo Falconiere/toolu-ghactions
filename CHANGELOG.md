@@ -1,5 +1,12 @@
 # Changelog
 
+## [8.6.0](https://github.com/Falconiere/toolu-ghactions/compare/v8.5.0...v8.6.0) (2026-10-23)
+
+
+### Features
+
+* **code-review:** best out-of-box defaults and prompt caps ([#138](https://github.com/Falconiere/toolu-ghactions/issues/138)) ([edc7726](https://github.com/Falconiere/toolu-ghactions/commit/edc7726293ed84babdfeab536c7fed550836a34f))
+
 ## [8.5.0](https://github.com/Falconiere/toolu-ghactions/compare/v8.4.1...v8.5.0) (2026-10-02)
 
 
