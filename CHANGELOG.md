@@ -1,5 +1,12 @@
 # Changelog
 
+## [8.6.1](https://github.com/Falconiere/toolu-ghactions/compare/v8.6.0...v8.6.1) (2026-10-23)
+
+
+### Bug Fixes
+
+* **code-review:** stop condemning files over mis-quoted findings ([#141](https://github.com/Falconiere/toolu-ghactions/issues/141)) ([66990fa](https://github.com/Falconiere/toolu-ghactions/commit/66990fa350afce8d3b221be826a7380d4a4fb0aa))
+
 ## [8.6.0](https://github.com/Falconiere/toolu-ghactions/compare/v8.5.0...v8.6.0) (2026-10-23)
 
 
