@@ -41855,7 +41855,7 @@ async function enhance(input) {
 }
 function enhancementNote(s) {
   const reason = s.skipReason === "incomplete-baseline" ? " (baseline coverage incomplete)" : s.skipReason === "deadline" ? " (wall deadline reached)" : "";
-  return `Jev: ${s.assessed} assessments; ${s.rechecked} findings rechecked; ${s.dismissed} confirmed dismissals; ${s.additionalReviews} additional package reviews; ${s.unavailable} unavailable; ${s.skipped} skipped${reason}.`;
+  return `**${s.assessed}** assessments \xB7 **${s.rechecked}** findings rechecked \xB7 **${s.dismissed}** confirmed dismissals \xB7 **${s.additionalReviews}** additional package reviews \xB7 **${s.unavailable}** unavailable \xB7 **${s.skipped}** skipped${reason}`;
 }
 
 // src/jev/packages.ts
@@ -43214,6 +43214,7 @@ var STATUS_ORDER = [
   "pending"
 ];
 var ALWAYS_ROW_STATUSES = /* @__PURE__ */ new Set(["unreviewed", "pending"]);
+var COVERAGE_LABEL = "**Coverage** \xB7 ";
 function buildLedger(entries) {
   const out = {};
   for (const [path, entry] of entries) out[path] = entry;
@@ -43255,32 +43256,34 @@ function renderLedger(ledger, verbosity) {
     const status = ledger.entries[p]?.status;
     return status !== void 0 && rowStatuses.has(status);
   });
-  if (rowPaths.length === 0) return `### Coverage
-
-${summary2}
+  if (rowPaths.length === 0) return `${COVERAGE_LABEL}${summary2}
 `;
   const shown = rowPaths.slice(0, LEDGER_MAX_ROWS);
   const lines = shown.map((p) => renderRow(p, ledger.entries[p]));
   const overflow = rowPaths.length - shown.length;
   if (overflow > 0) lines.push(`\u2026 ${overflow} more`);
-  return `### Coverage
-
-${summary2}
+  return `${COVERAGE_LABEL}${summary2}
 
 ${lines.join("\n")}
 `;
 }
 function renderLedgerSummary(ledger) {
   const paths = Object.keys(ledger.entries).sort();
-  return `### Coverage
-
-${renderSummary(ledger.entries, paths)}
+  return `${COVERAGE_LABEL}${renderSummary(ledger.entries, paths)}
 `;
+}
+function coverageCounts(ledger) {
+  return countStatuses(ledger.entries, Object.keys(ledger.entries));
 }
 function pathsWithStatus(ledger, status) {
   return Object.keys(ledger.entries).filter((p) => ledger.entries[p]?.status === status).sort();
 }
 function renderSummary(entries, paths) {
+  const counts = countStatuses(entries, paths);
+  const parts = STATUS_ORDER.filter((s) => counts[s] > 0).map((s) => `${s}: ${counts[s]}`);
+  return parts.length > 0 ? parts.join(" \xB7 ") : "_no changed files_";
+}
+function countStatuses(entries, paths) {
   const counts = {
     reviewed: 0,
     pattern: 0,
@@ -43297,8 +43300,7 @@ function renderSummary(entries, paths) {
     const status = entries[p]?.status;
     if (status !== void 0) counts[status] += 1;
   }
-  const parts = STATUS_ORDER.filter((s) => counts[s] > 0).map((s) => `${s}: ${counts[s]}`);
-  return parts.length > 0 ? parts.join(" \xB7 ") : "_no changed files_";
+  return counts;
 }
 function renderRow(path, entry) {
   const status = entry?.status ?? "unreviewed";
@@ -43889,6 +43891,94 @@ function rulesPathGlobs(inputs) {
   return [...RULES_PATH_GLOBS, ...splitGlobs(inputs.rulesGlob)];
 }
 
+// src/review/summary.ts
+var SEVERITY_ORDER = ["blocker", "high", "medium", "low", "nit"];
+var FILTERED = [
+  "pattern",
+  "rename",
+  "formatting",
+  "vendored",
+  "generated",
+  "excluded"
+];
+function verdictLine(badge, severity = "") {
+  const tail = severity !== "" ? ` ${severity}` : "";
+  return `**Verdict:** <kbd>${badge}</kbd>${tail}`;
+}
+function headerMeta(opts) {
+  const parts = [];
+  if (opts.duration) parts.push(`finished in ${opts.duration}`);
+  if (opts.sha) parts.push(`\`${opts.sha.slice(0, 7)}\``);
+  parts.push(`[View job](${opts.jobUrl})`);
+  return `<sub>${parts.join(" \xB7 ")}</sub>`;
+}
+function alert(kind, title, text2) {
+  const lines = `**${title}:** ${text2}`.split("\n").map((line) => `> ${line}`);
+  return [`> [!${kind}]`, ...lines].join("\n");
+}
+function details(summary2, body) {
+  const safe = body.replace(/<\/details\s*>/gi, "&lt;/details&gt;");
+  return `<details><summary>${summary2}</summary>
+
+${safe}
+
+</details>`;
+}
+function buildTiles(stats) {
+  const tiles = [findingsTile(stats.findings)];
+  if (stats.memory) tiles.push(resolvedTile(stats.memory));
+  tiles.push(reviewedTile(stats.coverage, stats.changedFiles));
+  const carried = stats.coverage?.carried ?? 0;
+  if (carried > 0)
+    tiles.push(tile("CARRIED", `${carried} <sub>FILES</sub>`, "from earlier passes"));
+  else if (stats.mechanical.length > 0) tiles.push(scannersTile(stats.mechanical));
+  const width = Math.floor(100 / tiles.length);
+  const row = tiles.map((cell) => `<td width="${width}%">${cell}</td>`).join("\n");
+  return `<table>
+<tr>
+${row}
+</tr>
+</table>`;
+}
+function buildJevSection(s) {
+  const bits = [`${s.assessed} assessed`];
+  if (s.unavailable > 0) bits.push(`${s.unavailable} unavailable`);
+  if (s.skipReason !== void 0) bits.push("skipped");
+  return details(`<b>Jev second opinion</b> \xB7 ${bits.join(" \xB7 ")}`, enhancementNote(s));
+}
+function tile(label, value, caption) {
+  return `<sub>${label}</sub><h3>${value}</h3><sub>${caption}</sub>`;
+}
+function findingsTile(findings) {
+  if (findings.length === 0) return tile("FINDINGS", "0", "on this pass");
+  const counts = /* @__PURE__ */ new Map();
+  for (const f of findings) counts.set(f.severity, (counts.get(f.severity) ?? 0) + 1);
+  const caption = SEVERITY_ORDER.filter((s) => counts.has(s)).map((s) => `${counts.get(s)} ${s}`).join(" \xB7 ");
+  return tile("FINDINGS", String(findings.length), caption);
+}
+function resolvedTile(memory) {
+  const caption = memory.passes === 1 ? "first pass" : `across ${memory.passes} passes`;
+  return tile("RESOLVED", String(memory.resolved), caption);
+}
+function reviewedTile(coverage, changedFiles) {
+  if (coverage === void 0) {
+    return tile("REVIEWED", `${changedFiles} <sub>FILES</sub>`, "files in diff");
+  }
+  const value = `${coverage.reviewed} <sub>FILES</sub>`;
+  const total = Object.values(coverage).reduce((sum, n) => sum + n, 0);
+  if (total === 0) return tile("REVIEWED", value, "no changed files");
+  const missing = coverage.unreviewed + coverage.pending;
+  if (missing > 0) return tile("REVIEWED", value, `\u26A0\uFE0F ${missing} not reviewed`);
+  const filtered = FILTERED.reduce((sum, status) => sum + coverage[status], 0);
+  return tile("REVIEWED", value, filtered > 0 ? `${filtered} filtered` : "nothing filtered");
+}
+function scannersTile(mechanical) {
+  const byTool = /* @__PURE__ */ new Map();
+  for (const f of mechanical) byTool.set(f.tool, (byTool.get(f.tool) ?? 0) + 1);
+  const caption = [...byTool.entries()].map(([tool, n]) => `${n} ${tool}`).join(" \xB7 ");
+  return tile("SCANNERS", String(mechanical.length), caption);
+}
+
 // src/review/sections.ts
 var MAX_UNANCHORED_ROWS = 20;
 var MAX_CLUSTERS = 10;
@@ -43965,100 +44055,73 @@ function clusterBlock(cluster) {
 // src/review/render.ts
 var TOP_MUST_FIX_MAX = 3;
 function renderBody(body, findingsSection) {
-  const parts = [];
-  parts.push(`<img src="${body.botLogoUrl}" width="20" align="left"> **${body.botName}**
-`);
-  let main2 = `${body.header}
-
-`;
-  main2 += "---\n";
-  main2 += `### Code Review \u2014 \`${body.branch}\`
-
-`;
-  main2 += buildChecklist(body);
-  main2 += `**Verdict:** ${body.verdictBadge}   ${buildSeveritySummary(body.findings)}`;
+  const blocks = [
+    `<img src="${body.botLogoUrl}" width="20" align="left"> **${body.botName}** ${body.header}`,
+    `### Code Review \u2014 \`${body.branch}\``,
+    verdictLine(body.verdictBadge, buildSeveritySummary(body.findings))
+  ];
   if (body.errorDetail !== "") {
-    const label = body.llmErrored ? "Provider error" : "Partial review";
-    main2 += `
-
-> \u26A0\uFE0F **${label}:** ${body.errorDetail}`;
+    blocks.push(
+      body.llmErrored ? alert("CAUTION", "Provider error", body.errorDetail) : alert("WARNING", "Partial review", body.errorDetail)
+    );
   }
-  if (body.capNote !== "") main2 += `
-
-> \u{1F501} **Round cap:** ${body.capNote}`;
-  if (body.enhancementNote) main2 += `
-
-${body.enhancementNote}`;
-  parts.push(main2);
-  if (body.recap !== "") parts.push(`
-${body.recap}
-`);
-  let section = "\n";
-  if (body.reviewPlan !== "") section += `### Review Plan
-${body.reviewPlan}
-
-`;
-  section += `### Findings (${body.findings.length})
-
-`;
-  section += `${findingsSection}
-
-`;
-  section += buildClusterSection(body.clusters);
-  section += buildUnanchoredSection(body.unanchored);
-  section += buildDroppedSection(body.dropped);
-  section += buildMechanicalSection(body.mechanical, body.llmErrored);
-  if (body.ledger !== "") section += `${body.ledger}
-`;
-  if (body.otherChecks !== "") section += `### Other checks
-${body.otherChecks}
-
-`;
+  if (body.capNote !== "") blocks.push(alert("NOTE", "Round cap", body.capNote));
+  blocks.push(
+    buildTiles({
+      findings: body.findings,
+      coverage: body.coverage,
+      changedFiles: body.changedFiles,
+      memory: body.memory,
+      mechanical: body.mechanical
+    })
+  );
+  if (body.recap !== "") blocks.push(body.recap.trimEnd());
   const topMustFix = buildTopMustFixSection(body.findings);
-  if (topMustFix !== "") section += `### Top-N must-fix
-${topMustFix}`;
-  parts.push(section);
-  if (body.history !== "") parts.push(`
-${body.history}
-`);
-  parts.push(`
-${body.verdictLabel}
-`);
-  if (body.marker !== "") parts.push(`
-${body.marker}
-`);
-  return parts.join("");
+  if (topMustFix !== "") blocks.push(`### Top-N must-fix
+${topMustFix}`);
+  blocks.push(`### Findings (${body.findings.length})
+
+${findingsSection}`);
+  const sections = [
+    buildClusterSection(body.clusters),
+    buildUnanchoredSection(body.unanchored),
+    buildDroppedSection(body.dropped),
+    buildMechanicalSection(body.mechanical, body.llmErrored),
+    // Per-file coverage: what was reviewed, carried, excluded, or NOT reviewed.
+    body.ledger
+  ];
+  for (const section of sections) if (section !== "") blocks.push(section.trimEnd());
+  if (body.reviewPlan !== "") blocks.push(details("<b>Review plan</b>", body.reviewPlan));
+  if (body.otherChecks !== "") blocks.push(details("<b>Other checks</b>", body.otherChecks));
+  if (body.enhancement) blocks.push(buildJevSection(body.enhancement));
+  if (body.history !== "") blocks.push(body.history.trimEnd());
+  blocks.push(buildChecklist(body), body.verdictLabel);
+  if (body.marker !== "") blocks.push(body.marker);
+  return `${blocks.join("\n\n")}
+`;
 }
 function buildChecklist(body) {
   if (body.compact) {
-    const n = body.changedFiles;
-    return `- [x] Reviewed ${n}-file diff \u2014 verdict set
-
-`;
+    return `- [x] Reviewed ${body.changedFiles}-file diff \u2014 verdict set`;
   }
   return `- [x] Read repository context and PR diff
 - [x] Review changed files
 - [x] Analyze correctness, security, performance
 - [x] Post findings
-- [x] Set verdict label (${body.verdictLabel})
-
-`;
+- [x] Set verdict label (${body.verdictLabel})`;
 }
 function buildMechanicalSection(mechanical, llmErrored) {
   if (mechanical.length === 0) {
-    return llmErrored ? "> \u26A0\uFE0F **LLM judgment unavailable** \u2014 no deterministic findings either.\n\n" : "";
+    return llmErrored ? alert("WARNING", "LLM judgment unavailable", "no deterministic findings either.") : "";
   }
   const byTool = /* @__PURE__ */ new Map();
   for (const f of mechanical) byTool.set(f.tool, (byTool.get(f.tool) ?? 0) + 1);
   const counts = [...byTool.entries()].map(([tool, n]) => `${n} ${tool}`).join(", ");
-  let out = "### Mechanical checks\n\n";
-  out += `${mechanical.length} deterministic finding(s) \u2014 ${counts}. See the **Code Scanning** tab for details.
-`;
-  if (llmErrored) {
-    out += "\n> \u26A0\uFE0F **LLM judgment unavailable** \u2014 showing deterministic findings only.\n";
-  }
-  return `${out}
-`;
+  const line = `**Mechanical checks** \xB7 ${mechanical.length} deterministic finding(s) \u2014 ${counts}. See the **Code Scanning** tab for details.`;
+  if (!llmErrored) return line;
+  return `${line}
+
+${alert("WARNING", "LLM judgment unavailable", "showing deterministic findings only.")}`;
 }
 function buildTopMustFixSection(findings) {
   return [...findings].sort((a, b) => SEVERITY_RANK2[a.severity] - SEVERITY_RANK2[b.severity]).slice(0, TOP_MUST_FIX_MAX).map((finding) => `- \`${finding.path}:${finding.line}\` \u2014 ${finding.text}`).join("\n");
@@ -44089,10 +44152,14 @@ function formatVerdict(result, opts) {
   const findings = result.findings ?? [];
   const verdict = resolveVerdict(result.verdict, findings.length);
   const { label, badge } = labelAndBadge(verdict, result.failure);
-  const header = buildHeader(opts.duration, opts.jobUrl ?? "https://github.com");
+  const header = headerMeta({
+    duration: opts.duration,
+    sha: opts.headSha,
+    jobUrl: opts.jobUrl ?? "https://github.com"
+  });
   const marker17 = opts.historyMarker ?? "";
   const body = {
-    enhancementNote: result.enhancement ? enhancementNote(result.enhancement) : "",
+    enhancement: result.enhancement,
     verdictLabel: `\`${label}\``,
     verdictBadge: badge,
     // Surface the real error + the model's finish_reason when present, so a parse
@@ -44123,6 +44190,8 @@ function formatVerdict(result, opts) {
     mechanical: opts.mechanical ?? [],
     capNote: opts.capNote ?? "",
     ledger: opts.ledger ?? "",
+    coverage: opts.coverage,
+    memory: opts.memory,
     unanchored: opts.unanchored ?? [],
     dropped: opts.dropped ?? [],
     clusters: opts.clusters ?? []
@@ -44196,10 +44265,6 @@ function labelAndBadge(verdict, failure) {
     return { label: "request-changes", badge: "\u{1F6AB} Review incomplete \u2014 provider error" };
   }
   return { label: "request-changes", badge: "\u26A0\uFE0F Changes requested" };
-}
-function buildHeader(duration, jobUrl2) {
-  const base = duration ? `**AI Code Review finished in ${duration}**` : "**AI Code Review finished**";
-  return `${base} \u2014\u2014 [View job](${jobUrl2})`;
 }
 
 // src/github/reviewBatch.ts
@@ -44550,47 +44615,49 @@ var RECAP_LIST_CAP = 8;
 function renderRecapSection(diff, opts) {
   if (opts.hasPrior === false) return "";
   const compact = opts.compact === true;
-  const lines = [];
-  lines.push("### Changes since last review");
-  lines.push("");
-  if (opts.fullReview) {
-    lines.push(renderBucket("\u2705 Resolved", diff.counts.resolved, diff.resolved, compact));
-    lines.push("");
-  } else {
-    lines.push("_scoped review \u2014 resolutions not recomputed_");
-    lines.push("");
+  const since = opts.sinceSha ? `**Since \`${opts.sinceSha.slice(0, 7)}\`**` : "**Since last review**";
+  const open2 = `\u{1F501} **${diff.counts.open}** still open`;
+  const fresh = `\u26A0\uFE0F **${diff.counts.new}** new`;
+  const row = opts.fullReview ? `${since} &nbsp;\u2705 **${diff.counts.resolved}** resolved \xB7 ${open2} \xB7 ${fresh}` : `${since} &nbsp;${open2} \xB7 ${fresh} \xB7 <sub>scoped review \u2014 resolutions not recomputed</sub>`;
+  const blocks = [row];
+  if (opts.fullReview && diff.counts.resolved > 0) {
+    blocks.push(renderItems(diff.counts.resolved, diff.resolved, compact, "\u2705 "));
   }
-  lines.push(renderBucket("\u{1F501} Still open", diff.counts.open, diff.open, compact));
-  lines.push("");
-  lines.push(renderBucket("\u26A0\uFE0F New", diff.counts.new, diff.new, compact));
-  lines.push("");
-  return lines.join("\n");
+  const folded = [];
+  const titles = [];
+  if (diff.counts.open > 0) {
+    titles.push(`Still open (${diff.counts.open})`);
+    folded.push("\u{1F501} **Still open**", renderItems(diff.counts.open, diff.open, compact, ""));
+  }
+  if (diff.counts.new > 0) {
+    titles.push(`New (${diff.counts.new})`);
+    folded.push("\u26A0\uFE0F **New**", renderItems(diff.counts.new, diff.new, compact, ""));
+  }
+  if (folded.length > 0) blocks.push(details(titles.join(" \xB7 "), folded.join("\n\n")));
+  return blocks.join("\n\n");
 }
+var VERDICT_MARK = { approved: "\u2705 ", changes: "\u26A0\uFE0F ", error: "\u{1F6AB} " };
 function renderHistorySection(history) {
   if (history.length === 0) return "";
-  const lines = [];
-  lines.push(`<details><summary>\u{1F4DC} Review history (${history.length} passes)</summary>`);
-  lines.push("");
-  lines.push("| Pass | Commit | Verdict | New | Open | Resolved |");
-  lines.push("| --- | --- | --- | --- | --- | --- |");
-  history.forEach((e, i) => {
+  const passes = history.length === 1 ? "1 pass" : `${history.length} passes`;
+  const rows = history.map((e, i) => {
     const c = e.counts ?? { new: 0, open: 0, resolved: 0, total: 0 };
-    lines.push(
-      `| ${i + 1} | \`${e.sha || "?"}\` | ${e.verdict || "?"} | ${c.new ?? 0} | ${c.open ?? 0} | ${c.resolved ?? 0} |`
-    );
+    const verdict = e.verdict ? `${VERDICT_MARK[e.verdict] ?? ""}${e.verdict}` : "?";
+    return `| ${i + 1} | \`${e.sha || "?"}\` | ${verdict} | ${c.new ?? 0} | ${c.open ?? 0} | ${c.resolved ?? 0} |`;
   });
-  lines.push("");
-  lines.push("</details>");
-  return lines.join("\n");
+  const table = [
+    "| Pass | Commit | Verdict | New | Open | Resolved |",
+    "| :-- | :-- | :-- | --: | --: | --: |",
+    ...rows
+  ].join("\n");
+  return details(`<b>Review history</b> \xB7 ${passes}`, table);
 }
-function renderBucket(label, count, items, compact) {
-  const lines = [`${label} (${count})`];
-  if (count === 0) return lines.join("\n");
-  for (const f of items.slice(0, RECAP_LIST_CAP)) {
+function renderItems(count, items, compact, mark) {
+  const lines = items.slice(0, RECAP_LIST_CAP).map((f) => {
     const loc = f.line !== void 0 && f.line !== null ? `:${f.line}` : "";
     const ref = `\`${f.path ?? ""}${loc}\``;
-    lines.push(compact ? `- ${ref}` : `- ${ref} \u2014 ${f.text ?? ""}`);
-  }
+    return compact ? `- ${mark}${ref}` : `- ${mark}${ref} \u2014 ${f.text ?? ""}`;
+  });
   const extra = count - RECAP_LIST_CAP;
   if (extra > 0) lines.push(`_\u2026 ${extra} more_`);
   return lines.join("\n");
@@ -44733,12 +44800,21 @@ function renderMemory(input, findings, verdict, reduction, exceptions) {
     history: [],
     fullReview: input.fullReview,
     hasPrior: true,
-    compact: input.inputs.verbosity === "compact"
+    compact: input.inputs.verbosity === "compact",
+    // Older markers carry no reviewed_sha; their last history entry names the round.
+    sinceSha: input.prior?.reviewed_sha ?? input.prior?.history?.at(-1)?.sha
   }) : "";
+  const history = state.next_state.history;
   return {
     recap,
-    history: renderHistorySection(state.next_state.history),
-    marker: encodeMarker(state.next_state)
+    history: renderHistorySection(history),
+    marker: encodeMarker(state.next_state),
+    ...history.length > 0 ? {
+      memory: {
+        passes: history.length,
+        resolved: history.reduce((sum, e) => sum + (e.counts?.resolved ?? 0), 0)
+      }
+    } : {}
   };
 }
 
@@ -45099,7 +45175,7 @@ async function publish(input) {
   const { validated, findings, suppressed, verdict, capNote, capped } = settled;
   const expanded = expandRepresentatives(findings, reduction);
   const inline = inputs.inlineComments ? await postInline(input, findings, reduction) : { applied: { toCreate: [], toReply: [], toResolve: [] }, unanchored: [], dropped: [] };
-  const { recap, history, marker: marker17 } = renderMemory(input, expanded, verdict, reduction, exceptions);
+  const mem = renderMemory(input, expanded, verdict, reduction, exceptions);
   const { body } = formatVerdict(validated, {
     botName: inputs.botName,
     botLogoUrl: inputs.botLogoUrl,
@@ -45107,9 +45183,12 @@ async function publish(input) {
     branch: context3.headRef ?? (input.reviewHead === "HEAD" ? input.baseBranch : input.reviewHead),
     jobUrl: jobUrl(context3),
     duration: formatDuration(input.now() - input.startMs),
-    recap,
-    history,
-    historyMarker: marker17,
+    headSha: input.reviewedSha,
+    coverage: coverageCounts(ledger),
+    memory: mem.memory,
+    recap: mem.recap,
+    history: mem.history,
+    historyMarker: mem.marker,
     mechanical: input.mechanical,
     verbosity: inputs.verbosity,
     changedFiles: input.diff.total_files,
@@ -45208,7 +45287,7 @@ function patchSettledBody(body, outcome) {
   if (outcome.verdict === "approved") {
     const swapped = swapLabel(out);
     if (swapped === null) return null;
-    out = swapped.replace(VERDICT_LINE, `**Verdict:** ${labelAndBadge("approved").badge}`);
+    out = swapped.replace(VERDICT_LINE, verdictLine(labelAndBadge("approved").badge));
   }
   return out.replace(VERDICT_LINE, (line) => `${line}
 

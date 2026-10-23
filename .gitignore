@@ -2,3 +2,4 @@
 docs/toolu/
 .serena/
 .claude/settings.local.json
+.toolu/tmp/
