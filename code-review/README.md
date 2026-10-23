@@ -896,7 +896,7 @@ resolution without posting the note again.
 | `VERBOSITY` | no | `compact` | Verdict-comment shape: `compact` (default) collapses the checklist to one line and renders recap buckets as `path:line` refs; `full` restores the multi-line checklist and inline recap text. Findings, the `### Findings` heading, and the state marker are identical in both. An unrecognized value warns and falls back to `compact`. See [Example verdict](#example-verdict). |
 | `RUN_SECRET_SCAN` | no | `true` | Run the deterministic secret scan (gitleaks) before the LLM review; its findings feed the LLM as triage context and upload to Code Scanning. See [Deterministic checks](#deterministic-checks). |
 | `RUN_SAST` | no | `true` | Run the deterministic SAST pass (Opengrep) before the LLM review; same flow as above. |
-| `SAST_RULES` | no | `p/typescript` | Opengrep rule config(s) for the SAST pass (comma-separated). |
+| `SAST_RULES` | no | `p/typescript` | Opengrep rule config(s) for the SAST pass (comma-separated). TypeScript only out of the box — multi-language repos should broaden this (e.g. `p/javascript,p/typescript` or `p/default`). |
 | `TOOLU_API_KEY` | no | `` | toolu.sh org API token (`toolu_…`) enabling review-run reporting to the platform. Empty (default) disables reporting. Only finding metadata is sent — never code, text, suggestions, or quoted lines. Requires `INLINE_COMMENTS: true`. See [Platform reporting](#platform-reporting). |
 | `TOOLU_API_URL` | no | `https://api.toolu.sh` | Base URL of the toolu.sh API. Override only for a self-hosted platform. |
 

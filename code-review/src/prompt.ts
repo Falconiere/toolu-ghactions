@@ -68,6 +68,20 @@ export interface PromptOptions {
   rulesChanged?: string[];
 }
 
+/**
+ * Caps on the per-package file lists. A rename-heavy or generated-file PR can
+ * list thousands of paths; unbounded, that list alone would eat the shared
+ * prompt budget and push users toward MAX_TOKENS/MAX_CHUNK_LINES tuning. The
+ * diff itself still carries every file's hunks — only the manifest-style lists
+ * are capped, each with an omission count.
+ */
+
+/** Max paths listed in the Changed Files line. */
+export const MAX_CHANGED_FILES_LISTED = 200;
+
+/** Max entries listed in the Binary / Skipped sections. */
+export const MAX_LISTED_FILES = 50;
+
 /** Thrown when no system prompt is available (the bash `exit 1` paths). */
 export class PromptError extends Error {
   constructor(message: string) {
@@ -127,6 +141,15 @@ function resolveSystemPrompt(opts: PromptOptions): string {
 }
 
 /**
+ * Cap a manifest-style path list, appending an omission count instead of
+ * silently dropping entries. The diff still carries every file's hunks.
+ */
+export function capList(items: readonly string[], max: number): string[] {
+  if (items.length <= max) return [...items];
+  return [...items.slice(0, max), `(+${items.length - max} more)`];
+}
+
+/**
  * Build the provider-agnostic envelope. Assembles the USER prompt in a prompt-cache-friendly
  * order (spec §Layer 2 "Prompt-cache-friendly ordering"): a SHARED PREFIX depending only on
  * review-global data — intro, codebase overview, project rules (TRUSTED), the brief (fenced
@@ -148,7 +171,7 @@ export function buildPrompt(opts: PromptOptions): Envelope {
 
   const diff = opts.diff;
   const diffText = diff.diff ?? "";
-  const changedFiles = (diff.changed_files ?? []).join(", ");
+  const changedFiles = capList(diff.changed_files ?? [], MAX_CHANGED_FILES_LISTED).join(", ");
   const binaryFiles = diff.binary_files ?? [];
   const droppedFiles = (diff.dropped_files ?? []).map((d) => `${d.path} (${d.reason})`);
   const renames = diff.renames ?? [];
@@ -201,11 +224,16 @@ export function buildPrompt(opts: PromptOptions): Envelope {
   }
 
   if (binaryFiles.length > 0) {
-    user += `\n\n## Binary Files (not reviewed)\n${binaryFiles.map((f) => `- ${f}`).join("\n")}`;
+    user += `\n\n## Binary Files (not reviewed)\n${capList(binaryFiles, MAX_LISTED_FILES)
+      .map((f) => `- ${f}`)
+      .join("\n")}`;
   }
 
   if (droppedFiles.length > 0) {
-    user += `\n\n## Skipped Files (lockfiles/generated/minified — not reviewed)\n${droppedFiles
+    user += `\n\n## Skipped Files (lockfiles/generated/minified — not reviewed)\n${capList(
+      droppedFiles,
+      MAX_LISTED_FILES,
+    )
       .map((f) => `- ${f}`)
       .join("\n")}`;
   }
