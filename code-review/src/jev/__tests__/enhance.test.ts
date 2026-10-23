@@ -219,7 +219,7 @@ describe("skip reason in the Jev note", () => {
     expect(out.findings).toEqual(findings);
     if (!out.summary) throw new Error("expected a summary");
     expect(enhancementNote(out.summary)).toBe(
-      "Jev: 0 assessments; 0 findings rechecked; 0 confirmed dismissals; 0 additional package reviews; 0 unavailable; 16 skipped (baseline coverage incomplete).",
+      "**0** assessments · **0** findings rechecked · **0** confirmed dismissals · **0** additional package reviews · **0** unavailable · **16** skipped (baseline coverage incomplete)",
     );
   });
 
@@ -232,7 +232,7 @@ describe("skip reason in the Jev note", () => {
     if (!out.summary) throw new Error("expected a summary");
     expect(out.findings).toEqual(findings);
     expect(enhancementNote(out.summary)).toBe(
-      "Jev: 0 assessments; 0 findings rechecked; 0 confirmed dismissals; 0 additional package reviews; 0 unavailable; 16 skipped (wall deadline reached).",
+      "**0** assessments · **0** findings rechecked · **0** confirmed dismissals · **0** additional package reviews · **0** unavailable · **16** skipped (wall deadline reached)",
     );
   });
 
@@ -250,7 +250,7 @@ describe("skip reason in the Jev note", () => {
         assessments: [],
       }),
     ).toBe(
-      "Jev: 3 assessments; 1 findings rechecked; 0 confirmed dismissals; 0 additional package reviews; 0 unavailable; 0 skipped.",
+      "**3** assessments · **1** findings rechecked · **0** confirmed dismissals · **0** additional package reviews · **0** unavailable · **0** skipped",
     );
   });
 });

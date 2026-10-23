@@ -4,6 +4,7 @@ import type { ProviderResult } from "@/llm/reviewWithModel.js";
 import type { Finding } from "@/llm/schema.js";
 import type { MechanicalFinding } from "@/mechanical/sarif.js";
 import { encodeMarker } from "@/state.js";
+import type { EnhancementSummary } from "@/jev/enhance.js";
 
 const MARKER = encodeMarker({
   schema: "toolu-review-state",
@@ -18,6 +19,9 @@ const MARKER = encodeMarker({
     },
   ],
 });
+
+/** A since row as review/recap.ts renders it. */
+const RECAP = "**Since `abc1234`** &nbsp;✅ **0** resolved · 🔁 **0** still open · ⚠️ **1** new";
 
 /** The last non-empty line of a body. */
 function lastLine(body: string): string {
@@ -80,11 +84,11 @@ describe("formatVerdict", () => {
       top_must_fix: [],
     };
     const { body } = formatVerdict(result, {
-      recap: "### Changes since last review\n\n⚠️ New (1)",
+      recap: RECAP,
       history: "",
       historyMarker: MARKER,
     });
-    expect(body).toContain("### Changes since last review");
+    expect(body).toContain(RECAP);
     expect(lastLine(body)).toBe(MARKER);
   });
 
@@ -139,13 +143,13 @@ describe("formatVerdict", () => {
       other_checks: "checks",
       top_must_fix: [],
     };
-    const recap = "### Changes since last review\n\n⚠️ New (400)";
+    const recap = RECAP;
     const { body } = formatVerdict(result, { recap, history: "", historyMarker: MARKER });
 
     // Body fits under the cap.
     expect(body.length).toBeLessThanOrEqual(65000);
     // Recap and marker survived the shrink; marker is still the last line.
-    expect(body).toContain("### Changes since last review");
+    expect(body).toContain(RECAP);
     expect(body).toContain(MARKER);
     expect(lastLine(body)).toBe(MARKER);
     // Lowest-severity dropped first: blockers/highs kept, the overflow note present.
@@ -205,9 +209,9 @@ describe("formatVerdict — verbosity (compact vs full) + dedup", () => {
       top_must_fix: [],
     };
     const { body } = formatVerdict(bare, {});
-    expect(body).not.toContain("### Review Plan");
+    expect(body).not.toContain("<b>Review plan</b>");
     expect(body).not.toContain("_No review plan provided._");
-    expect(body).not.toContain("### Other checks");
+    expect(body).not.toContain("<b>Other checks</b>");
     expect(body).not.toContain("_No additional checks performed._");
     expect(body).toContain("### Top-N must-fix");
   });
@@ -267,7 +271,7 @@ describe("formatVerdict — mechanical findings + graceful degradation", () => {
       top_must_fix: [],
     };
     const { body } = formatVerdict(result, { mechanical: [secret] });
-    expect(body).toContain("### Mechanical checks");
+    expect(body).toContain("**Mechanical checks** · ");
     expect(body).toContain("1 gitleaks");
     expect(body).toContain("**[gitleaks]**"); // provenance tag on the finding's meta line
   });
@@ -275,9 +279,9 @@ describe("formatVerdict — mechanical findings + graceful degradation", () => {
   it("on LLM error WITH mechanical findings, degrades gracefully (section + 'LLM judgment unavailable')", () => {
     const result: ProviderResult = { verdict: "error", findings: [], error: "boom" };
     const { body, label } = formatVerdict(result, { mechanical: [secret] });
-    expect(body).toContain("### Mechanical checks");
+    expect(body).toContain("**Mechanical checks** · ");
     expect(body).toContain("LLM judgment unavailable");
-    expect(body).toContain("**Provider error:**"); // a real abstain keeps the error label
+    expect(body).toContain("> [!CAUTION]\n> **Provider error:** boom"); // a real abstain keeps the error label
     expect(label).toBe("request-changes"); // error still fails-safe to do-not-merge
   });
 
@@ -303,10 +307,10 @@ describe("formatVerdict — mechanical findings + graceful degradation", () => {
       finishReason: "length",
     };
     const { body } = formatVerdict(result, { mechanical: [secret] });
-    expect(body).toContain("### Mechanical checks");
+    expect(body).toContain("**Mechanical checks** · ");
     expect(body).toContain("1 gitleaks");
     expect(body).not.toContain("LLM judgment unavailable");
-    expect(body).toContain("**Partial review:**");
+    expect(body).toContain("> [!WARNING]\n> **Partial review:** output truncated");
   });
 
   it("a recovered partial review is NOT 'LLM judgment unavailable' (toolu-conventions#3 regression)", () => {
@@ -368,7 +372,7 @@ describe("formatVerdict — mechanical findings + graceful degradation", () => {
       error: "Review findings lacked valid source evidence; affected files remain unreviewed.",
     };
     const { body } = formatVerdict(result, { mechanical: [secret] });
-    expect(body).toContain("### Mechanical checks");
+    expect(body).toContain("**Mechanical checks** · ");
     expect(body).toContain("1 gitleaks");
     expect(body).not.toContain("LLM judgment unavailable");
   });
@@ -380,12 +384,148 @@ describe("capNote (MAX_ROUNDS surrender note)", () => {
     const { body } = formatVerdict(result, {
       capNote: "Round cap reached (MAX_ROUNDS=5): verdict auto-approved.",
     });
-    expect(body).toContain("🔁 **Round cap:** Round cap reached (MAX_ROUNDS=5)");
+    expect(body).toContain("> [!NOTE]\n> **Round cap:** Round cap reached (MAX_ROUNDS=5)");
   });
 
   it("omits the callout entirely when capNote is absent", () => {
     const result: ProviderResult = { verdict: "approved", findings: [] };
     const { body } = formatVerdict(result, {});
     expect(body).not.toContain("Round cap");
+  });
+});
+
+describe("formatVerdict — layout", () => {
+  const JOB = "https://github.com/Falconiere/toolu-ghactions/actions/runs/40005223494";
+  const result: ProviderResult = {
+    verdict: "changes",
+    findings: [
+      {
+        path: "apps/api/src/auth.ts",
+        line: 75,
+        severity: "blocker",
+        text: "allowlist bypass",
+        confidence: "high",
+      },
+      { path: "src/b.ts", line: 4, severity: "nit", text: "spacing", confidence: "high" },
+    ],
+    review_plan: "Check the auth allowlist.",
+    other_checks: "Tests look adequate.",
+    top_must_fix: [],
+  };
+  const jev: EnhancementSummary = {
+    assessed: 2,
+    rechecked: 0,
+    dismissed: 0,
+    additionalReviews: 0,
+    unavailable: 1,
+    skipped: 0,
+    calls: 3,
+    elapsedMs: 900,
+    assessments: [],
+  };
+
+  function render() {
+    return formatVerdict(
+      { ...result, enhancement: jev },
+      {
+        jobUrl: JOB,
+        duration: "1m 2s",
+        headSha: "abc1234def5678",
+        branch: "feat/auth",
+        changedFiles: 3,
+        coverage: {
+          reviewed: 2,
+          pattern: 0,
+          rename: 0,
+          formatting: 0,
+          vendored: 0,
+          generated: 0,
+          excluded: 1,
+          carried: 0,
+          unreviewed: 0,
+          pending: 0,
+        },
+        memory: { passes: 2, resolved: 1 },
+        recap: RECAP,
+        history:
+          "<details><summary><b>Review history</b> · 2 passes</summary>\n\n| t |\n\n</details>",
+        ledger: "**Coverage** · reviewed: 2 · excluded: 1\n",
+        historyMarker: MARKER,
+      },
+    ).body;
+  }
+
+  it("leads with the header meta, the heading and the <kbd> verdict line", () => {
+    const lines = render().split("\n");
+    expect(lines[0]).toBe(
+      `<img src="https://raw.githubusercontent.com/falconiere/toolu-ghactions/main/code-review/assets/logo.png" width="20" align="left"> **Toolu — Code Review** <sub>finished in 1m 2s · \`abc1234\` · [View job](${JOB})</sub>`,
+    );
+    expect(lines[2]).toBe("### Code Review — `feat/auth`");
+    expect(lines[4]).toBe("**Verdict:** <kbd>⚠️ Changes requested</kbd> 🔴 1 blocker ⚪ 1 nit");
+  });
+
+  it("orders tiles, recap, Top-N, Findings, status lines, details, checklist, label, marker", () => {
+    const body = render();
+    const order = [
+      "<table>",
+      RECAP,
+      "### Top-N must-fix",
+      "### Findings (2)",
+      "**Coverage** · ",
+      "<details><summary><b>Review plan</b></summary>",
+      "<details><summary><b>Other checks</b></summary>",
+      "<details><summary><b>Jev second opinion</b> · 2 assessed · 1 unavailable</summary>",
+      "<details><summary><b>Review history</b>",
+      "- [x] Reviewed 3-file diff — verdict set",
+      "`request-changes`",
+      MARKER,
+    ].map((needle) => body.indexOf(needle));
+    expect(order.every((at) => at >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+
+  it("ends the Top-N list right where ### Findings begins (babysit must_fix boundary)", () => {
+    const lines = render().split("\n");
+    const top = lines.indexOf("### Top-N must-fix");
+    expect(lines.slice(top + 1, top + 5)).toEqual([
+      "- `apps/api/src/auth.ts:75` — allowlist bypass",
+      "- `src/b.ts:4` — spacing",
+      "",
+      "### Findings (2)",
+    ]);
+  });
+
+  it("renders the tiles from the coverage counts and memory tally", () => {
+    const body = render();
+    expect(body).toContain(
+      '<td width="33%"><sub>FINDINGS</sub><h3>2</h3><sub>1 blocker · 1 nit</sub></td>',
+    );
+    expect(body).toContain(
+      '<td width="33%"><sub>RESOLVED</sub><h3>1</h3><sub>across 2 passes</sub></td>',
+    );
+    expect(body).toContain(
+      '<td width="33%"><sub>REVIEWED</sub><h3>2 <sub>FILES</sub></h3><sub>1 filtered</sub></td>',
+    );
+  });
+
+  it("keeps the verdict label alone on its line, right before the marker", () => {
+    const lines = render().replace(/\n+$/, "").split("\n");
+    expect(lines.at(-1)).toBe(MARKER);
+    expect(lines.at(-3)).toBe("`request-changes`");
+  });
+
+  it("quotes every line of a multi-line error detail inside one alert", () => {
+    const { body } = formatVerdict(
+      {
+        verdict: "error",
+        findings: [],
+        error: "chunk 1 failed\nchunk 2 failed",
+        finishReason: "length",
+      },
+      {},
+    );
+    expect(body).toContain(
+      "> [!CAUTION]\n> **Provider error:** chunk 1 failed\n> chunk 2 failed [finish_reason: length]",
+    );
   });
 });

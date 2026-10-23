@@ -13,6 +13,7 @@ import {
   buildRoundLedger,
   renderLedger,
   renderLedgerSummary,
+  coverageCounts,
   pathsWithStatus,
   LEDGER_MAX_ROWS,
   type CoverageEntry,
@@ -328,7 +329,11 @@ describe("renderLedgerSummary — the shrink ladder's middle rung", () => {
     const full = renderLedger(ledger, "full");
     const summary = renderLedgerSummary(ledger);
 
-    expect(summary).toBe("### Coverage\n\nreviewed: 1 · unreviewed: 1 · pending: 1\n");
+    expect(summary).toBe("**Coverage** · reviewed: 1 · unreviewed: 1 · pending: 1\n");
+    // Rows follow the bold label after one blank line, exactly as the section did.
+    expect(full.startsWith("**Coverage** · reviewed: 1 · unreviewed: 1 · pending: 1\n\n- `")).toBe(
+      true,
+    );
     // The rung is STRICTLY smaller — that is the only reason the ladder has it.
     expect(summary.length).toBeLessThan(full.length);
     expect(full).toContain("`src/b.ts`: unreviewed");
@@ -338,7 +343,7 @@ describe("renderLedgerSummary — the shrink ladder's middle rung", () => {
 
   it("renders `_no changed files_` for an empty ledger rather than an empty section", () => {
     expect(renderLedgerSummary(buildRoundLedger(input()))).toBe(
-      "### Coverage\n\n_no changed files_\n",
+      "**Coverage** · _no changed files_\n",
     );
   });
 
@@ -348,6 +353,37 @@ describe("renderLedgerSummary — the shrink ladder's middle rung", () => {
     const a = buildRoundLedger(input({ changedFiles: paths, coverage }));
     const b = buildRoundLedger(input({ changedFiles: [...paths].reverse(), coverage }));
     expect(renderLedgerSummary(a)).toBe(renderLedgerSummary(b));
+  });
+});
+
+describe("coverageCounts — the REVIEWED/CARRIED tiles' numbers", () => {
+  it("counts every status of a real round, zero-filling the absent ones", () => {
+    const ledger = buildRoundLedger(
+      input({
+        changedFiles: ["src/a.ts", "src/b.ts", "src/fmt.ts", "src/gone.ts"],
+        binaryFiles: ["assets/logo.png"],
+        droppedFiles: [{ path: "bun.lock", reason: "lockfile" }],
+        strata: { "src/fmt.ts": "formatting" },
+        carried: ["src/old.ts"],
+        coverage: new Map<string, CoverageEntry>([
+          ["src/a.ts", { status: "reviewed" }],
+          ["src/b.ts", { status: "reviewed" }],
+          ["src/gone.ts", { status: "pending" }],
+        ]),
+      }),
+    );
+    expect(coverageCounts(ledger)).toEqual({
+      reviewed: 2,
+      pattern: 0,
+      rename: 0,
+      formatting: 1,
+      vendored: 0,
+      generated: 0,
+      excluded: 2,
+      carried: 1,
+      unreviewed: 0,
+      pending: 1,
+    });
   });
 });
 

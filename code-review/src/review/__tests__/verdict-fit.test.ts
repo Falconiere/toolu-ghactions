@@ -96,7 +96,7 @@ describe("fitToSizeLimit — the ledger rungs run BEFORE findings shrink", () =>
 
     expect(body.length).toBeLessThanOrEqual(BODY_SIZE_LIMIT);
     // The section is still there — only its rows went.
-    expect(body).toContain("### Coverage");
+    expect(body).toContain("**Coverage** · ");
     expect(body).toContain("unreviewed: 50");
     expect(body).not.toContain("deep/deep/");
     // Findings are untouched: not one was dropped and nothing was truncated.
@@ -115,7 +115,7 @@ describe("fitToSizeLimit — the ledger rungs run BEFORE findings shrink", () =>
     const { body } = formatVerdict(result, { ledger, historyMarker: MARKER });
 
     expect(body.length).toBeLessThanOrEqual(BODY_SIZE_LIMIT);
-    expect(body).not.toContain("### Coverage");
+    expect(body).not.toContain("**Coverage** · ");
     // Findings still survive the whole ledger being sacrificed for them.
     expect(body).toContain("### Findings (10)");
     for (const f of findings(10)) expect(body).toContain(f.text);
@@ -143,7 +143,7 @@ describe("fitToSizeLimit — the ledger rungs run BEFORE findings shrink", () =>
 
     expect(body.length).toBeLessThanOrEqual(BODY_SIZE_LIMIT);
     // The ledger was sacrificed BEFORE any finding was — that is the ladder's order.
-    expect(body).not.toContain("### Coverage");
+    expect(body).not.toContain("**Coverage** · ");
     // Findings shrank, worst-first, with the drop stated (never silent).
     expect(body).toContain("### Findings (200)");
     expect(body).toMatch(
@@ -164,7 +164,7 @@ describe("fitToSizeLimit — the ledger rungs run BEFORE findings shrink", () =>
       { ledger, ledgerSummary: summary, historyMarker: MARKER },
     );
     expect(body.length).toBeLessThanOrEqual(BODY_SIZE_LIMIT);
-    expect(body).toContain("### Coverage");
+    expect(body).toContain("**Coverage** · ");
     expect(body).toContain("deep/");
     expect(body).toContain("unreviewed: 50");
   });
@@ -173,7 +173,7 @@ describe("fitToSizeLimit — the ledger rungs run BEFORE findings shrink", () =>
 describe("fitToSizeLimit — VerdictIntegrityError's narrowed condition", () => {
   /** A recap so large no rung can save the body — the memory blocks are never
    *  ladder candidates, so this is the one genuinely unfittable shape. */
-  const HUGE_RECAP = `### Changes since last review\n\n${"r".repeat(70_000)}`;
+  const HUGE_RECAP = `**Since last review** &nbsp;${"r".repeat(70_000)}`;
 
   it("throws when findings were shrunk to zero and the body STILL overflows", () => {
     expect(() =>

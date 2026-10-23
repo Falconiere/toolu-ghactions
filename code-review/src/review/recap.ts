@@ -2,10 +2,12 @@
 // collapsed review-history table. Port of render-recap.sh (both subcommands),
 // driven directly from a state.ts DiffResult instead of env JSON.
 //
-// Pure rendering — it never calls diffState itself. The markdown shape matches
-// the bash exactly: bucket lines "<emoji label> (N)" with capped `path:line —
-// text` lists, a "_… N more_" overflow note, and the <details> history table.
+// Pure rendering — it never calls diffState itself. The recap is a one-line row of
+// counts, the resolved refs, and the still-open/new lists folded into <details>;
+// every list is capped with a "_… N more_" overflow note. History is a collapsed,
+// right-aligned table.
 import type { DiffResult, Finding, HistoryEntry } from "@/state.js";
+import { details } from "@/review/summary.js";
 
 /** How many items to inline per recap bucket before collapsing the overflow. */
 const RECAP_LIST_CAP = 8;
@@ -33,6 +35,8 @@ export interface RecapOptions {
    * Defaults to false (full text).
    */
   compact?: boolean;
+  /** The prior review's head sha, shown in the since row (7 chars); absent → "last review". */
+  sinceSha?: string;
 }
 
 /**
@@ -47,73 +51,82 @@ export function renderRecap(diff: DiffResult, opts: RecapOptions): string {
   if (recap !== "") sections.push(recap);
   const history = renderHistorySection(opts.history);
   if (history !== "") sections.push(history);
-  return sections.join("\n");
+  return sections.join("\n\n");
 }
 
 /**
- * The "### Changes since last review" section. Empty string when no prior review
- * existed (hasPrior false). On a full review the Resolved bucket is shown;
- * otherwise the scoped-review note replaces it. Always renders Still-open + New.
+ * The since-last-review block. Empty string when no prior review existed (hasPrior
+ * false). A one-line row of counts leads; on a full review the resolved refs follow
+ * it (what got fixed is the news), while still-open and new — whose findings the
+ * Findings section already lists — fold into one collapsed block. A scoped review
+ * cannot recompute resolutions, so its row says so instead of counting them.
  */
 export function renderRecapSection(diff: DiffResult, opts: RecapOptions): string {
   if (opts.hasPrior === false) return "";
 
   const compact = opts.compact === true;
-  const lines: string[] = [];
-  lines.push("### Changes since last review");
-  lines.push("");
-  if (opts.fullReview) {
-    lines.push(renderBucket("✅ Resolved", diff.counts.resolved, diff.resolved, compact));
-    lines.push("");
-  } else {
-    lines.push("_scoped review — resolutions not recomputed_");
-    lines.push("");
+  const since = opts.sinceSha
+    ? `**Since \`${opts.sinceSha.slice(0, 7)}\`**`
+    : "**Since last review**";
+  const open = `🔁 **${diff.counts.open}** still open`;
+  const fresh = `⚠️ **${diff.counts.new}** new`;
+  const row = opts.fullReview
+    ? `${since} &nbsp;✅ **${diff.counts.resolved}** resolved · ${open} · ${fresh}`
+    : `${since} &nbsp;${open} · ${fresh} · <sub>scoped review — resolutions not recomputed</sub>`;
+
+  const blocks = [row];
+  if (opts.fullReview && diff.counts.resolved > 0) {
+    blocks.push(renderItems(diff.counts.resolved, diff.resolved, compact, "✅ "));
   }
-  lines.push(renderBucket("🔁 Still open", diff.counts.open, diff.open, compact));
-  lines.push("");
-  lines.push(renderBucket("⚠️ New", diff.counts.new, diff.new, compact));
-  lines.push("");
-  return lines.join("\n");
+  const folded: string[] = [];
+  const titles: string[] = [];
+  if (diff.counts.open > 0) {
+    titles.push(`Still open (${diff.counts.open})`);
+    folded.push("🔁 **Still open**", renderItems(diff.counts.open, diff.open, compact, ""));
+  }
+  if (diff.counts.new > 0) {
+    titles.push(`New (${diff.counts.new})`);
+    folded.push("⚠️ **New**", renderItems(diff.counts.new, diff.new, compact, ""));
+  }
+  if (folded.length > 0) blocks.push(details(titles.join(" · "), folded.join("\n\n")));
+  return blocks.join("\n\n");
 }
 
+/** Verdict decoration in the history table — the same vocabulary as the badges. */
+const VERDICT_MARK: Record<string, string> = { approved: "✅ ", changes: "⚠️ ", error: "🚫 " };
+
 /**
- * The collapsed "<details>📜 Review history" table. Empty string when there are
- * no history entries. Newest last; the Pass number is the 1-based row index.
+ * The collapsed "Review history" table. Empty string when there are no history
+ * entries. Newest last; the Pass number is the 1-based row index.
  */
 export function renderHistorySection(history: HistoryEntry[]): string {
   if (history.length === 0) return "";
 
-  const lines: string[] = [];
-  lines.push(`<details><summary>📜 Review history (${history.length} passes)</summary>`);
-  lines.push("");
-  lines.push("| Pass | Commit | Verdict | New | Open | Resolved |");
-  lines.push("| --- | --- | --- | --- | --- | --- |");
-  history.forEach((e, i) => {
+  const passes = history.length === 1 ? "1 pass" : `${history.length} passes`;
+  const rows = history.map((e, i) => {
     const c = e.counts ?? { new: 0, open: 0, resolved: 0, total: 0 };
-    lines.push(
-      `| ${i + 1} | \`${e.sha || "?"}\` | ${e.verdict || "?"} | ${c.new ?? 0} | ${c.open ?? 0} | ${c.resolved ?? 0} |`,
-    );
+    const verdict = e.verdict ? `${VERDICT_MARK[e.verdict] ?? ""}${e.verdict}` : "?";
+    return `| ${i + 1} | \`${e.sha || "?"}\` | ${verdict} | ${c.new ?? 0} | ${c.open ?? 0} | ${c.resolved ?? 0} |`;
   });
-  lines.push("");
-  lines.push("</details>");
-  return lines.join("\n");
+  const table = [
+    "| Pass | Commit | Verdict | New | Open | Resolved |",
+    "| :-- | :-- | :-- | --: | --: | --: |",
+    ...rows,
+  ].join("\n");
+  return details(`<b>Review history</b> · ${passes}`, table);
 }
 
 /**
- * Render one bucket: a labelled count line plus a capped item list. Mirrors
- * render-recap.sh's render_bucket: nothing but the label when count is 0, at most
- * RECAP_LIST_CAP items inlined, then a "_… N more_" note for the rest. In full mode
- * each item is `path:line — text`; in compact mode it is the `path:line` ref only.
+ * One bucket's items: at most RECAP_LIST_CAP inlined, then a "_… N more_" note for
+ * the rest. In full mode each item is `path:line — text`; in compact mode it is the
+ * `path:line` ref only. `mark` prefixes every item (the resolved list's ✅).
  */
-function renderBucket(label: string, count: number, items: Finding[], compact: boolean): string {
-  const lines: string[] = [`${label} (${count})`];
-  if (count === 0) return lines.join("\n");
-
-  for (const f of items.slice(0, RECAP_LIST_CAP)) {
+function renderItems(count: number, items: Finding[], compact: boolean, mark: string): string {
+  const lines = items.slice(0, RECAP_LIST_CAP).map((f) => {
     const loc = f.line !== undefined && f.line !== null ? `:${f.line}` : "";
     const ref = `\`${f.path ?? ""}${loc}\``;
-    lines.push(compact ? `- ${ref}` : `- ${ref} — ${f.text ?? ""}`);
-  }
+    return compact ? `- ${mark}${ref}` : `- ${mark}${ref} — ${f.text ?? ""}`;
+  });
   const extra = count - RECAP_LIST_CAP;
   if (extra > 0) lines.push(`_… ${extra} more_`);
   return lines.join("\n");

@@ -28,7 +28,7 @@ import type { PriorThread } from "@/github/threads.js";
 import { reconcile } from "@/review/reconcile.js";
 import type { Reconciliation, ReplyAction } from "@/review/reconcile.js";
 import type { IncrementalScope } from "@/review/incremental.js";
-import { renderLedger, renderLedgerSummary } from "@/review/ledger.js";
+import { coverageCounts, renderLedger, renderLedgerSummary } from "@/review/ledger.js";
 import type { CoverageLedger } from "@/review/ledger.js";
 import type { MechanicalFinding } from "@/mechanical/sarif.js";
 import type { Finding } from "@/llm/schema.js";
@@ -141,7 +141,7 @@ export async function publish(input: PublishInput): Promise<ReviewResult> {
     ? await postInline(input, findings, reduction)
     : { applied: { toCreate: [], toReply: [], toResolve: [] }, unanchored: [], dropped: [] };
 
-  const { recap, history, marker } = renderMemory(input, expanded, verdict, reduction, exceptions);
+  const mem = renderMemory(input, expanded, verdict, reduction, exceptions);
   const { body } = formatVerdict(validated, {
     botName: inputs.botName,
     botLogoUrl: inputs.botLogoUrl,
@@ -149,9 +149,12 @@ export async function publish(input: PublishInput): Promise<ReviewResult> {
     branch: context.headRef ?? (input.reviewHead === "HEAD" ? input.baseBranch : input.reviewHead),
     jobUrl: jobUrl(context),
     duration: formatDuration(input.now() - input.startMs),
-    recap,
-    history,
-    historyMarker: marker,
+    headSha: input.reviewedSha,
+    coverage: coverageCounts(ledger),
+    memory: mem.memory,
+    recap: mem.recap,
+    history: mem.history,
+    historyMarker: mem.marker,
     mechanical: input.mechanical,
     verbosity: inputs.verbosity,
     changedFiles: input.diff.total_files,

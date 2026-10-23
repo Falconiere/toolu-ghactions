@@ -324,6 +324,12 @@ describe("runReview — end to end", () => {
     const lastBody = rec.updated.at(-1)?.body ?? rec.created.at(-1)?.body ?? "";
     expect(lastBody).toContain("request-changes");
     expect(lastBody).toContain("toolu-review-state:v1");
+    // The header names the reviewed head (short sha), and the REVIEWED tile counts the
+    // real ledger of this one-file diff (publish → coverageCounts → tiles).
+    expect(lastBody.split("\n")[0]).toContain(
+      `<sub>finished in 0s · \`${headSha.slice(0, 7)}\` · [View job](https://github.com/test-org/test-repo/actions/runs/12345)</sub>`,
+    );
+    expect(lastBody).toMatch(/<sub>REVIEWED<\/sub><h3>1 <sub>FILES<\/sub><\/h3>/);
   });
 
   it("re-uses the existing sticky: in-progress + verdict update the SAME comment, no second create", async () => {
@@ -432,7 +438,7 @@ describe("runReview — end to end", () => {
     // The LLM failed, but the review is NOT empty: deterministic findings survive.
     expect(result.verdict).toBe("error");
     const lastBody = rec.updated.at(-1)?.body ?? rec.created.at(-1)?.body ?? "";
-    expect(lastBody).toContain("### Mechanical checks");
+    expect(lastBody).toContain("**Mechanical checks** · ");
     expect(lastBody).toContain("LLM judgment unavailable");
   });
 

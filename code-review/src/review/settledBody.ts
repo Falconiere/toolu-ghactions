@@ -3,7 +3,9 @@
 // cannot be re-rendered — its review plan, other-checks text and coverage ledger are
 // not stored — so the patch edits only the lines that carry the verdict:
 //
-//   - the `**Verdict:**` line (→ ✅ Approved when nothing remains standing);
+//   - the `**Verdict:**` line (→ the ✅ Approved pill when nothing remains standing,
+//     built by the same `verdictLine` the renderer uses — so a sticky the previous
+//     layout posted comes out in the current one);
 //   - one `> ✅ **Settled:** …` note directly under it (inserted, or replaced when a
 //     previous settle pass left one — so the patch is idempotent);
 //   - the standalone label line and full-mode checklist label, when the verdict flips.
@@ -11,6 +13,7 @@
 // Everything else, the state marker above all, is left byte-for-byte. A body whose
 // layout is not recognised yields null and the caller writes nothing (fail closed).
 import { labelAndBadge } from "./verdict.js";
+import { verdictLine } from "./summary.js";
 import type { RecomputeOutcome } from "./recompute.js";
 
 const VERDICT_LINE = /^\*\*Verdict:\*\* .*$/m;
@@ -37,7 +40,7 @@ export function patchSettledBody(
   if (outcome.verdict === "approved") {
     const swapped = swapLabel(out);
     if (swapped === null) return null;
-    out = swapped.replace(VERDICT_LINE, `**Verdict:** ${labelAndBadge("approved").badge}`);
+    out = swapped.replace(VERDICT_LINE, verdictLine(labelAndBadge("approved").badge));
   }
   return out.replace(VERDICT_LINE, (line) => `${line}\n\n${settledNote(outcome)}`);
 }

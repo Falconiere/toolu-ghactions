@@ -244,7 +244,8 @@ export async function enhance(input: EnhancementInput): Promise<{
   for (const finding of findings) if (!unique.has(finding.fp)) unique.set(finding.fp, finding);
   return finish([...unique.values()]);
 }
-/** Compact deterministic visibility that survives removal of model commentary. */
+/** Compact deterministic visibility that survives removal of model commentary —
+ *  the body of the comment's collapsed Jev section (review/summary.ts). */
 export function enhancementNote(s: EnhancementSummary): string {
   const reason =
     s.skipReason === "incomplete-baseline"
@@ -252,5 +253,5 @@ export function enhancementNote(s: EnhancementSummary): string {
       : s.skipReason === "deadline"
         ? " (wall deadline reached)"
         : "";
-  return `Jev: ${s.assessed} assessments; ${s.rechecked} findings rechecked; ${s.dismissed} confirmed dismissals; ${s.additionalReviews} additional package reviews; ${s.unavailable} unavailable; ${s.skipped} skipped${reason}.`;
+  return `**${s.assessed}** assessments · **${s.rechecked}** findings rechecked · **${s.dismissed}** confirmed dismissals · **${s.additionalReviews}** additional package reviews · **${s.unavailable}** unavailable · **${s.skipped}** skipped${reason}`;
 }

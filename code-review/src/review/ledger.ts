@@ -56,6 +56,10 @@ const STATUS_ORDER: readonly CoverageStatus[] = [
  *  not-yet-attempted path must never hide behind a summary count alone. */
 const ALWAYS_ROW_STATUSES: ReadonlySet<CoverageStatus> = new Set(["unreviewed", "pending"]);
 
+/** The section's lead-in: a bold label, not a `### ` heading — the comment keeps
+ *  `### ` headings for the sections parsers key on (Findings, Top-N). */
+const COVERAGE_LABEL = "**Coverage** · ";
+
 /**
  * Build a ledger from `[path, entry]` pairs. Last write wins per path, so
  * accumulating from several sources (distill strata, dropped files, binary
@@ -175,14 +179,14 @@ export function renderLedger(ledger: CoverageLedger, verbosity: "compact" | "ful
     return status !== undefined && rowStatuses.has(status);
   });
 
-  if (rowPaths.length === 0) return `### Coverage\n\n${summary}\n`;
+  if (rowPaths.length === 0) return `${COVERAGE_LABEL}${summary}\n`;
 
   const shown = rowPaths.slice(0, LEDGER_MAX_ROWS);
   const lines = shown.map((p) => renderRow(p, ledger.entries[p]));
   const overflow = rowPaths.length - shown.length;
   if (overflow > 0) lines.push(`… ${overflow} more`);
 
-  return `### Coverage\n\n${summary}\n\n${lines.join("\n")}\n`;
+  return `${COVERAGE_LABEL}${summary}\n\n${lines.join("\n")}\n`;
 }
 
 /**
@@ -193,7 +197,13 @@ export function renderLedger(ledger: CoverageLedger, verbosity: "compact" | "ful
  */
 export function renderLedgerSummary(ledger: CoverageLedger): string {
   const paths = Object.keys(ledger.entries).sort();
-  return `### Coverage\n\n${renderSummary(ledger.entries, paths)}\n`;
+  return `${COVERAGE_LABEL}${renderSummary(ledger.entries, paths)}\n`;
+}
+
+/** Paths per status, every status present (zero-filled) — the numbers the
+ *  comment's REVIEWED and CARRIED tiles show (review/summary.ts). */
+export function coverageCounts(ledger: CoverageLedger): Record<CoverageStatus, number> {
+  return countStatuses(ledger.entries, Object.keys(ledger.entries));
 }
 
 /** Every path carrying `status`, sorted — the marker's exception lists
@@ -206,6 +216,16 @@ export function pathsWithStatus(ledger: CoverageLedger, status: CoverageStatus):
 
 /** The counts-per-status summary line: only non-zero statuses, canonical order. */
 function renderSummary(entries: Record<string, CoverageEntry>, paths: string[]): string {
+  const counts = countStatuses(entries, paths);
+  const parts = STATUS_ORDER.filter((s) => counts[s] > 0).map((s) => `${s}: ${counts[s]}`);
+  return parts.length > 0 ? parts.join(" · ") : "_no changed files_";
+}
+
+/** How many of `paths` carry each status. */
+function countStatuses(
+  entries: Record<string, CoverageEntry>,
+  paths: readonly string[],
+): Record<CoverageStatus, number> {
   const counts: Record<CoverageStatus, number> = {
     reviewed: 0,
     pattern: 0,
@@ -222,8 +242,7 @@ function renderSummary(entries: Record<string, CoverageEntry>, paths: string[]):
     const status = entries[p]?.status;
     if (status !== undefined) counts[status] += 1;
   }
-  const parts = STATUS_ORDER.filter((s) => counts[s] > 0).map((s) => `${s}: ${counts[s]}`);
-  return parts.length > 0 ? parts.join(" · ") : "_no changed files_";
+  return counts;
 }
 
 /** One exception row: `- \`path\`: status` with `(reason)` appended when present. */

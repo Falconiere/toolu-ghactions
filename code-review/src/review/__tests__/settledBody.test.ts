@@ -61,14 +61,18 @@ describe("patchSettledBody", () => {
     const body = changesBody("compact");
     const out = patchSettledBody(body, APPROVED);
     if (out === null) throw new Error("expected a patched body");
-    expect(lines(out).find((l) => l.startsWith("**Verdict:**"))).toBe("**Verdict:** ✅ Approved");
+    expect(lines(out).find((l) => l.startsWith("**Verdict:**"))).toBe(
+      "**Verdict:** <kbd>✅ Approved</kbd>",
+    );
     expect(out).toContain("> ✅ **Settled:** 1 of 1 finding(s)");
     expect(out).toContain("without a new model call");
     expect(lines(out)).toContain("`merge-approved`");
     expect(lines(out)).not.toContain("`request-changes`");
     expect(lastLine(out)).toBe(MARKER);
     // Everything else — header, review plan, findings list — is left exactly as it was.
-    expect(out).toContain("### Review Plan\nChecked the export surface.");
+    expect(out).toContain(
+      "<details><summary><b>Review plan</b></summary>\n\nChecked the export surface.\n\n</details>",
+    );
     expect(out).toContain("### Findings (1)");
   });
 
@@ -107,6 +111,51 @@ describe("patchSettledBody", () => {
     expect(copies(body)).toBe(2);
     expect(copies(out)).toBe(2);
     expect(out).toContain("> ✅ **Settled:** 1 of 1 finding(s)");
+  });
+
+  it("patches a sticky the previous version posted, rewriting its verdict line to the new pill", () => {
+    // The layout code-review v8.5 posted (live PR #138 sticky), on a changes round.
+    const legacy = [
+      '<img src="https://raw.githubusercontent.com/falconiere/toolu-ghactions/main/code-review/assets/logo.png" width="20" align="left"> **Toolu — Code Review**',
+      "**AI Code Review finished in 12s** —— [View job](https://github.com/Falconiere/toolu-ghactions/actions/runs/40005223494)",
+      "",
+      "---",
+      "### Code Review — `code-review/out-of-box-defaults-prompts`",
+      "",
+      "- [x] Reviewed 8-file diff — verdict set",
+      "",
+      "**Verdict:** ⚠️ Changes requested   🟡 1 medium",
+      "",
+      "### Findings (1)",
+      "",
+      "#### 🟡 Medium · 1",
+      "",
+      "**1.** `src/a.ts` **L3**",
+      "<sub>correctness</sub>",
+      "",
+      "Rename this export.",
+      "",
+      "### Coverage",
+      "",
+      "reviewed: 7 · excluded: 1",
+      "",
+      "`request-changes`",
+      "",
+      MARKER,
+      "",
+    ].join("\n");
+    const once = patchSettledBody(legacy, APPROVED);
+    if (once === null) throw new Error("expected a patched body");
+    expect(lines(once)).toContain("**Verdict:** <kbd>✅ Approved</kbd>");
+    expect(lines(once)[lines(once).indexOf("**Verdict:** <kbd>✅ Approved</kbd>") + 2]).toMatch(
+      /^> ✅ \*\*Settled:\*\* 1 of 1 finding\(s\)/,
+    );
+    expect(lines(once)).toContain("`merge-approved`");
+    expect(lines(once)).not.toContain("`request-changes`");
+    expect(lastLine(once)).toBe(MARKER);
+    // A second settle pass leaves exactly one note.
+    const twice = patchSettledBody(once, APPROVED) ?? "";
+    expect(twice.split("**Settled:**")).toHaveLength(2);
   });
 
   it("refuses a body it does not recognise (no verdict line) — the caller then writes nothing", () => {

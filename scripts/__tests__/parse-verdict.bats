@@ -208,3 +208,41 @@ EOF
     [ "$(jq -r '.findings[0].path' <<<"$output")" = "src/a.ts" ]
     [ "$(jq -r '.findings[0].text' <<<"$output")" = 'See the same mistake at **2.** `src/other.ts` **L99** which repeats it.' ]
 }
+
+# --- The golden bodies the renderer writes (code-review/src/review/__tests__/
+# verdict-layout.test.ts pins them byte-for-byte). Parsing the SAME files proves
+# the current layout keeps this parser's contract: identification, completeness,
+# and findings read only from the `### Findings` block.
+FIXTURES_REL="code-review/src/review/__tests__/fixtures/verdict-body"
+
+parse_fixture() {
+    run bash -c "'$SCRIPT' < '$REPO_ROOT/$FIXTURES_REL/$1'"
+}
+
+@test "golden approved body: a complete review comment with no findings" {
+    parse_fixture approved.md
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.is_review_comment' <<<"$output")" = "true" ]
+    [ "$(jq -r '.state' <<<"$output")" = "complete" ]
+    [ "$(jq -r '.findings | length' <<<"$output")" = "0" ]
+}
+
+@test "golden changes body: exactly the three findings, text intact, nothing from the tiles or details" {
+    parse_fixture changes.md
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.is_review_comment' <<<"$output")" = "true" ]
+    [ "$(jq -r '.state' <<<"$output")" = "complete" ]
+    [ "$(jq -r '.findings | length' <<<"$output")" = "3" ]
+    [ "$(jq -r '[.findings[] | "\(.path):\(.line):\(.severity)"] | join(",")' <<<"$output")" = "apps/api/src/auth.ts:75:blocker,apps/api/src/session.ts:12:high,apps/console/src/hooks/use-delete-repos.ts:58:medium" ]
+    [ "$(jq -r '.findings[0].text' <<<"$output")" = 'The allowlist pattern `:name` matches exactly one non-empty segment.' ]
+    [ "$(jq -r '.findings[1].text' <<<"$output")" = 'Session tokens are compared with === instead of a constant-time comparison.' ]
+    [ "$(jq -r '.findings[2].text' <<<"$output")" = 'The deleteInTurn function uses recursion instead of a loop.' ]
+}
+
+@test "golden provider-error body: identified and complete, no findings invented from alerts or coverage rows" {
+    parse_fixture provider-error.md
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.is_review_comment' <<<"$output")" = "true" ]
+    [ "$(jq -r '.state' <<<"$output")" = "complete" ]
+    [ "$(jq -r '.findings | length' <<<"$output")" = "0" ]
+}

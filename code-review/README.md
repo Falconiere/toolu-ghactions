@@ -98,9 +98,9 @@ with:
 Requests use [OpenRouter's System One endpoint](https://openrouter.ai/docs/guides/community/typesafe-sdk),
 never a direct TypeSafe API or separate credential. Baseline package review and
 source validation finish first. Incomplete baseline coverage (any partial package or
-unreviewed file) skips enhancements; the note then reads
-`N skipped (baseline coverage incomplete)`, or `(wall deadline reached)` when the
-deadline expired first.
+unreviewed file) skips enhancements; the comment's collapsed **Jev second opinion**
+section then reports `N skipped (baseline coverage incomplete)`, or
+`(wall deadline reached)` when the deadline expired first.
 Every enhancement request, retry and recheck shares the original `MAX_WALL_MS`
 deadline. Runtime defaults, package cap, concurrency and resume behavior remain unchanged.
 
@@ -313,8 +313,8 @@ their tool. A scanner that fails to install or run is non-fatal: the review degr
 LLM-only. On a **fork PR** (where `security-events: write` and the token are read-only) the
 SARIF upload is skipped and the review still posts as a comment.
 
-If the LLM call errors, the comment still shows the deterministic findings under a
-**Mechanical checks** section with an "LLM judgment unavailable" note — never a blank verdict.
+If the LLM call errors, the comment still shows the deterministic findings on its
+**Mechanical checks** line with an "LLM judgment unavailable" warning — never a blank verdict.
 
 ## How it works
 
@@ -463,41 +463,83 @@ A generative reviewer re-derives its findings from the diff on every push, so le
 
 With `INLINE_COMMENTS: true` (default), findings are posted as inline review comments anchored to the exact file and line, batched at up to 30 comments per `createReview` call. When the model has a concrete, high-confidence fix it attaches a ` ```suggestion ` block you can commit straight from the PR. Anchors are validated against GitHub's own view of the PR diff before posting: a finding on a file GitHub's own diff omits (or whose line can't be mapped onto it) is **never** posted inline — GitHub's Reviews API rejects the whole `createReview` call outright if it contains even one such comment, so there is no file-level fallback. It is instead rendered in the sticky comment's [`### Unanchored findings`](#coverage-ledger) section, so it is never silently lost. If a batch still fails after anchor validation (a comment GitHub's API rejects for a reason we couldn't predict up front), the batch is bisected to isolate the poison comment — every other comment in the batch still posts, and the isolated one is rendered in the sticky comment's [`### Findings GitHub rejected inline`](#coverage-ledger) section, so one bad comment can no longer zero out the whole review or silently drop a finding. Set `INLINE_COMMENTS: false` for a summary-comment-only review.
 
-The verdict comment is compatible with [`parse-verdict.sh`](https://github.com/Falconiere/toolu/blob/main/plugins/pr-babysit/scripts/parse-verdict.sh) and the [`pr-babysit`](https://github.com/Falconiere/toolu/tree/main/plugins/pr-babysit) automation loop, so toolu users can drop this into CI and their existing babysit workflow consumes the verdict without changes. The elements that contract depends on — the `### Code Review` heading, at least one checked `- [x]` box, the `### Findings` block, and the machine-readable label — are present in **both** verbosity modes (below). `parse-verdict.sh` reads both the current grouped-block findings layout and the older one-line-per-finding shape, so an older comment on a long-lived PR still parses; a babysit loop pinned to a **pre-7.3 copy** of the script reads the verdict, the label and completeness as before, but recovers no findings from a comment written by this version until that copy is updated.
+The verdict comment is compatible with [`parse-verdict.sh`](https://github.com/Falconiere/toolu/blob/main/plugins/pr-babysit/scripts/parse-verdict.sh) and the [`pr-babysit`](https://github.com/Falconiere/toolu/tree/main/plugins/pr-babysit) automation loop, so toolu users can drop this into CI and their existing babysit workflow consumes the verdict without changes. The elements that contract depends on — the `### Code Review` heading, the `**Verdict:**` line, at least one checked `- [x]` box, the `### Top-N must-fix` list (directly above `### Findings`, whose heading ends it), the `### Findings` block, and the machine-readable label alone on its line — are present in **both** verbosity modes (below). `parse-verdict.sh` reads both the current grouped-block findings layout and the older one-line-per-finding shape, so an older comment on a long-lived PR still parses; a babysit loop pinned to a **pre-7.3 copy** of the script reads the verdict, the label and completeness as before, but recovers no findings from a comment written by this version until that copy is updated.
 
 ## Example verdict
 
-The default **compact** shape — a single checklist line, findings sorted worst-severity-first, and sections omitted when empty:
+The sticky comment follows the toolu PR-comment layout, using only the HTML GitHub keeps in comments (no images, no CSS). From the top:
+
+1. **Header** — logo, bot name, duration, the reviewed head's short sha, and the job link.
+2. **Verdict** — the `**Verdict:**` line with the verdict as a `<kbd>` pill and the severity counts; a provider error, partial review or round cap follows as a GitHub alert.
+3. **Stat tiles** — FINDINGS (by severity), RESOLVED (across the stored passes; needs review memory), REVIEWED (files the model read, with how many were filtered or ⚠️ not reviewed), and CARRIED (paths carried from earlier passes) or, when nothing was carried, SCANNERS (gitleaks/opengrep counts).
+4. **Since last review** — one row of resolved / still open / new counts, the resolved refs, and the still-open and new refs collapsed (their findings are listed below).
+5. **`### Top-N must-fix`** and **`### Findings`**, then the repeated / unanchored / rejected sections when present.
+6. **Status lines** — Mechanical checks and Coverage.
+7. **Collapsed sections** — Review plan, Other checks, Jev second opinion, Review history.
+8. The checklist, the machine-readable label, and the hidden state marker.
+
+The default **compact** shape, on a second pass that requests changes:
 
 ```markdown
-**AI Code Review finished in 2m 15s** —— [View job](https://github.com/...)
+<img src="…/logo.png" width="20" align="left"> **Toolu — Code Review** <sub>finished in 3m 19s · `5a5e23f` · [View job](https://github.com/...)</sub>
 
-### Code Review — `feat/add-login`
+### Code Review — `feat/session-hardening`
 
-- [x] Reviewed 4-file diff — verdict set
+**Verdict:** <kbd>⚠️ Changes requested</kbd> 🔴 1 blocker 🟡 1 medium
 
-**Verdict:** ✅ Approved   🔵 2 low
+<table>
+<tr>
+<td width="25%"><sub>FINDINGS</sub><h3>2</h3><sub>1 blocker · 1 medium</sub></td>
+<td width="25%"><sub>RESOLVED</sub><h3>1</h3><sub>across 2 passes</sub></td>
+<td width="25%"><sub>REVIEWED</sub><h3>5 <sub>FILES</sub></h3><sub>1 filtered</sub></td>
+<td width="25%"><sub>CARRIED</sub><h3>3 <sub>FILES</sub></h3><sub>from earlier passes</sub></td>
+</tr>
+</table>
 
-### Review Plan
-Reviewing 4 files: 1 correctness-critical (format.ts), 1 test-quality, 1 config,
-1 security-sensitive (login.ts).
+**Since `d2033cc`** &nbsp;✅ **1** resolved · 🔁 **1** still open · ⚠️ **1** new
+
+- ✅ `packages/api/src/providers/vps/resolve.ts:14`
+
+<details><summary>Still open (1) · New (1)</summary>
+…
+</details>
+
+### Top-N must-fix
+- `apps/api/src/auth.ts:75` — The allowlist pattern `:name` matches exactly one non-empty segment.
+- `apps/console/src/hooks/use-delete-repos.ts:58` — The deleteInTurn function uses recursion instead of a loop.
 
 ### Findings (2)
 
-#### 🔵 Low · 2
+#### 🔴 Blocker · 1
 
-**1.** `src/utils/format.ts` **L17**
-<sub>doc/comment accuracy · high confidence</sub>
+**1.** `apps/api/src/auth.ts` **L75**
+<sub>security · high confidence</sub>
 
-Comment says 'Temporary workaround' with no removal date or tracking issue.
+The allowlist pattern `:name` matches exactly one non-empty segment.
 
-**2.** `src/utils/__tests__/format.test.ts` **L6**
-<sub>test quality · high confidence</sub>
+#### 🟡 Medium · 1
 
-Test assertion uses loose suffix match. Tighten to assert full identity.
+**2.** `apps/console/src/hooks/use-delete-repos.ts` **L58**
+<sub>correctness · high confidence</sub>
 
-`merge-approved`
+The deleteInTurn function uses recursion instead of a loop.
+
+**Coverage** · reviewed: 5 · excluded: 1 · carried: 3
+
+<details><summary><b>Review plan</b></summary>
+…
+</details>
+
+<details><summary><b>Review history</b> · 2 passes</summary>
+…
+</details>
+
+- [x] Reviewed 6-file diff — verdict set
+
+`request-changes`
 ```
+
+An approved pass reads `**Verdict:** <kbd>✅ Approved</kbd>`, shows `0` in the FINDINGS tile, and has no Top-N list.
 
 **Comment verbosity.** `VERBOSITY` (default `compact`) controls the comment shape:
 
@@ -508,14 +550,14 @@ Test assertion uses loose suffix match. Tighten to assert full identity.
 
 These changes apply in **both** modes, independent of `VERBOSITY`:
 
-- The auto-generated `### Top-N must-fix` section is gone — it was a verbatim duplicate of the (now worst-first-sorted) Findings list. The section renders only when the model supplies an explicit `top_must_fix`.
-- `### Review Plan` and `### Other checks` are omitted entirely when the model returns nothing for them (no `_No … provided._` filler).
+- `### Top-N must-fix` lists the three worst **surviving** findings (never the model's own `top_must_fix` prose) directly above `### Findings`, and is omitted when there are none.
+- The review plan, other checks, Jev counts and review history are collapsed `<details>` sections; the plan and other checks are omitted entirely when the model returns nothing for them (no `_No … provided._` filler).
 
 The verdict label at the bottom is machine-readable: `` `merge-approved` `` or `` `request-changes` ``. `pr-babysit` parses it to decide whether the PR is ready to merge. Unless `MANAGE_LABELS` is `false`, the same verdict is also applied as a real PR **label chip** (the opposite one is removed), so PRs are filterable in the GitHub UI — this needs `issues: write` in the workflow's `permissions` block.
 
 ## Coverage ledger
 
-Every review posts a **coverage ledger**, so a large PR can never silently lose files the way a flat "1 of 9 chunks failed" note used to — the sticky comment always accounts for every changed path by name when something needs your attention. It renders as its own `### Coverage` section: a one-line summary of counts per status is always present, plus per-path rows for the statuses below that must stay visible, capped at 50 rows (a "… N more" line covers the rest).
+Every review posts a **coverage ledger**, so a large PR can never silently lose files the way a flat "1 of 9 chunks failed" note used to — the sticky comment always accounts for every changed path by name when something needs your attention. It renders as a **Coverage** line — a one-line summary of counts per status, always present — plus per-path rows for the statuses below that must stay visible, capped at 50 rows (a "… N more" line covers the rest).
 
 | Status | Meaning |
 |---|---|
@@ -533,7 +575,7 @@ Every review posts a **coverage ledger**, so a large PR can never silently lose 
 
 Findings that can't reach an inline comment are never silently lost either — they render in two companion sections, each capped the same way: `### Unanchored findings` (files GitHub's own diff omits, or whose line can't be mapped onto it) and `### Findings GitHub rejected inline` (a comment isolated by 422-bisection that still failed on its own). See [Inline comments & suggestions](#inline-comments--suggestions).
 
-The ledger section is itself droppable under GitHub's 65 KB comment-size ceiling, but last: an oversized comment first drops the per-path exception rows (keeping the one-line summary), then drops the whole `### Coverage` section, and only *then* starts trimming findings, worst-severity-last. Coverage accounting is the last thing to go, not the first.
+The ledger section is itself droppable under GitHub's 65 KB comment-size ceiling, but last: an oversized comment first drops the per-path exception rows (keeping the one-line summary), then drops the whole Coverage block, and only *then* starts trimming findings, worst-severity-last. Coverage accounting is the last thing to go, not the first.
 
 ## Finding clustering
 
@@ -765,14 +807,16 @@ action attempts one bounded fetch of the previously reviewed commit from
 provides that object, it falls back to a full review; it never assumes missing
 history means unchanged code.
 
-With `REVIEW_MEMORY: true` (default), each review recaps what changed since the
-last pass instead of starting from scratch:
+With `REVIEW_MEMORY: true` (default), each review opens with a **Since `<sha>`**
+row counting what changed since the last pass instead of starting from scratch:
 
-- ✅ **resolved** — findings from the previous pass that are now gone
+- ✅ **resolved** — findings from the previous pass that are now gone (listed under the row)
 - 🔁 **still open** — findings carried over from the previous pass
 - ⚠️ **new** — findings introduced since the previous pass
 
-…plus a collapsed `<details>` **history** of recent passes (verdict + counts).
+Still-open and new refs fold into a collapsed block, since their findings are listed
+in `### Findings`. A collapsed **Review history** table shows recent passes (verdict +
+counts), and the RESOLVED tile totals the resolutions across them.
 Findings are matched across runs by a line-independent fingerprint
 (`path` + `category` + normalized text), so a finding that merely drifted to a
 new line stays **still open** rather than flipping to resolved + new.
@@ -882,7 +926,7 @@ resolution without posting the note again.
 | `MAX_FILES` | no | `0` (unlimited) | Maximum changed files (counted **after** generated/vendored/excluded files are dropped) before the action skips. `0` reviews any number of files — the only ceiling is your OpenRouter billing balance. Set a positive value to opt into a hard skip on huge PRs. |
 | `MAX_DIFF_LINES` | no | `0` (unlimited) | Maximum diff lines before truncation, applied **before** chunking. `0` reviews the whole diff. Set a positive value to keep the first N lines (lexicographic by file path) and append a truncation notice. |
 | `MAX_CHUNK_LINES` | no | `1500` | Per-chunk diff-line budget, applied to the diff **after** [distillation](#how-it-works) has collapsed mechanical repeats/renames/formatting away. When the remaining diff exceeds this, it is split into packages of **whole files** (≤ this many primed lines each), each reviewed in its own model call and the results merged — so a large PR no longer overwhelms a single call and abstains. Module-coupled files (e.g. a Rust `#[path]`/`mod` parent and its child) always share a package, and a single file over the budget rides alone **with its full post-change content attached** as read-only context, so the model never judges a construct from a truncated view. A package whose call fails to produce valid structured output is split and retried in bisecting halves (up to 4 leaves) to isolate just the file(s) actually at fault, instead of writing off the whole package; a leaf that still fails is recorded `unreviewed` in the [coverage ledger](#coverage-ledger) (never a confident approval over unreviewed files). `0` disables chunking (always one call). |
-| `MAX_CHUNKS` | no | `0` | Maximum chunks (= model calls) per review, bounding cost and wall-clock on very large PRs. **`0` (default, changed from `20` prior to `@v7` — see [v7 migration](#v7-migration)) = unlimited.** When set, files beyond the cap are recorded **per-file** as `unreviewed` in the [coverage ledger](#coverage-ledger), which also degrades a would-be `approved` verdict to `error`; the `### Other checks` section of the summary comment also carries a short notice naming them, on top of (not instead of) the per-file ledger rows. |
+| `MAX_CHUNKS` | no | `0` | Maximum chunks (= model calls) per review, bounding cost and wall-clock on very large PRs. **`0` (default, changed from `20` prior to `@v7` — see [v7 migration](#v7-migration)) = unlimited.** When set, files beyond the cap are recorded **per-file** as `unreviewed` in the [coverage ledger](#coverage-ledger), which also degrades a would-be `approved` verdict to `error`; the collapsed **Other checks** section of the summary comment also carries a short notice naming them, on top of (not instead of) the per-file ledger rows. |
 | `MAX_WALL_MS` | no | `600000` (10 min) | Shared model-work deadline covering cartography, retries, backoff and token escalation. `0` explicitly disables it. Active requests abort at expiry; recovered findings remain partial and their files stay `unreviewed`, while unstarted packages become `pending`. Neither advances `reviewed_tree`; both resume via [`@toolu resume`](#toolu-resume-resuming-a-paused-run), a workflow re-run, or the next push. Publishing runs outside this budget; use a workflow job timeout (for example 15 minutes) as an outer ceiling. |
 | `REQUEST_TIMEOUT_MS` | no | `180000` (3 min) | Per-attempt model deadline in milliseconds. Each chunk gets up to this long per attempt (retried a few times) before it is aborted and the chunk abstains (`This operation was aborted`). Raise it for slow/large models, lower it to fail faster. A non-positive value falls back to the default. |
 | `TOKEN` | no | `${{ github.token }}` | GitHub token for posting and editing comments. |

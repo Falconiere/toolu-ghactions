@@ -57,7 +57,7 @@ describe("scenario 13 — @toolu dismiss settles the verdict without a model cal
     expect(round.rec.addedLabels.at(-1)).toEqual(["merge-approved"]);
 
     const body = lastBody(round.rec);
-    expect(body).toContain("**Verdict:** ✅ Approved");
+    expect(body).toContain("**Verdict:** <kbd>✅ Approved</kbd>");
     expect(body).toContain("> ✅ **Settled:** 1 of 1 finding(s)");
     expect(body.split("\n")).toContain("`merge-approved`");
     expect(extractMarker(body)).toBe(extractMarker(round.body)); // marker byte-identical

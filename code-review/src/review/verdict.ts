@@ -1,4 +1,3 @@
-import { enhancementNote } from "@/jev/enhance.js";
 // review/verdict.ts — render the markdown verdict comment and its label. Port of
 // format-verdict.sh: maps the verdict to its PR label + badge, assembles the body
 // (via render.ts), and enforces GitHub's comment-size ceiling by shrinking the
@@ -16,6 +15,8 @@ import type { ProviderResult } from "@/llm/reviewWithModel.js";
 import type { Finding } from "@/llm/schema.js";
 import type { MechanicalFinding } from "@/mechanical/sarif.js";
 import type { FindingCluster } from "@/review/cluster.js";
+import type { CoverageStatus } from "@/review/ledger.js";
+import { headerMeta } from "@/review/summary.js";
 import {
   buildFindingsSection,
   buildTruncatedFindingsSection,
@@ -42,6 +43,12 @@ export interface VerdictOptions {
   jobUrl?: string;
   /** Optional "finished in Xm Ys" duration shown in the header. */
   duration?: string;
+  /** The reviewed head sha, shown short in the header. */
+  headSha?: string;
+  /** Ledger counts per status (review/ledger.ts `coverageCounts`) for the tiles. */
+  coverage?: Record<CoverageStatus, number>;
+  /** Review-memory tally (passes, resolved) for the RESOLVED tile. */
+  memory?: { passes: number; resolved: number };
   /** Pre-rendered recap markdown ("" when no prior review). */
   recap?: string;
   /** Pre-rendered history markdown ("" when no history). */
@@ -103,11 +110,15 @@ export function formatVerdict(
   const verdict = resolveVerdict(result.verdict, findings.length);
   const { label, badge } = labelAndBadge(verdict, result.failure);
 
-  const header = buildHeader(opts.duration, opts.jobUrl ?? "https://github.com");
+  const header = headerMeta({
+    duration: opts.duration,
+    sha: opts.headSha,
+    jobUrl: opts.jobUrl ?? "https://github.com",
+  });
   const marker = opts.historyMarker ?? "";
 
   const body: ReviewBody = {
-    enhancementNote: result.enhancement ? enhancementNote(result.enhancement) : "",
+    enhancement: result.enhancement,
     verdictLabel: `\`${label}\``,
     verdictBadge: badge,
     // Surface the real error + the model's finish_reason when present, so a parse
@@ -141,6 +152,8 @@ export function formatVerdict(
     mechanical: opts.mechanical ?? [],
     capNote: opts.capNote ?? "",
     ledger: opts.ledger ?? "",
+    coverage: opts.coverage,
+    memory: opts.memory,
     unanchored: opts.unanchored ?? [],
     dropped: opts.dropped ?? [],
     clusters: opts.clusters ?? [],
@@ -276,14 +289,6 @@ export function labelAndBadge(
     return { label: "request-changes", badge: "🚫 Review incomplete — provider error" };
   }
   return { label: "request-changes", badge: "⚠️ Changes requested" };
-}
-
-/** The header line: "**AI Code Review finished[ in DURATION]** —— [View job](url)". */
-function buildHeader(duration: string | undefined, jobUrl: string): string {
-  const base = duration
-    ? `**AI Code Review finished in ${duration}**`
-    : "**AI Code Review finished**";
-  return `${base} —— [View job](${jobUrl})`;
 }
 
 /** Re-export so callers can build findings without importing render.ts directly. */

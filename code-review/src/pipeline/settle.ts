@@ -208,14 +208,22 @@ function degradeOnCoverage(
   return "error";
 }
 
-/** Review memory: diff current findings vs prior, render recap + history + marker. */
+/** The review-memory tally the comment's RESOLVED tile shows: passes stored in the
+ *  (≤10-entry) history and the findings resolved across them. */
+export interface MemoryTally {
+  passes: number;
+  resolved: number;
+}
+
+/** Review memory: diff current findings vs prior, render recap + history + marker, and
+ *  tally the stored passes for the RESOLVED tile (absent when no pass is stored). */
 export function renderMemory(
   input: PublishInput,
   findings: StampedFinding[],
   verdict: string,
   reduction: Reduction,
   exceptions: LedgerExceptions,
-): { recap: string; history: string; marker: string } {
+): { recap: string; history: string; marker: string; memory?: MemoryTally } {
   if (!input.inputs.reviewMemory) return { recap: "", history: "", marker: "" };
   const state = diffState({
     prior: input.prior,
@@ -248,11 +256,22 @@ export function renderMemory(
         fullReview: input.fullReview,
         hasPrior: true,
         compact: input.inputs.verbosity === "compact",
+        // Older markers carry no reviewed_sha; their last history entry names the round.
+        sinceSha: input.prior?.reviewed_sha ?? input.prior?.history?.at(-1)?.sha,
       })
     : "";
+  const history = state.next_state.history;
   return {
     recap,
-    history: renderHistorySection(state.next_state.history),
+    history: renderHistorySection(history),
     marker: encodeMarker(state.next_state),
+    ...(history.length > 0
+      ? {
+          memory: {
+            passes: history.length,
+            resolved: history.reduce((sum, e) => sum + (e.counts?.resolved ?? 0), 0),
+          },
+        }
+      : {}),
   };
 }
