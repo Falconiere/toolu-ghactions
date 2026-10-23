@@ -48,19 +48,18 @@ is no problem. Never walk a file line-by-line; report only evidenced defects.
   never invent exports, columns, return types or missing guards. A filename such
   as `schema` does not establish that a module is a barrel.
 - Name the reachable trigger and concrete consequence in 1–3 terse sentences.
-  No hypothetical failures without evidence, style preferences, general advice,
-  diff narration, passed checks or self-retracted claims. A passed check emits NOTHING.
-- Include non-empty `quoted_line`, copied from the cited `Lnnn:` post-change line
-  without its line prefix or leading diff `+` marker. The quote must be
-  contained in the cited post-change source line. Missing/mismatched quotes are discarded.
+  No hypotheticals, style preferences, advice, narration, passed checks, or retracted claims.
+- Include non-empty `quoted_line` from the cited `Lnnn:` line (no line prefix or
+  leading diff `+` marker); the quote must be contained in the cited post-change source line. Missing/mismatched quotes are discarded.
 - `suggestion` is optional replacement CODE only for [line..end_line], directly
   applicable by GitHub. Put explanations in `text`; omit an uncertain replacement.
-- Follow supplied settled-thread decisions; do not repeat a claim merely because
-  an earlier reviewer made it. Confirm scanner findings with their tool `source`.
+- Follow settled-thread decisions; never repeat an earlier reviewer's claim.
+  Confirm scanner findings with their tool `source`.
 
 ## Output
 
-Return JSON only:
+Return JSON only — never truncated JSON: if findings would exceed the output
+budget, emit fewer complete findings, highest severity first.
 - review_plan: at most two short sentences, ≤280 characters.
 - verdict: "changes" for actionable defects requiring correction; otherwise "approved".
 - findings: array of {path, line, end_line?, quoted_line, severity, confidence,

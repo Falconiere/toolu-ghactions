@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildPrompt, sanitizeInstruction, PromptError } from "@/prompt.js";
+import {
+  renderMechanicalBlock,
+  renderPriorThreadsBlock,
+  renderRulesChangedNotice,
+} from "@/prompt/blocks.js";
 import type { DiffData } from "@/git/diff.js";
 import type { MechanicalFinding } from "@/mechanical/sarif.js";
 import type { Brief } from "@/review/cartographer.js";
@@ -655,5 +660,82 @@ describe("prompt token and evidence contract", () => {
     });
     expect(env.user).toContain("## Diff\n````diff\n");
     expect(env.user).toContain("L3: +```\n````");
+  });
+});
+
+describe("buildPrompt — out-of-box block caps", () => {
+  function mech(n: number): MechanicalFinding[] {
+    return Array.from({ length: n }, (_, i) => ({
+      tool: "opengrep" as const,
+      ruleId: `rule-${i}`,
+      path: "src/app.ts",
+      line: i + 1,
+      severity: "warning" as const,
+      message: `finding ${i}`,
+    }));
+  }
+
+  it("caps the mechanical triage block with an omission count", () => {
+    const block = renderMechanicalBlock(mech(55));
+    expect(block).toContain("rule-0");
+    expect(block).toContain("rule-49");
+    expect(block).not.toContain("rule-50");
+    expect(block).toContain("(+5 further finding(s) omitted");
+    expect(block).toContain("For EACH listed");
+  });
+
+  it("lists every mechanical finding under the cap with no omission note", () => {
+    const block = renderMechanicalBlock(mech(3));
+    expect(block).toContain("rule-2");
+    expect(block).not.toContain("omitted");
+  });
+
+  it("caps dismissed and open prior threads with omission counts", () => {
+    const dismissed = Array.from({ length: 12 }, (_, i) => ({
+      path: `src/a${i}.ts`,
+      line: 1,
+      finding: `settled ${i}`,
+      replies: [],
+      resolved: true as const,
+    }));
+    const out = renderPriorThreadsBlock(dismissed);
+    expect(out).toContain("settled 0");
+    expect(out).not.toContain("settled 10");
+    expect(out).toContain("(+2 further settled thread(s) omitted");
+
+    const open = Array.from({ length: 12 }, (_, i) => ({
+      path: `src/b${i}.ts`,
+      line: 1,
+      finding: `open ${i}`,
+      replies: [{ author: "dev", body: "pushback" }],
+    }));
+    const outOpen = renderPriorThreadsBlock(open);
+    expect(outOpen).toContain("open 9");
+    expect(outOpen).not.toContain("open 10");
+    expect(outOpen).toContain("(+2 further thread(s) omitted");
+  });
+
+  it("caps the Changed Files list with an omission count", () => {
+    const files = Array.from({ length: 250 }, (_, i) => `src/f${i}.ts`);
+    const env = buildPrompt({
+      diff: sampleDiff({ changed_files: files }),
+      checklistPath: CHECKLIST_PATH,
+    });
+    expect(env.user).toContain("src/f199.ts");
+    expect(env.user).not.toContain("src/f200.ts");
+    expect(env.user).toContain("(+50 more)");
+  });
+
+  it("caps the rules-changed notice with an omission count", () => {
+    const paths = Array.from({ length: 25 }, (_, i) => `docs/c${i}.md`);
+    const notice = renderRulesChangedNotice(paths);
+    expect(notice).toContain("docs/c19.md");
+    expect(notice).not.toContain("docs/c20.md");
+    expect(notice).toContain("(+5 more)");
+  });
+
+  it("tells the model to emit fewer complete findings rather than truncate JSON", () => {
+    expect(CHECKLIST_TEXT).toContain("never truncated JSON");
+    expect(CHECKLIST_TEXT).toContain("highest severity first");
   });
 });

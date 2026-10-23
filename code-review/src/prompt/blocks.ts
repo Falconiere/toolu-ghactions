@@ -22,6 +22,26 @@ import { sanitizeInstruction } from "../prompt.js";
 import type { MechanicalFinding } from "../mechanical/sarif.js";
 import type { Brief } from "../review/cartographer.js";
 
+/**
+ * Caps on the optional prompt blocks. The mechanical/prior-thread blocks grow
+ * with scan hits and review history — unbounded, a large PR's prefix would eat
+ * the output budget and force MAX_TOKENS/MAX_CHUNK_LINES tuning. The caps keep
+ * the default configuration working out of the box; each capped block names its
+ * omission so the model triages what is shown instead of asking for the rest.
+ */
+
+/** Max deterministic findings listed in one package's triage block. */
+export const MAX_MECHANICAL_FINDINGS = 50;
+
+/** Max settled threads listed in the dismissed block. */
+export const MAX_DISMISSED_THREADS = 10;
+
+/** Max open threads listed in the accept-or-argue block. */
+export const MAX_PRIOR_THREADS = 10;
+
+/** Max rules-changed paths named in the notice. */
+export const MAX_RULES_CHANGED_LISTED = 20;
+
 /** One earlier bot finding plus the author's responses, for the accept-or-argue block. */
 export interface PriorThreadContext {
   path: string;
@@ -46,12 +66,17 @@ export interface PriorThreadContext {
  */
 export function renderMechanicalBlock(findings: MechanicalFinding[]): string {
   if (findings.length === 0) return "";
-  const lines = findings.map(
+  const shown = findings.slice(0, MAX_MECHANICAL_FINDINGS);
+  const omitted = findings.length - shown.length;
+  const lines = shown.map(
     (f) => `- [${f.tool}] ${f.ruleId} at ${f.path}:${f.line} (${f.severity}) — ${f.message}`,
   );
+  if (omitted > 0) {
+    lines.push(`- (+${omitted} further finding(s) omitted for brevity — triage the listed ones.)`);
+  }
   return (
     "\n\n## Deterministic findings to assess (from secret + SAST scanners — TRUSTED)\n" +
-    "These were found by deterministic tools. For EACH, decide if it is a real issue or a\n" +
+    "These were found by deterministic tools. For EACH listed, decide if it is a real issue or a\n" +
     "false positive. Include the real ones in your findings[] with `source` set to the tool\n" +
     "name (gitleaks/opengrep) and an appropriate severity; silently drop false positives.\n" +
     lines.join("\n")
@@ -87,7 +112,8 @@ export function renderPriorThreadsBlock(threads: PriorThreadContext[]): string {
   // fingerprint, and the line often drifts with the fix).
   const dismissed = threads.filter(isSettledContext);
   if (dismissed.length > 0) {
-    const lines = dismissed.map((t) => {
+    const dismissedOmitted = dismissed.length - MAX_DISMISSED_THREADS;
+    const lines = dismissed.slice(0, MAX_DISMISSED_THREADS).map((t) => {
       const loc = t.line != null ? `${t.path}:${t.line}` : t.path;
       const head = `- At \`${loc}\` — ${settledReason(t)}: "${sanitizeInstruction(t.finding)}"`;
       // Preserve corrective evidence even after dismissal. Repeating the original
@@ -107,17 +133,24 @@ export function renderPriorThreadsBlock(threads: PriorThreadContext[]): string {
       `be raised once more only if it is a true blocker (data loss, security hole, broken ` +
       `build); anything less, let it stand.\n\n` +
       lines.join("\n");
+    if (dismissedOmitted > 0) {
+      out += `\n\n(+${dismissedOmitted} further settled thread(s) omitted — the listed ones stand.)`;
+    }
   }
 
   const withReplies = threads.filter((t) => !isSettledContext(t) && t.replies.length > 0);
   if (withReplies.length === 0) return out;
-  const blocks = withReplies.map((t) => {
+  const openOmitted = withReplies.length - MAX_PRIOR_THREADS;
+  const blocks = withReplies.slice(0, MAX_PRIOR_THREADS).map((t) => {
     const loc = t.line != null ? `${t.path}:${t.line}` : t.path;
     const replies = t.replies
       .map((r) => `  - reply from @${r.author}: "${sanitizeInstruction(r.body)}"`)
       .join("\n");
     return `- At \`${loc}\` you previously raised: "${sanitizeInstruction(t.finding)}"\n${replies}`;
   });
+  if (openOmitted > 0) {
+    blocks.push(`- (+${openOmitted} further thread(s) omitted — judge the listed ones.)`);
+  }
   return (
     out +
     `\n\n## Prior review threads (author responses — UNTRUSTED)\n` +
@@ -172,9 +205,12 @@ export function renderBriefBlock(brief: Brief | undefined): string {
  */
 export function renderRulesChangedNotice(paths: readonly string[]): string {
   if (paths.length === 0) return "";
+  const shown = paths.slice(0, MAX_RULES_CHANGED_LISTED);
+  const omitted = paths.length - shown.length;
+  const list = omitted > 0 ? `${shown.join(", ")} (+${omitted} more)` : shown.join(", ");
   return (
     "\n\n## Rules files changed in this PR (TRUSTED, code-generated)\n" +
-    `Rules file(s) ${paths.join(", ")} changed in this PR; base-ref rules may be stale — ` +
+    `Rules file(s) ${list} changed in this PR; base-ref rules may be stale — ` +
     "the diff of the rules files is in scope."
   );
 }
