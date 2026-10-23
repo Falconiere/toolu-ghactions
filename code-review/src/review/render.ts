@@ -77,6 +77,9 @@ export interface ReviewBody {
   mechanical: MechanicalFinding[];
   /** MAX_ROUNDS surrender note shown under the verdict line ("" → omit). */
   capNote: string;
+  /** Count of findings the source-evidence gate dropped as unverifiable, worded for
+   *  the reader ("" → omit). Informational: those drops never block the verdict. */
+  evidenceNote: string;
   /** Pre-rendered coverage-ledger section (review/ledger.ts). Unlike recap/history
    *  it IS droppable: it joins the size ladder ahead of findings (verdict.ts). */
   ledger: string;
@@ -114,6 +117,7 @@ export function renderBody(body: ReviewBody, findingsSection: string): string {
   // The MAX_ROUNDS surrender is a verdict override — say so right under the verdict
   // so an auto-approved round is never mistaken for a clean review.
   if (body.capNote !== "") main += `\n\n> 🔁 **Round cap:** ${body.capNote}`;
+  if (body.evidenceNote !== "") main += `\n\n> ℹ️ **Unverified findings:** ${body.evidenceNote}`;
   if (body.enhancementNote) main += `\n\n${body.enhancementNote}`;
   parts.push(main);
 

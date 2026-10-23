@@ -12,7 +12,12 @@ export function validate(
   result: ProviderResult,
   diff: DiffData,
   inputs: ActionInputs,
-): { stamped: StampedFinding[]; selfNegating: number; unsupportedPaths: string[] } {
+): {
+  stamped: StampedFinding[];
+  selfNegating: number;
+  unverifiedQuote: number;
+  missingQuotePaths: string[];
+} {
   const changedLinesByPath = new Map<string, number[]>(
     diff.files.map((f) => [f.path, f.changed_lines]),
   );
@@ -32,6 +37,7 @@ export function validate(
   return {
     stamped: anchored.findings.map((f) => ({ ...f, fp: fingerprint(f) })),
     selfNegating: anchored.selfNegating,
-    unsupportedPaths: anchored.unsupportedPaths,
+    unverifiedQuote: anchored.unverifiedQuote,
+    missingQuotePaths: anchored.missingQuotePaths,
   };
 }

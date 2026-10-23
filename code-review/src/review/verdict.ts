@@ -112,10 +112,16 @@ export function formatVerdict(
     verdictBadge: badge,
     // Surface the real error + the model's finish_reason when present, so a parse
     // failure ("could not parse") is distinguishable from output truncation ("length").
+    // An evidence failure is the local gate's verdict on a complete response, where the
+    // finish_reason ("stop") only suggests the provider was at fault.
     errorDetail:
       result.error !== undefined && result.error !== ""
-        ? result.error + (result.finishReason ? ` [finish_reason: ${result.finishReason}]` : "")
+        ? result.error +
+          (result.finishReason && result.failure !== "evidence"
+            ? ` [finish_reason: ${result.finishReason}]`
+            : "")
         : "",
+    evidenceNote: evidenceNote(result.unverifiedEvidence ?? 0),
     // "LLM judgment unavailable" means the model produced NOTHING. It keys off the
     // resolved verdict AND the absence of model-authored content — never errorDetail:
     // a recovered truncation sets `error` while still delivering findings + a verdict.
@@ -152,14 +158,28 @@ export function formatVerdict(
 
 /**
  * True when the model authored ANY of the content this body renders — a review plan,
- * an other-checks blurb, or a surviving finding. An abstention (provider down, response
- * unparseable) carries none of the three, so this is what separates "the LLM never
- * answered" from "the LLM answered and a downstream gate rejected its findings"; the
- * resolved verdict is "error" in both cases and cannot tell them apart.
+ * an other-checks blurb, or a surviving finding — or returned findings the
+ * source-evidence gate rejected. An abstention (provider down, response unparseable)
+ * carries none of these, so this is what separates "the LLM never answered" from "the
+ * LLM answered and a downstream gate rejected its findings"; the resolved verdict is
+ * "error" in both cases and cannot tell them apart.
  */
 function deliveredJudgment(result: ProviderResult, findings: Finding[]): boolean {
   return (
-    (result.review_plan ?? "") !== "" || (result.other_checks ?? "") !== "" || findings.length > 0
+    (result.review_plan ?? "") !== "" ||
+    (result.other_checks ?? "") !== "" ||
+    findings.length > 0 ||
+    result.failure === "evidence" ||
+    (result.unverifiedEvidence ?? 0) > 0
+  );
+}
+
+/** The note for findings the source-evidence gate dropped as unverifiable ("" → omit). */
+function evidenceNote(count: number): string {
+  if (count === 0) return "";
+  return (
+    `${count} finding(s) dropped: the quoted source was not found at the cited line, ` +
+    "so the claim could not be verified."
   );
 }
 

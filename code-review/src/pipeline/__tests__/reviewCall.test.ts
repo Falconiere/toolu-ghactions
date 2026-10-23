@@ -628,7 +628,7 @@ describe("reviewAndValidate — the source-evidence gate's coverage consequence"
     expect(out.result.error ?? "").not.toContain("lacked valid source evidence");
   });
 
-  it("still condemns a path when NOTHING the model said about it survived the gate", async () => {
+  it("keeps a path reviewed when its only finding is mis-quoted (toolu-ghrunner PR #210)", async () => {
     const dir = repoWith(FEATURE, BASE);
     const out = await reviewAndValidate({
       inputs: baseInputs(),
@@ -648,10 +648,14 @@ describe("reviewAndValidate — the source-evidence gate's coverage consequence"
         },
       ]),
     });
+    // The model read the file and answered; one misread line is a dropped finding,
+    // not an unreviewed file and not an error verdict.
     expect(out.stamped).toHaveLength(0);
-    expect(out.ledger.entries["src/util.ts"]?.status).toBe("unreviewed");
-    expect(out.result.partial).toBe(true);
-    expect(out.result.error ?? "").toContain("lacked valid source evidence");
+    expect(out.ledger.entries["src/util.ts"]?.status).toBe("reviewed");
+    expect(out.result.verdict).not.toBe("error");
+    expect(out.result.partial).not.toBe(true);
+    expect(out.result.error ?? "").not.toContain("lacked valid source evidence");
+    expect(out.result.unverifiedEvidence).toBe(1);
   });
 });
 

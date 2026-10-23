@@ -151,6 +151,8 @@ function settle(opts: {
   priorFindings?: StoredFinding[];
   /** Count `validateFindings` dropped as self-negating (default 0). */
   selfNegating?: number;
+  /** Count the source-evidence gate dropped as unverifiable quotes (default none). */
+  unverifiedEvidence?: number;
   jevDismissed?: number;
 }) {
   const ledger = ledgerOf(opts.reviewed, opts.unreviewed, opts.carried ?? []);
@@ -184,6 +186,9 @@ function settle(opts: {
     result: {
       verdict: opts.resultVerdict ?? "changes",
       findings: opts.findings,
+      ...(opts.unverifiedEvidence === undefined
+        ? {}
+        : { unverifiedEvidence: opts.unverifiedEvidence }),
       enhancement: {
         assessed: 1,
         rechecked: 1,
@@ -470,6 +475,25 @@ describe("settleVerdict — the self-negation flip (AC-8)", () => {
 
     expect(settled.verdict).toBe("error");
     expect(settled.validated.error).toContain("1 file(s) were not reviewed this run");
+  });
+
+  it("a review whose every finding misquoted its source settles approved (toolu-ghrunner PR #210)", () => {
+    // The model asked for changes, but each finding's quote was not at its cited line,
+    // so the gate dropped them all. Like self-negating noise, that leaves nothing
+    // actionable: the verdict approves rather than reporting an unsupported request.
+    const settled = settle({
+      findings: [],
+      reviewed: ["AGENTS.md"],
+      unreviewed: [],
+      maxRounds: 0,
+      priorRounds: 0,
+      resultVerdict: "changes",
+      unverifiedEvidence: 2,
+    });
+
+    expect(settled.verdict).toBe("approved");
+    expect(settled.validated.error).toBeUndefined();
+    expect(settled.validated.unverifiedEvidence).toBe(2);
   });
 });
 

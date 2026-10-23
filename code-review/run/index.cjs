@@ -41394,7 +41394,7 @@ function validateFindings(findings, changedLinesByPath, minConfidence, lineTextB
   let selfNegating = 0;
   let missingQuote = 0;
   let unverifiedQuote = 0;
-  const unsupportedPaths = /* @__PURE__ */ new Set();
+  const missingQuotePaths = /* @__PURE__ */ new Set();
   for (const f of findings) {
     const changedSet = changedSetByPath.get(f.path) ?? EMPTY_CHANGED;
     if (!changedSet.has(f.line)) continue;
@@ -41405,11 +41405,15 @@ function validateFindings(findings, changedLinesByPath, minConfidence, lineTextB
     const isLlm = f.source === void 0 || f.source === "llm";
     const failure = isLlm ? quoteFailure(f, lineTextByPath, options.requireQuote === true) : null;
     if (failure !== null) {
-      if (failure === "missing") missingQuote++;
-      else unverifiedQuote++;
-      unsupportedPaths.add(f.path);
+      if (failure === "missing") {
+        missingQuote++;
+        missingQuotePaths.add(f.path);
+      } else {
+        unverifiedQuote++;
+      }
       if (missingQuote + unverifiedQuote <= 5) {
-        const quoteAtLines = [...lineTextByPath?.get(f.path) ?? []].filter(([, text2]) => quoteMatches(text2, f.quoted_line ?? "")).slice(0, 3).map(([line]) => line);
+        const quote = stripDiffPrefixes(f.quoted_line ?? "");
+        const quoteAtLines = [...lineTextByPath?.get(f.path) ?? []].filter(([, text2]) => quoteMatches(text2, quote)).slice(0, 3).map(([line]) => line);
         process.stdout.write(
           `  Source evidence rejected: ${JSON.stringify({
             path: f.path.slice(0, 240),
@@ -41449,21 +41453,49 @@ function validateFindings(findings, changedLinesByPath, minConfidence, lineTextB
     unsupportedEvidence: missingQuote + unverifiedQuote,
     missingQuote,
     unverifiedQuote,
-    unsupportedPaths: [...unsupportedPaths]
+    missingQuotePaths: [...missingQuotePaths]
   };
 }
+var QUOTE_SPILL_LINES = 3;
 function quoteFailure(finding, lineTextByPath, requireQuote) {
   if (finding.quoted_line === void 0) return requireQuote ? "missing" : null;
   if (lineTextByPath === void 0) return requireQuote ? "unverified" : null;
-  const actual = lineTextByPath.get(finding.path)?.get(finding.line);
-  if (actual !== void 0 && quoteMatches(actual, finding.quoted_line)) return null;
+  const lines = lineTextByPath.get(finding.path);
+  if (lines !== void 0 && quoteInSpan(lines, finding, finding.quoted_line)) return null;
   return "unverified";
 }
+function quoteInSpan(lines, finding, quoted) {
+  const q = normalize(stripDiffPrefixes(quoted));
+  const first = finding.line;
+  const last = Math.max(finding.end_line ?? first, first);
+  if (q === "" || !lines.has(first)) return false;
+  let lo = first;
+  while (lo > first - QUOTE_SPILL_LINES && lines.has(lo - 1)) lo--;
+  let hi = last;
+  while (hi < last + QUOTE_SPILL_LINES && lines.has(hi + 1)) hi++;
+  let text2 = "";
+  let spanStart = 0;
+  let spanEnd = 0;
+  for (let n = lo; n <= hi; n++) {
+    const part = normalize(lines.get(n) ?? "");
+    if (part !== "") text2 += text2 === "" ? part : ` ${part}`;
+    if (n === first) spanStart = text2.length - part.length;
+    if (n <= last) spanEnd = text2.length;
+  }
+  for (let at = text2.indexOf(q); at !== -1; at = text2.indexOf(q, at + 1)) {
+    if (at < spanEnd && at + q.length > spanStart) return true;
+  }
+  return false;
+}
+function stripDiffPrefixes(quoted) {
+  return quoted.split("\n").map((line) => line.replace(/^\s*(?:L\d+: ?)?\+?/, "")).join("\n");
+}
 function quoteMatches(actual, quoted) {
-  const norm = (s) => s.replace(/\s+/g, " ").trim();
-  const a = norm(actual);
-  const q = norm(quoted);
-  return q !== "" && a.includes(q);
+  const q = normalize(quoted);
+  return q !== "" && normalize(actual).includes(q);
+}
+function normalize(s) {
+  return s.replace(/\s+/g, " ").trim();
 }
 function spanIsInDiff(f, changedSet) {
   const end = f.end_line ?? f.line;
@@ -42813,7 +42845,8 @@ function validate(result, diff, inputs) {
   return {
     stamped: anchored.findings.map((f) => ({ ...f, fp: fingerprint(f) })),
     selfNegating: anchored.selfNegating,
-    unsupportedPaths: anchored.unsupportedPaths
+    unverifiedQuote: anchored.unverifiedQuote,
+    missingQuotePaths: anchored.missingQuotePaths
   };
 }
 
@@ -43812,13 +43845,14 @@ async function reviewAndValidate(input) {
     );
   }
   result.findings = kept;
-  const { stamped, selfNegating, unsupportedPaths } = validate(
+  const { stamped, selfNegating, unverifiedQuote, missingQuotePaths } = validate(
     result,
     distillation.review_diff,
     inputs
   );
+  if (unverifiedQuote > 0) result.unverifiedEvidence = unverifiedQuote;
   const pathsWithSurvivors = new Set(stamped.map((f) => f.path));
-  const condemned = unsupportedPaths.filter((path) => !pathsWithSurvivors.has(path));
+  const condemned = missingQuotePaths.filter((path) => !pathsWithSurvivors.has(path));
   for (const path of condemned) {
     coverage.set(path, { status: "unreviewed", reason: "unsupported-source-evidence" });
   }
@@ -43986,6 +44020,9 @@ function renderBody(body, findingsSection) {
   if (body.capNote !== "") main2 += `
 
 > \u{1F501} **Round cap:** ${body.capNote}`;
+  if (body.evidenceNote !== "") main2 += `
+
+> \u2139\uFE0F **Unverified findings:** ${body.evidenceNote}`;
   if (body.enhancementNote) main2 += `
 
 ${body.enhancementNote}`;
@@ -44097,7 +44134,10 @@ function formatVerdict(result, opts) {
     verdictBadge: badge,
     // Surface the real error + the model's finish_reason when present, so a parse
     // failure ("could not parse") is distinguishable from output truncation ("length").
-    errorDetail: result.error !== void 0 && result.error !== "" ? result.error + (result.finishReason ? ` [finish_reason: ${result.finishReason}]` : "") : "",
+    // An evidence failure is the local gate's verdict on a complete response, where the
+    // finish_reason ("stop") only suggests the provider was at fault.
+    errorDetail: result.error !== void 0 && result.error !== "" ? result.error + (result.finishReason && result.failure !== "evidence" ? ` [finish_reason: ${result.finishReason}]` : "") : "",
+    evidenceNote: evidenceNote(result.unverifiedEvidence ?? 0),
     // "LLM judgment unavailable" means the model produced NOTHING. It keys off the
     // resolved verdict AND the absence of model-authored content — never errorDetail:
     // a recovered truncation sets `error` while still delivering findings + a verdict.
@@ -44131,7 +44171,11 @@ function formatVerdict(result, opts) {
   return { body: rendered, label };
 }
 function deliveredJudgment(result, findings) {
-  return (result.review_plan ?? "") !== "" || (result.other_checks ?? "") !== "" || findings.length > 0;
+  return (result.review_plan ?? "") !== "" || (result.other_checks ?? "") !== "" || findings.length > 0 || result.failure === "evidence" || (result.unverifiedEvidence ?? 0) > 0;
+}
+function evidenceNote(count) {
+  if (count === 0) return "";
+  return `${count} finding(s) dropped: the quoted source was not found at the cited line, so the claim could not be verified.`;
 }
 function fitToSizeLimit(body, marker17, ledgerSummary) {
   let current = body;
@@ -44650,7 +44694,7 @@ function settleVerdict(input, reduction, exceptions) {
   const validated = { ...input.result, findings };
   validated.other_checks = "";
   let verdict = resolveVerdict(validated.verdict, findings.length);
-  const removed = suppressed.length + scoped.dropped.length + input.selfNegating + (input.settledBeforeValidation ?? 0) + (input.result.enhancement?.dismissed ?? 0);
+  const removed = suppressed.length + scoped.dropped.length + input.selfNegating + (input.result.unverifiedEvidence ?? 0) + (input.settledBeforeValidation ?? 0) + (input.result.enhancement?.dismissed ?? 0);
   if (verdict === "changes" && findings.length === 0) {
     if (removed > 0) {
       verdict = "approved";

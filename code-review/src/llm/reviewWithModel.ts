@@ -121,6 +121,11 @@ export interface ProviderResult {
   /** True when the result was salvaged from a length-truncated response: the
    *  findings completed before the cut were recovered, later ones may be missing. */
   partial?: boolean;
+  /** Findings the source-evidence gate dropped because their `quoted_line` was not at
+   *  the cited line (pipeline/reviewCall.ts). Ordinary drops: they never cost a file
+   *  its coverage, but they count toward settleVerdict's `removed` and the comment
+   *  says how many were discarded. */
+  unverifiedEvidence?: number;
   /** Set on a salvaged partial whose output budget could grow no further — the ceiling
    *  (budget.ts's MAX_TOKEN_CEILING) was reached, or the provider refused the budget. It
    *  is what tells the reader (via the budget.ts wording) that MAX_TOKENS is no longer

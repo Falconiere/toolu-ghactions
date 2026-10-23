@@ -1161,13 +1161,18 @@ describe("FAIL_ON merge gate (real pipeline verdict + shouldBlock)", () => {
       now: () => 1_700_000_000_000,
     });
 
-    expect(result.verdict).toBe("error");
+    // The praise is self-negating and the misquoted claim (`.await?` dropped from the
+    // quote) is unverifiable: both are dropped, the file stays reviewed, and nothing
+    // actionable remains — so the review approves instead of reporting itself
+    // incomplete (toolu-ghrunner PR #210).
+    expect(result.verdict).toBe("approved");
     expect(result.findingsCount).toBe(0);
-    expect(shouldBlock(result.verdict, parseFailOn("changes"))).toBe(false);
-    expect(shouldBlock(result.verdict, parseFailOn("changes,error"))).toBe(true);
+    expect(shouldBlock(result.verdict, parseFailOn("changes,error"))).toBe(false);
     expect(rec.reviews).toEqual([]);
     const body = rec.updated.at(-1)?.body ?? "";
-    expect(body).toContain("Review incomplete — source evidence");
+    expect(body).toContain("**Unverified findings:** 1 finding(s) dropped");
+    expect(body).not.toContain("Review incomplete");
+    expect(body).not.toContain("Provider error");
     expect(body).not.toContain("### Findings (1)");
   });
 
