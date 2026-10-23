@@ -463,20 +463,19 @@ A generative reviewer re-derives its findings from the diff on every push, so le
 
 With `INLINE_COMMENTS: true` (default), findings are posted as inline review comments anchored to the exact file and line, batched at up to 30 comments per `createReview` call. When the model has a concrete, high-confidence fix it attaches a ` ```suggestion ` block you can commit straight from the PR. Anchors are validated against GitHub's own view of the PR diff before posting: a finding on a file GitHub's own diff omits (or whose line can't be mapped onto it) is **never** posted inline — GitHub's Reviews API rejects the whole `createReview` call outright if it contains even one such comment, so there is no file-level fallback. It is instead rendered in the sticky comment's [`### Unanchored findings`](#coverage-ledger) section, so it is never silently lost. If a batch still fails after anchor validation (a comment GitHub's API rejects for a reason we couldn't predict up front), the batch is bisected to isolate the poison comment — every other comment in the batch still posts, and the isolated one is rendered in the sticky comment's [`### Findings GitHub rejected inline`](#coverage-ledger) section, so one bad comment can no longer zero out the whole review or silently drop a finding. Set `INLINE_COMMENTS: false` for a summary-comment-only review.
 
-The verdict comment is compatible with [`parse-verdict.sh`](https://github.com/Falconiere/toolu/blob/main/plugins/pr-babysit/scripts/parse-verdict.sh) and the [`pr-babysit`](https://github.com/Falconiere/toolu/tree/main/plugins/pr-babysit) automation loop, so toolu users can drop this into CI and their existing babysit workflow consumes the verdict without changes. The elements that contract depends on — the `### Code Review` heading, the `**Verdict:**` line, at least one checked `- [x]` box, the `### Top-N must-fix` list (directly above `### Findings`, whose heading ends it), the `### Findings` block, and the machine-readable label alone on its line — are present in **both** verbosity modes (below). `parse-verdict.sh` reads both the current grouped-block findings layout and the older one-line-per-finding shape, so an older comment on a long-lived PR still parses; a babysit loop pinned to a **pre-7.3 copy** of the script reads the verdict, the label and completeness as before, but recovers no findings from a comment written by this version until that copy is updated.
+The verdict comment is compatible with [`parse-verdict.sh`](https://github.com/Falconiere/toolu/blob/main/plugins/pr-babysit/scripts/parse-verdict.sh) and the [`pr-babysit`](https://github.com/Falconiere/toolu/tree/main/plugins/pr-babysit) automation loop, so toolu users can drop this into CI and their existing babysit workflow consumes the verdict without changes. The elements that contract depends on — the `### Code Review` heading, at least one checked `- [x]` box right under it (ahead of any model-written text, since the label in the full checklist is read first-match), the `**Verdict:**` line, the `### Top-N must-fix` list (directly above `### Findings`, whose heading ends it), the `### Findings` block (closed by `### Review details` before the model-written plan and other checks), and the machine-readable label alone on its line — are present in **both** verbosity modes (below). `parse-verdict.sh` reads both the current grouped-block findings layout and the older one-line-per-finding shape, so an older comment on a long-lived PR still parses; a babysit loop pinned to a **pre-7.3 copy** of the script reads the verdict, the label and completeness as before, but recovers no findings from a comment written by this version until that copy is updated.
 
 ## Example verdict
 
-The sticky comment follows the toolu PR-comment layout, using only the HTML GitHub keeps in comments (no images, no CSS). From the top:
+The sticky comment follows the toolu PR-comment layout, using only the HTML GitHub keeps in comments (no generated images, no CSS). From the top:
 
 1. **Header** — logo, bot name, duration, the reviewed head's short sha, and the job link.
-2. **Verdict** — the `**Verdict:**` line with the verdict as a `<kbd>` pill and the severity counts; a provider error, partial review or round cap follows as a GitHub alert.
+2. **Verdict** — the checklist line, then the `**Verdict:**` line with the verdict as a `<kbd>` pill and the severity counts; a provider error, partial review or round cap follows as a GitHub alert.
 3. **Stat tiles** — FINDINGS (by severity), RESOLVED (across the stored passes; needs review memory), REVIEWED (files the model read, with how many were filtered or ⚠️ not reviewed), and CARRIED (paths carried from earlier passes) or, when nothing was carried, SCANNERS (gitleaks/opengrep counts).
 4. **Since last review** — one row of resolved / still open / new counts, the resolved refs, and the still-open and new refs collapsed (their findings are listed below).
 5. **`### Top-N must-fix`** and **`### Findings`**, then the repeated / unanchored / rejected sections when present.
-6. **Status lines** — Mechanical checks and Coverage.
-7. **Collapsed sections** — Review plan, Other checks, Jev second opinion, Review history.
-8. The checklist, the machine-readable label, and the hidden state marker.
+6. **`### Review details`** — the Mechanical checks and Coverage status lines, then the collapsed Review plan, Other checks, Jev second opinion and Review history sections.
+7. The machine-readable label and the hidden state marker.
 
 The default **compact** shape, on a second pass that requests changes:
 
@@ -484,6 +483,8 @@ The default **compact** shape, on a second pass that requests changes:
 <img src="…/logo.png" width="20" align="left"> **Toolu — Code Review** <sub>finished in 3m 19s · `5a5e23f` · [View job](https://github.com/...)</sub>
 
 ### Code Review — `feat/session-hardening`
+
+- [x] Reviewed 6-file diff — verdict set
 
 **Verdict:** <kbd>⚠️ Changes requested</kbd> 🔴 1 blocker 🟡 1 medium
 
@@ -524,6 +525,8 @@ The allowlist pattern `:name` matches exactly one non-empty segment.
 
 The deleteInTurn function uses recursion instead of a loop.
 
+### Review details
+
 **Coverage** · reviewed: 5 · excluded: 1 · carried: 3
 
 <details><summary><b>Review plan</b></summary>
@@ -533,8 +536,6 @@ The deleteInTurn function uses recursion instead of a loop.
 <details><summary><b>Review history</b> · 2 passes</summary>
 …
 </details>
-
-- [x] Reviewed 6-file diff — verdict set
 
 `request-changes`
 ```

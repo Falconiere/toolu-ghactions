@@ -2,6 +2,8 @@
 
 ### Code Review — `code-review/out-of-box-defaults-prompts`
 
+- [x] Reviewed 8-file diff — verdict set
+
 **Verdict:** <kbd>✅ Approved</kbd>
 
 <table>
@@ -15,6 +17,8 @@
 ### Findings (0)
 
 _No findings._
+
+### Review details
 
 **Coverage** · reviewed: 7 · excluded: 1
 
@@ -37,8 +41,6 @@ Check the diff for correctness, security, performance, test coverage, doc accura
 | 1 | `5564be9` | ✅ approved | 0 | 0 | 0 |
 
 </details>
-
-- [x] Reviewed 8-file diff — verdict set
 
 `merge-approved`
 

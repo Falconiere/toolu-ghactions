@@ -2,6 +2,8 @@
 
 ### Code Review — `fix/session-timeout`
 
+- [x] Reviewed 4-file diff — verdict set
+
 **Verdict:** <kbd>🚫 Review incomplete — provider error</kbd>
 
 > [!CAUTION]
@@ -19,6 +21,8 @@
 
 _No findings._
 
+### Review details
+
 **Mechanical checks** · 2 deterministic finding(s) — 2 gitleaks. See the **Code Scanning** tab for details.
 
 > [!WARNING]
@@ -30,8 +34,6 @@ _No findings._
 - `apps/api/src/session-store.ts`: unreviewed (provider-error)
 - `apps/api/src/session.ts`: unreviewed (provider-error)
 - `docs/sessions.md`: unreviewed (provider-error)
-
-- [x] Reviewed 4-file diff — verdict set
 
 `request-changes`
 

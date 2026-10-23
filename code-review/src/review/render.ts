@@ -1,10 +1,10 @@
 // review/render.ts — the markdown body builder for the verdict comment. Split
 // out of verdict.ts (which owns the verdict→label mapping and the size-cap loop)
 // so each file stays under 300 LOC. Pure string assembly in the toolu PR-comment
-// layout: header, verdict pill, stat tiles and the since-last-review row first,
-// then Top-N and Findings, then status lines and collapsed detail sections, with
-// the checklist, label and state marker last. The presentational blocks live in
-// review/summary.ts.
+// layout: header, checklist, verdict pill, stat tiles and the since-last-review row
+// first, then Top-N and Findings, then — under `### Review details` — status lines
+// and collapsed detail sections, with the label and state marker last. The
+// presentational blocks live in review/summary.ts.
 import type { Finding } from "@/llm/schema.js";
 import type { MechanicalFinding } from "@/mechanical/sarif.js";
 import type { FindingCluster } from "@/review/cluster.js";
@@ -105,14 +105,21 @@ export interface ReviewBody {
  * those two. Blocks are separated by one blank line; the marker, when present, is
  * always the last line.
  *
- * Two placements are parser contracts: `### Top-N must-fix` sits directly above
- * `### Findings`, whose heading ends pr-babysit's must_fix scan; and the verdict
- * label stands alone on its line, where both parsers read it.
+ * Four placements are parser contracts (scripts/parse-verdict.sh, pr-babysit):
+ *  - the checklist precedes every model-influenced line — pr-babysit reads the FIRST
+ *    `Set verdict label (…)` match, and a finding may quote one;
+ *  - `### Top-N must-fix` sits directly above `### Findings`, whose heading ends
+ *    pr-babysit's must_fix scan;
+ *  - `### Review details` follows the findings sections whenever anything does, so
+ *    both parsers' Findings scan (up to the next `### `) never reaches the
+ *    model-authored plan or other-checks text below it;
+ *  - the verdict label stands alone on its line, where both parsers read it.
  */
 export function renderBody(body: ReviewBody, findingsSection: string): string {
   const blocks: string[] = [
     `<img src="${body.botLogoUrl}" width="20" align="left"> **${body.botName}** ${body.header}`,
     `### Code Review — \`${body.branch}\``,
+    buildChecklist(body),
     verdictLine(body.verdictBadge, buildSeveritySummary(body.findings)),
   ];
   // Surface the real provider-error message (not just the badge) so a failed review
@@ -155,26 +162,29 @@ export function renderBody(body: ReviewBody, findingsSection: string): string {
     buildClusterSection(body.clusters),
     buildUnanchoredSection(body.unanchored),
     buildDroppedSection(body.dropped),
-    buildMechanicalSection(body.mechanical, body.llmErrored),
-    // Per-file coverage: what was reviewed, carried, excluded, or NOT reviewed.
-    body.ledger,
   ];
   for (const section of sections) if (section !== "") blocks.push(section.trimEnd());
 
-  if (body.reviewPlan !== "") blocks.push(details("<b>Review plan</b>", body.reviewPlan));
-  if (body.otherChecks !== "") blocks.push(details("<b>Other checks</b>", body.otherChecks));
-  if (body.enhancement) blocks.push(buildJevSection(body.enhancement));
-  if (body.history !== "") blocks.push(body.history.trimEnd());
+  const trailing = [
+    buildMechanicalSection(body.mechanical, body.llmErrored),
+    // Per-file coverage: what was reviewed, carried, excluded, or NOT reviewed.
+    body.ledger.trimEnd(),
+    body.reviewPlan !== "" ? details("<b>Review plan</b>", body.reviewPlan) : "",
+    body.otherChecks !== "" ? details("<b>Other checks</b>", body.otherChecks) : "",
+    body.enhancement ? buildJevSection(body.enhancement) : "",
+    body.history.trimEnd(),
+  ].filter((block) => block !== "");
+  if (trailing.length > 0) blocks.push("### Review details", ...trailing);
 
-  blocks.push(buildChecklist(body), body.verdictLabel);
+  blocks.push(body.verdictLabel);
   if (body.marker !== "") blocks.push(body.marker);
   return `${blocks.join("\n\n")}\n`;
 }
 
 /**
- * The verdict checklist, just above the label. Full mode lists the five static
- * review phases; compact mode collapses them to a single checked line naming the file
- * count. BOTH keep ≥1 `- [x]` box and none unchecked — parse-verdict.sh derives review
+ * The verdict checklist, right under the Code Review heading. Full mode lists the
+ * five static review phases; compact mode collapses them to a single checked line
+ * naming the file count. BOTH keep ≥1 `- [x]` box and none unchecked — parse-verdict.sh derives review
  * completeness from the checkbox counts (state "complete" = ≥1 checked, none unchecked).
  */
 function buildChecklist(body: ReviewBody): string {
@@ -221,14 +231,19 @@ export function buildMechanicalSection(
 
 /**
  * The Top-N must-fix section body — derived from the surviving findings, sorted by
- * severity and capped at three. This summary cannot resurrect an unvalidated claim.
+ * severity and capped at three, each text flattened to one line. This summary cannot
+ * resurrect an unvalidated claim.
  */
 function buildTopMustFixSection(findings: Finding[]): string {
-  return [...findings]
-    .sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity])
-    .slice(0, TOP_MUST_FIX_MAX)
-    .map((finding) => `- \`${finding.path}:${finding.line}\` — ${finding.text}`)
-    .join("\n");
+  return (
+    [...findings]
+      .sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity])
+      .slice(0, TOP_MUST_FIX_MAX)
+      // One line per item: a multi-line text would spill into pr-babysit's must_fix scan
+      // and could carry a `### ` line that ends the section early.
+      .map((f) => `- \`${f.path}:${f.line}\` — ${f.text.trim().replace(/\s*\n\s*/g, " ")}`)
+      .join("\n")
+  );
 }
 
 /**

@@ -2,6 +2,8 @@
 
 ### Code Review — `feat/82-model-customer-owned-machines-as`
 
+- [x] Reviewed 6-file diff — verdict set
+
 **Verdict:** <kbd>⚠️ Changes requested</kbd> 🔴 1 blocker 🟠 1 high 🟡 1 medium
 
 <table>
@@ -58,6 +60,8 @@ Session tokens are compared with === instead of a constant-time comparison.
 
 The deleteInTurn function uses recursion instead of a loop.
 
+### Review details
+
 **Mechanical checks** · 22 deterministic finding(s) — 7 gitleaks, 15 opengrep. See the **Code Scanning** tab for details.
 
 **Coverage** · reviewed: 5 · excluded: 1 · carried: 3
@@ -82,8 +86,6 @@ Tests look adequate.
 | 2 | `5a5e23f` | ⚠️ changes | 2 | 1 | 1 |
 
 </details>
-
-- [x] Reviewed 6-file diff — verdict set
 
 `request-changes`
 

@@ -44058,6 +44058,7 @@ function renderBody(body, findingsSection) {
   const blocks = [
     `<img src="${body.botLogoUrl}" width="20" align="left"> **${body.botName}** ${body.header}`,
     `### Code Review \u2014 \`${body.branch}\``,
+    buildChecklist(body),
     verdictLine(body.verdictBadge, buildSeveritySummary(body.findings))
   ];
   if (body.errorDetail !== "") {
@@ -44085,17 +44086,20 @@ ${findingsSection}`);
   const sections = [
     buildClusterSection(body.clusters),
     buildUnanchoredSection(body.unanchored),
-    buildDroppedSection(body.dropped),
-    buildMechanicalSection(body.mechanical, body.llmErrored),
-    // Per-file coverage: what was reviewed, carried, excluded, or NOT reviewed.
-    body.ledger
+    buildDroppedSection(body.dropped)
   ];
   for (const section of sections) if (section !== "") blocks.push(section.trimEnd());
-  if (body.reviewPlan !== "") blocks.push(details("<b>Review plan</b>", body.reviewPlan));
-  if (body.otherChecks !== "") blocks.push(details("<b>Other checks</b>", body.otherChecks));
-  if (body.enhancement) blocks.push(buildJevSection(body.enhancement));
-  if (body.history !== "") blocks.push(body.history.trimEnd());
-  blocks.push(buildChecklist(body), body.verdictLabel);
+  const trailing = [
+    buildMechanicalSection(body.mechanical, body.llmErrored),
+    // Per-file coverage: what was reviewed, carried, excluded, or NOT reviewed.
+    body.ledger.trimEnd(),
+    body.reviewPlan !== "" ? details("<b>Review plan</b>", body.reviewPlan) : "",
+    body.otherChecks !== "" ? details("<b>Other checks</b>", body.otherChecks) : "",
+    body.enhancement ? buildJevSection(body.enhancement) : "",
+    body.history.trimEnd()
+  ].filter((block) => block !== "");
+  if (trailing.length > 0) blocks.push("### Review details", ...trailing);
+  blocks.push(body.verdictLabel);
   if (body.marker !== "") blocks.push(body.marker);
   return `${blocks.join("\n\n")}
 `;
@@ -44124,7 +44128,7 @@ function buildMechanicalSection(mechanical, llmErrored) {
 ${alert("WARNING", "LLM judgment unavailable", "showing deterministic findings only.")}`;
 }
 function buildTopMustFixSection(findings) {
-  return [...findings].sort((a, b) => SEVERITY_RANK2[a.severity] - SEVERITY_RANK2[b.severity]).slice(0, TOP_MUST_FIX_MAX).map((finding) => `- \`${finding.path}:${finding.line}\` \u2014 ${finding.text}`).join("\n");
+  return [...findings].sort((a, b) => SEVERITY_RANK2[a.severity] - SEVERITY_RANK2[b.severity]).slice(0, TOP_MUST_FIX_MAX).map((f) => `- \`${f.path}:${f.line}\` \u2014 ${f.text.trim().replace(/\s*\n\s*/g, " ")}`).join("\n");
 }
 function buildSeveritySummary(findings) {
   const counts = { blocker: 0, high: 0, medium: 0, low: 0, nit: 0 };
