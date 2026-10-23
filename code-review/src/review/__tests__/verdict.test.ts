@@ -41,6 +41,39 @@ describe("formatVerdict", () => {
     expect(body).toContain("Review incomplete — source evidence");
     expect(body).not.toContain("provider error");
   });
+  it("labels a missing-quote evidence failure as the gate's, not the provider's", () => {
+    // The model answered (finish_reason "stop") with no review plan; the gate rejected
+    // its unquoted findings. Before toolu-ghrunner PR #210 this rendered "Provider
+    // error … [finish_reason: stop]" over "LLM judgment unavailable".
+    const { body, label } = formatVerdict(
+      {
+        verdict: "error",
+        findings: [],
+        partial: true,
+        finishReason: "stop",
+        error: "Review findings lacked valid source evidence; affected files remain unreviewed.",
+        failure: "evidence",
+      },
+      {},
+    );
+    expect(body).toContain("Review incomplete — source evidence");
+    expect(body).toContain("**Partial review:** Review findings lacked valid source evidence");
+    expect(body).not.toContain("Provider error");
+    expect(body).not.toContain("finish_reason");
+    expect(body).not.toContain("LLM judgment unavailable");
+    expect(label).toBe("request-changes");
+  });
+  it("notes unverifiable dropped findings without blocking an approval", () => {
+    const { body, label } = formatVerdict(
+      { verdict: "approved", findings: [], unverifiedEvidence: 2 },
+      {},
+    );
+    expect(body).toContain(
+      "> ℹ️ **Unverified findings:** 2 finding(s) dropped: the quoted source was not found " +
+        "at the cited line, so the claim could not be verified.",
+    );
+    expect(label).toBe("merge-approved");
+  });
   it("maps approved → merge-approved label and ✅ badge", () => {
     const result: ProviderResult = {
       verdict: "approved",

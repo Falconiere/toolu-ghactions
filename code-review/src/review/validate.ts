@@ -47,8 +47,11 @@ export interface ValidateFindingsResult {
    *  quotes do not match is misreading the diff. Without the split a run where the gate
    *  rejects everything is undebuggable from the log. */
   unverifiedQuote: number;
-  /** Changed paths with unsupported LLM evidence, unique in first-rejection order. */
-  unsupportedPaths: string[];
+  /** Changed paths with a finding that carried NO `quoted_line`, unique in
+   *  first-rejection order. Only these can cost a path its coverage: a model that
+   *  never quotes leaves nothing to verify, while a quote that fails to match is the
+   *  model misreading one line of a file it did review — an ordinary dropped finding. */
+  missingQuotePaths: string[];
 }
 
 /** Options for {@link validateFindings}. Legacy callers keep optional quotes;
@@ -91,7 +94,7 @@ export function validateFindings(
   let selfNegating = 0;
   let missingQuote = 0;
   let unverifiedQuote = 0;
-  const unsupportedPaths = new Set<string>();
+  const missingQuotePaths = new Set<string>();
   for (const f of findings) {
     const changedSet = changedSetByPath.get(f.path) ?? EMPTY_CHANGED;
 
@@ -109,7 +112,8 @@ export function validateFindings(
     }
 
     // 1b. Quote-anchored (LLM findings only): if the finding quotes a line, it
-    // must match the real new-file text at the cited line. The motivating case is
+    // must match the real new-file text at the cited line (spilling onto adjacent
+    // wrapped lines is tolerated — see quoteInSpan). The motivating case is
     // a diff misread — the model cites a valid line number but quotes content from
     // a removed (`L---:`) line, flagging deleted code as if still present. The gate
     // is deliberately broader: ANY mismatch is dropped, because a quote that does
@@ -120,13 +124,17 @@ export function validateFindings(
     const isLlm = f.source === undefined || f.source === "llm";
     const failure = isLlm ? quoteFailure(f, lineTextByPath, options.requireQuote === true) : null;
     if (failure !== null) {
-      if (failure === "missing") missingQuote++;
-      else unverifiedQuote++;
-      unsupportedPaths.add(f.path);
+      if (failure === "missing") {
+        missingQuote++;
+        missingQuotePaths.add(f.path);
+      } else {
+        unverifiedQuote++;
+      }
       if (missingQuote + unverifiedQuote <= 5) {
         // Locations only: never copy potentially sensitive source into CI logs.
+        const quote = stripDiffPrefixes(f.quoted_line ?? "");
         const quoteAtLines = [...(lineTextByPath?.get(f.path) ?? [])]
-          .filter(([, text]) => quoteMatches(text, f.quoted_line ?? ""))
+          .filter(([, text]) => quoteMatches(text, quote))
           .slice(0, 3)
           .map(([line]) => line);
         process.stdout.write(
@@ -178,7 +186,7 @@ export function validateFindings(
     unsupportedEvidence: missingQuote + unverifiedQuote,
     missingQuote,
     unverifiedQuote,
-    unsupportedPaths: [...unsupportedPaths],
+    missingQuotePaths: [...missingQuotePaths],
   };
 }
 
@@ -186,12 +194,20 @@ export function validateFindings(
 type QuoteFailure = "missing" | "unverified";
 
 /**
+ * How many consecutive post-change lines a quote may spill onto on each side of the
+ * cited span. Hard-wrapped prose (Markdown, doc comments) splits one sentence across
+ * lines; a model quoting that sentence is still quoting the cited source. PR #210 in
+ * toolu-ghrunner lost every finding on a re-wrapped AGENTS.md this way.
+ */
+const QUOTE_SPILL_LINES = 3;
+
+/**
  * Validate an LLM finding's source quote, naming the failure so the caller can count
- * the two cases apart. A supplied quote is always non-empty and must be contained in
- * its cited source line; only legacy callers may omit it. `null` means the quote is
- * valid (or not required). A quote that was supplied but could not be checked against
- * the source is "unverified" alongside one that simply did not match — both mean the
- * model's claim is ungrounded, and neither is a missing quote.
+ * the two cases apart. A supplied quote is always non-empty and must come from the
+ * cited source span (see {@link quoteInSpan}); only legacy callers may omit it. `null`
+ * means the quote is valid (or not required). A quote that was supplied but could not
+ * be checked against the source is "unverified" alongside one that simply did not
+ * match — both mean the model's claim is ungrounded, and neither is a missing quote.
  */
 function quoteFailure(
   finding: Finding,
@@ -200,17 +216,66 @@ function quoteFailure(
 ): QuoteFailure | null {
   if (finding.quoted_line === undefined) return requireQuote ? "missing" : null;
   if (lineTextByPath === undefined) return requireQuote ? "unverified" : null;
-  const actual = lineTextByPath.get(finding.path)?.get(finding.line);
-  if (actual !== undefined && quoteMatches(actual, finding.quoted_line)) return null;
+  const lines = lineTextByPath.get(finding.path);
+  if (lines !== undefined && quoteInSpan(lines, finding, finding.quoted_line)) return null;
   return "unverified";
+}
+
+/**
+ * True when the quote, whitespace-normalized and stripped of copied diff prefixes,
+ * occurs in the post-change text around the cited span AND that occurrence overlaps
+ * the span itself. The overlap keeps the anchor honest: a quote lifted wholly from a
+ * neighbouring line still fails, as does one from a removed (`L---:`) line, which is
+ * absent from `lines`. Only consecutive present lines join, so a quote never bridges
+ * a gap between hunks.
+ */
+function quoteInSpan(lines: Map<number, string>, finding: Finding, quoted: string): boolean {
+  const q = normalize(stripDiffPrefixes(quoted));
+  const first = finding.line;
+  const last = Math.max(finding.end_line ?? first, first);
+  if (q === "" || !lines.has(first)) return false;
+  let lo = first;
+  while (lo > first - QUOTE_SPILL_LINES && lines.has(lo - 1)) lo--;
+  let hi = last;
+  while (hi < last + QUOTE_SPILL_LINES && lines.has(hi + 1)) hi++;
+
+  let text = "";
+  let spanStart = 0;
+  let spanEnd = 0;
+  for (let n = lo; n <= hi; n++) {
+    const part = normalize(lines.get(n) ?? "");
+    if (part !== "") text += text === "" ? part : ` ${part}`;
+    if (n === first) spanStart = text.length - part.length;
+    if (n <= last) spanEnd = text.length;
+  }
+  for (let at = text.indexOf(q); at !== -1; at = text.indexOf(q, at + 1)) {
+    if (at < spanEnd && at + q.length > spanStart) return true;
+  }
+  return false;
+}
+
+/**
+ * Drop the line-priming a model copied along with its quote: a leading `Lnnn: ` and
+ * the diff's `+` marker, per line. Only ever shortens the quote, so it can never turn
+ * a matching quote into a mismatch. `L---: ` (a removed line) is deliberately kept so
+ * a quote of deleted code still fails.
+ */
+function stripDiffPrefixes(quoted: string): string {
+  return quoted
+    .split("\n")
+    .map((line) => line.replace(/^\s*(?:L\d+: ?)?\+?/, ""))
+    .join("\n");
 }
 
 /** Whitespace-normalized one-way containment: the quote comes FROM source. */
 function quoteMatches(actual: string, quoted: string): boolean {
-  const norm = (s: string): string => s.replace(/\s+/g, " ").trim();
-  const a = norm(actual);
-  const q = norm(quoted);
-  return q !== "" && a.includes(q);
+  const q = normalize(quoted);
+  return q !== "" && normalize(actual).includes(q);
+}
+
+/** Collapse every whitespace run to one space and trim. */
+function normalize(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
 }
 
 /**

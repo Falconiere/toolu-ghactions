@@ -161,7 +161,7 @@ describe("validateFindings", () => {
     const strict = validateFindings(findings, changed, "high", lineText, { requireQuote: true });
     expect(strict.findings).toEqual(findings);
     expect(strict.unsupportedEvidence).toBe(0);
-    expect(strict.unsupportedPaths).toEqual([]);
+    expect(strict.missingQuotePaths).toEqual([]);
   });
 
   it("skips the quote check when no line text is supplied (backward compatible)", () => {
@@ -290,7 +290,7 @@ describe("validateFindings", () => {
     // was supplied and could not be verified.
     expect(strict.missingQuote).toBe(1);
     expect(strict.unverifiedQuote).toBe(0);
-    expect(strict.unsupportedPaths).toEqual([path]);
+    expect(strict.missingQuotePaths).toEqual([path]);
   });
 
   it("counts a supplied-but-unmatchable quote apart from a missing one, and logs both", () => {
@@ -326,6 +326,8 @@ describe("validateFindings", () => {
     expect(strict.unsupportedEvidence).toBe(2);
     expect(strict.missingQuote).toBe(1);
     expect(strict.unverifiedQuote).toBe(1);
+    // Only the missing quote marks its path; a mismatched quote is an ordinary drop.
+    expect(strict.missingQuotePaths).toEqual([path]);
   });
 
   it("strips the recorded prose suggestion without discarding its anchored finding", () => {
@@ -360,6 +362,81 @@ describe("validateFindings", () => {
     );
     expect(findings).toHaveLength(1);
     expect(findings[0]?.suggestion).toBeUndefined();
+  });
+});
+
+// Falconiere/toolu-ghrunner PR #210 re-wrapped AGENTS.md. Every finding cited a line
+// that ends mid-sentence, the quote found on no single diff line, and the gate dropped
+// them all — the review then claimed the file was never read. Real post-change lines.
+describe("validateFindings — quotes across hard-wrapped lines (PR #210)", () => {
+  const path = "AGENTS.md";
+  const source = new Map<number, string>([
+    [45, "  `src/foo/bar.rs`."],
+    [46, "- **Unit tests never share a file with prod logic**: sibling `tests/` dir +"],
+    [47, '  one-line include (`#[cfg(test)] #[path = "tests/x.rs"] mod tests;`).'],
+    [48, "  `tests/` trees stay **flat**; crate-root integration tests live in top-level"],
+    [297, "  (two-phase names)/`action_exec`+`support`/`command_parser`/`depth_tracker`/"],
+    [
+      298,
+      "  `file_commands`/`cgroup_join` (reserved)/`service_auth`+`lifecycle`. Step summaries (#83, below) and",
+    ],
+    [299, "  job outputs (#88, below) included. `job_http` (#94: job + accelerated clients"],
+    [300, "  from `RunnerConfig.network`, proxy-credential masks, host/container exports);"],
+  ]);
+  const changed = new Map([[path, [...source.keys()]]]);
+  const lineText = new Map([[path, source]]);
+  const quoting = (line: number, quoted_line: string): Finding => ({
+    path,
+    line,
+    quoted_line,
+    severity: "low",
+    confidence: "high",
+    text: "The compressed doc refers to sections that no longer exist.",
+  });
+  const check = (finding: Finding) =>
+    validateFindings([finding], changed, "high", lineText, { requireQuote: true });
+
+  it("keeps a sentence quoted across the cited line and the next one", () => {
+    const sameLine = check(
+      quoting(298, "Step summaries (#83, below) and job outputs (#88, below) included."),
+    );
+    expect(sameLine.findings).toHaveLength(1);
+    // Newline-joined, as a model copying two diff lines would emit it.
+    const twoLines = check(
+      quoting(46, "sibling `tests/` dir +\n  one-line include (`#[cfg(test)] #[path"),
+    );
+    expect(twoLines.findings).toHaveLength(1);
+  });
+
+  it("keeps a sentence that starts on the line before the cited one", () => {
+    const result = check(quoting(299, "Step summaries (#83, below) and job outputs (#88, below)"));
+    expect(result.findings).toHaveLength(1);
+  });
+
+  it("keeps a quote that copied the Lnnn: prefix and diff marker", () => {
+    const result = check(
+      quoting(46, "L46: +- **Unit tests never share a file with prod logic**: sibling"),
+    );
+    expect(result.findings).toHaveLength(1);
+  });
+
+  it("drops a quote taken wholly from a neighbouring line", () => {
+    const result = check(quoting(46, "`src/foo/bar.rs`."));
+    expect(result.findings).toHaveLength(0);
+    expect(result.unverifiedQuote).toBe(1);
+    expect(result.missingQuotePaths).toEqual([]);
+  });
+
+  it("drops a quote of a removed line even with its prefix copied", () => {
+    const result = check(quoting(46, "L---: -- **Unit tests live beside prod logic**"));
+    expect(result.findings).toHaveLength(0);
+    expect(result.unverifiedQuote).toBe(1);
+  });
+
+  it("never joins across a gap between hunks", () => {
+    // Lines 48 and 297 sit in different hunks: their texts are never adjacent.
+    const result = check(quoting(48, "live in top-level (two-phase names)"));
+    expect(result.findings).toHaveLength(0);
   });
 });
 

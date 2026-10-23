@@ -201,18 +201,21 @@ export async function reviewAndValidate(input: ReviewCallInput): Promise<ReviewC
     );
   }
   result.findings = kept;
-  const { stamped, selfNegating, unsupportedPaths } = validate(
+  const { stamped, selfNegating, unverifiedQuote, missingQuotePaths } = validate(
     result,
     distillation.review_diff,
     inputs,
   );
-  // A rejected quote condemns its path only when NOTHING of the model's work on that
-  // path survived. A file the model read and reported on — two findings anchored and
-  // quoted, one mis-quoted and dropped — was reviewed; calling it "unreviewed" over the
-  // dropped one is false, and via settleVerdict's degradeOnCoverage that single bad
-  // quote would turn the whole review into a "Review incomplete" error verdict.
+  // A quote that does not match its cited line is the model misreading one line of a
+  // file it did read: drop the finding like any other gate drop and keep the file
+  // reviewed. Condemning the file instead turned toolu-ghrunner PR #210's re-wrapped AGENTS.md
+  // into a "Review incomplete" request-changes verdict on a provider call that succeeded.
+  if (unverifiedQuote > 0) result.unverifiedEvidence = unverifiedQuote;
+  // A finding with NO quote is a model ignoring the evidence contract — nothing it said
+  // can be checked, so its path is condemned, but only when NOTHING of the model's
+  // work on that path survived: a file with a surviving finding was reviewed.
   const pathsWithSurvivors = new Set(stamped.map((f) => f.path));
-  const condemned = unsupportedPaths.filter((path) => !pathsWithSurvivors.has(path));
+  const condemned = missingQuotePaths.filter((path) => !pathsWithSurvivors.has(path));
   for (const path of condemned) {
     coverage.set(path, { status: "unreviewed", reason: "unsupported-source-evidence" });
   }

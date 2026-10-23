@@ -99,12 +99,14 @@ export function settleVerdict(
   let verdict = resolveVerdict(validated.verdict, findings.length);
   // `removed` — every finding this round accounted for but did not carry forward
   // to the comment: settled on its thread (suppressed), out of the incremental
-  // scope (scoped.dropped), or self-negating noise validateFindings already
-  // dropped before this function ever saw it (input.selfNegating — AC-8).
+  // scope (scoped.dropped), or self-negating noise or an unverifiable quote that
+  // validateFindings already dropped before this function ever saw it
+  // (input.selfNegating — AC-8; result.unverifiedEvidence).
   const removed =
     suppressed.length +
     scoped.dropped.length +
     input.selfNegating +
+    (input.result.unverifiedEvidence ?? 0) +
     (input.settledBeforeValidation ?? 0) +
     (input.result.enhancement?.dismissed ?? 0);
   if (verdict === "changes" && findings.length === 0) {
