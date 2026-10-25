@@ -35,23 +35,24 @@ jobs:
     if: github.event_name != 'release'
     runs-on: ubuntu-latest
     env:
-      HAS_APP: ${{ secrets.APP_ID != '' }}
+      HAS_APP: ${{ secrets.TOOLU_RELEASE_APP_ID != '' }}
     outputs:
       release_created: ${{ steps.rp.outputs.release_created }}
       tag_name: ${{ steps.rp.outputs.tag_name }}
       major: ${{ steps.rp.outputs.major }}
     steps:
-      # Prefer a GitHub App installation token: unlike a fine-grained PAT it
-      # never expires (the 2026-07 release outage was a PAT hitting its 30-day
-      # default expiry — "Bad credentials"). continue-on-error keeps the
+      # Prefer a GitHub App installation token — the "Toolu - Release" App
+      # (TOOLU_RELEASE_APP_ID / TOOLU_RELEASE_PRIVATE_KEY): unlike a fine-grained
+      # PAT it never expires (the 2026-07 release outage was a PAT hitting its
+      # 30-day default expiry — "Bad credentials"). continue-on-error keeps the
       # fallback chain alive when the app is missing or not installed here.
       - uses: actions/create-github-app-token@v2
         id: app-token
         if: env.HAS_APP == 'true'
         continue-on-error: true
         with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.TOOLU_RELEASE_APP_ID }}
+          private-key: ${{ secrets.TOOLU_RELEASE_PRIVATE_KEY }}
       # Surface a masked mint failure loudly — continue-on-error keeps the run
       # alive, but a broken app install must not hide behind the PAT fallback.
       - name: App token mint failed (falling back)
@@ -141,7 +142,7 @@ jobs:
     # skip cleanly until a push credential (GitHub App install or PAT) + the
     # mirror repos exist, instead of failing every release red during setup.
     env:
-      HAS_APP: ${{ secrets.APP_ID != '' }}
+      HAS_APP: ${{ secrets.TOOLU_RELEASE_APP_ID != '' }}
       HAS_PUSH_TOKEN: ${{ secrets.RELEASE_TOOLU_ACTIONS_TOKEN != '' }}
     strategy:
       fail-fast: false
@@ -160,16 +161,16 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      # Cross-repo token: the app must be INSTALLED on the mirror repo for this
-      # mint to succeed (`repositories:` takes bare names under `owner`).
+      # Cross-repo token: the release App must be INSTALLED on the mirror repo
+      # for this mint to succeed (`repositories:` takes bare names under `owner`).
       # continue-on-error → fall back to the PAT, then to a clean skip.
       - uses: actions/create-github-app-token@v2
         id: app-token
         if: env.HAS_APP == 'true'
         continue-on-error: true
         with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.TOOLU_RELEASE_APP_ID }}
+          private-key: ${{ secrets.TOOLU_RELEASE_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ matrix.mirror_name }}
       # Surface a masked mint failure loudly — continue-on-error keeps the run
