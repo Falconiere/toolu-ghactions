@@ -9,6 +9,43 @@ import { ACCEPTED_RESOLUTION_NOTE } from "@/github/threads.js";
 import { dropSettled, reconcile } from "@/review/reconcile.js";
 import { BOT, authorReply, finding, thread } from "@/review/__tests__/reconcile-helpers.js";
 
+describe("settlement followed by reconciliation", () => {
+  it.each([
+    { name: "resolved nearby", line: 10, resolved: true, fp: "fp-original", action: "create" },
+    { name: "resolved detached", line: null, resolved: true, fp: "fp-original", action: "create" },
+    {
+      name: "resolved exact fingerprint",
+      line: null,
+      resolved: true,
+      fp: "fp-current",
+      action: "settle",
+    },
+    { name: "resolved exact line", line: 12, resolved: true, fp: "fp-original", action: "settle" },
+    { name: "open nearby", line: 10, resolved: false, fp: "fp-original", action: "reply" },
+  ])(
+    "keeps a blocker actionable or legitimately settled: $name",
+    ({ line, resolved, fp, action }) => {
+      const f = finding({ fp: "fp-current", line: 12, severity: "blocker" });
+      const t = thread({
+        fp,
+        line,
+        isResolved: resolved,
+        isOutdated: line === null,
+        rootBody: "**blocker** _(CORRECTNESS)_: previous finding",
+        replies: [authorReply],
+      });
+      const { kept, suppressed } = dropSettled([f], [t]);
+      expect(kept).toEqual(action === "settle" ? [] : [f]);
+      expect(suppressed).toEqual(action === "settle" ? [f] : []);
+
+      const plan = reconcile(kept, [t]);
+      expect(plan.toCreate).toEqual(action === "create" ? [f] : []);
+      expect(plan.toReply).toEqual(action === "reply" ? [{ thread: t, finding: f }] : []);
+      expect(plan.toResolve).toEqual([]);
+    },
+  );
+});
+
 describe("dropSettled loose matching (settled-thread convergence)", () => {
   it("suppresses a reworded finding within the line radius of a resolved thread", () => {
     // New fp (reworded) + drifted line: both strict prongs miss, radius covers it.
