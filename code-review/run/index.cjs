@@ -43127,7 +43127,9 @@ function reconcile(findings, priorThreads, clusters) {
     const idx = clusterFor(groups, thread, clusters?.priorClusters);
     const matched = idx >= 0 ? findings[idx] : void 0;
     const group = idx >= 0 ? groups[idx] ?? [] : [];
-    if (matched) covered.add(idx);
+    if (matched && (!thread.isResolved || clusterSettled(group, thread, clusters?.priorClusters))) {
+      covered.add(idx);
+    }
     if (thread.isResolved) continue;
     const strict = group.some((m) => matches(m, thread));
     const blockerStillOpen = !strict && group.some((m) => m.severity === "blocker");

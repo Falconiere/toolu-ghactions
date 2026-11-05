@@ -10,8 +10,8 @@
 //
 // A finding maps to a thread by fingerprint (stable across line drift) OR by exact
 // path+line (catches a reworded argument posted at the same spot). A finding that maps to
-// ANY prior thread — even a settled one — is never re-posted, so a settled thread is
-// respected rather than reopened. "Settled" is a GitHub resolution, an author-side
+// an open thread or one whose settlement covers it is never re-posted, so a settled
+// thread is respected rather than reopened. "Settled" is a GitHub resolution, an author-side
 // dismissal detected in the replies (see review/dismissal.ts), OR the bot's durable
 // acceptance note left behind when an earlier resolve mutation failed. {@link
 // dropSettled} removes those findings BEFORE this plan is built, so a settled thread
@@ -265,7 +265,7 @@ export function reconcile<F extends ReconcileFinding>(
   clusters?: ClusterContext<F>,
 ): Reconciliation<F> {
   const groups = memberLists(findings, clusters);
-  const covered = new Set<number>(); // cluster indices represented by ANY prior thread
+  const covered = new Set<number>(); // cluster indices represented by an open or settling thread
   const open = new Set<number>(); // cluster indices that already keep one OPEN bot thread
   const toReply: ReplyAction<F>[] = [];
   const toResolve: PriorThread[] = [];
@@ -274,7 +274,11 @@ export function reconcile<F extends ReconcileFinding>(
     const idx = clusterFor(groups, thread, clusters?.priorClusters);
     const matched = idx >= 0 ? findings[idx] : undefined;
     const group = idx >= 0 ? (groups[idx] ?? []) : [];
-    if (matched) covered.add(idx);
+    // A resolved loose-only match cannot host a surviving blocker. Apply the same
+    // settlement rules as dropSettled before letting it prevent a fresh comment.
+    if (matched && (!thread.isResolved || clusterSettled(group, thread, clusters?.priorClusters))) {
+      covered.add(idx);
+    }
     if (thread.isResolved) continue; // respect an existing resolution: never re-act
     // A blocker that only NEARBY-matches (not exact) stays live even on a noted thread —
     // the same strict-match-only rule matchesSettled applies to blocker suppression, so a

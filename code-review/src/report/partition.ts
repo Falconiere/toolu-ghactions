@@ -88,11 +88,9 @@ export interface PartitionInput {
    *  actually accepted (a failed `resolveThread`/`replyToThread` call is absent). */
   applied: Reconciliation<StampedFinding>;
   /** This run's findings AFTER dropSettled — the exact array `reconcile()` (and
-   *  `postInline`) were called with. Needed because reconcile()'s own buckets can
-   *  silently drop a finding (reconcile.ts:169-174): `covered.add(idx)` fires
-   *  before the `isResolved` early return, so a finding that only loosely matches
-   *  an ALREADY-resolved thread is excluded from `toCreate` but never reaches
-   *  `toReply` or `toResolve` either. The `open` fallback below is what recovers it. */
+   *  `postInline`) were called with. The applied plan can omit surviving findings:
+   *  an open thread may need no reply, or GitHub may reject a planned comment.
+   *  The `open` fallback below keeps those findings accounted for. */
   findings: StampedFinding[];
   /** Findings `dropSettled` removed before `reconcile()` ran (an already-settled
    *  thread's finding re-raised this run) — from `SettledVerdict.suppressed`. */
@@ -158,7 +156,7 @@ function classifyToResolve(
 
 /** Rules 3/4 — `toReply[].finding` and `toCreate` claim `open`/`new` first;
  *  LAST, any `findings` entry still unclaimed falls to `open` (never `new`),
- *  recovering reconcile.ts:169-174 without letting a genuinely new finding
+ *  recovering findings absent from the applied plan without letting a new finding
  *  (which is also in `findings`) get swept in here ahead of `toCreate`. */
 function classifyOpenAndNew(
   applied: Reconciliation<StampedFinding>,
@@ -242,7 +240,7 @@ function reusedThreadId(
  * plan. Precedence (first match wins): `dismissed` → `fixed` → `open`
  * (`toReply[].finding`) → `new` (`toCreate`), then any still-unclaimed `findings`
  * entry falls to `open` — resolving reconcile.ts:189-196's one-fp-in-two-buckets
- * case to one, recovering reconcile.ts:169-174, and absorbing a suppressed
+ * case to one, recovering findings absent from the applied plan, and absorbing a suppressed
  * finding into its own thread's `toResolve` row when that thread also settles
  * this run (see {@link resolveSuppressed} — `fp` alone can't tell that apart).
  * A settlement lookup finding nothing, a failed exhaustiveness check, or a

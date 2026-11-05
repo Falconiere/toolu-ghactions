@@ -1,7 +1,7 @@
 // partition.test.ts — proves partitionFindings() is a real partition: every fp
 // lands in exactly one bucket, every input fp lands somewhere, and the two
-// documented reconcile() edge cases (a duplicate-open-thread fp split across
-// buckets, and a loosely-matched finding reconcile() drops entirely) resolve
+// reconciliation edge cases (a duplicate-open-thread fp split across
+// buckets, and a surviving blocker with only a loosely matched resolved thread) resolve
 // deterministically instead of double-counting or vanishing. Settlement-value
 // derivation and thread-identity ambiguity (settlement.ts's concerns) are
 // covered in the sibling settlement.test.ts.
@@ -114,7 +114,7 @@ describe("partitionFindings — the two reconcile() edge cases", () => {
     expect(p.dismissed).toEqual([]);
   });
 
-  it("reconcile.ts:169-174 — a loosely-matched already-resolved-thread blocker reaches no reconcile() bucket, but lands in open", () => {
+  it("reports a surviving blocker with only a loosely matched resolved thread as new", () => {
     const f = stampedFinding({
       fp: "fp-orph",
       path: "src/x.ts",
@@ -123,14 +123,15 @@ describe("partitionFindings — the two reconcile() edge cases", () => {
     });
     const t = thread({ fp: "fp-orph-t", path: "src/x.ts", line: 10, isResolved: true });
     const applied = reconcile([f], [t]);
-    expect(applied.toCreate).toEqual([]);
+    expect(applied.toCreate).toEqual([f]);
     expect(applied.toReply).toEqual([]);
-    expect(applied.toResolve).toEqual([]); // vanished from every reconcile() bucket
+    expect(applied.toResolve).toEqual([]);
 
     const p = expectOk(
       partitionFindings({ applied, findings: [f], suppressed: [], priorThreads: [t], prior: null }),
     );
-    expect(p.open).toEqual([
+    expect(p.open).toEqual([]);
+    expect(p.new).toEqual([
       {
         fp: "fp-orph",
         path: "src/x.ts",
@@ -139,6 +140,25 @@ describe("partitionFindings — the two reconcile() edge cases", () => {
         category: "correctness",
       },
     ]);
+  });
+
+  it("keeps a surviving finding open when a failed comment post leaves an empty applied plan", () => {
+    const f = stampedFinding({ fp: "fp-unposted", severity: "blocker" });
+    const p = expectOk(
+      partitionFindings({
+        applied: { toCreate: [], toReply: [], toResolve: [] },
+        findings: [f],
+        suppressed: [],
+        priorThreads: [],
+        prior: null,
+      }),
+    );
+    expect(p.open).toEqual([
+      { fp: f.fp, path: f.path, line: f.line, severity: f.severity, category: f.category },
+    ]);
+    expect(p.new).toEqual([]);
+    expect(p.fixed).toEqual([]);
+    expect(p.dismissed).toEqual([]);
   });
 });
 
@@ -199,7 +219,7 @@ describe("partitionFindings — exhaustiveness and disjointness", () => {
     expect(Object.fromEntries(seen)).toEqual({
       "fp-new-1": "new",
       "fp-keep-1": "open",
-      "fp-orph": "open",
+      "fp-orph": "new",
       "fp-fixed-1": "fixed",
       "fp-dism-1": "dismissed",
       "fp-sup": "dismissed",
