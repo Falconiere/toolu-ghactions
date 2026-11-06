@@ -800,11 +800,13 @@ earlier inline threads instead of blindly re-posting every finding:
   its thread is **resolved** (with a short note) rather than raised again.
 - 💬 **argues** — a finding the model still stands by is re-stated **as a reply in the
   existing thread** (engaging the author's reasoning), not as a duplicate comment.
-- ⤵️ **dedup** — only genuinely new findings open new threads; leftover duplicate
-  threads for the same finding are resolved.
-- 🔒 **respects resolutions** — **resolving a bot thread dismisses that finding**:
-  on later runs it is dropped from the verdict count, the summary comment, and
-  inline posting alike, instead of being re-litigated forever. When every
+- ⤵️ **dedup** — new findings and surviving blockers with only a loose match to a
+  resolved thread open actionable threads; leftover duplicate open threads for
+  the same finding are resolved.
+- 🔒 **respects resolutions** — **resolving a bot thread dismisses findings it
+  actually settles**: on later runs they are dropped from the verdict count,
+  the summary comment, and inline posting alike. A nearby reworded blocker is
+  not settled by that loose match and gets a fresh inline thread. When every
   remaining finding was human-resolved, a `request-changes` verdict downgrades to
   `merge-approved`. This works even with `INLINE_COMMENTS: false` (threads from
   earlier inline-enabled runs still suppress). Resolved threads are also fed to
