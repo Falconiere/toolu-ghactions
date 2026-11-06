@@ -95,7 +95,8 @@ header for the full story, this is just the index).
 - **`reconcile.ts`** — decides `toCreate`/`toReply`/`toResolve` for the bot's
   prior inline threads against this round's findings (cluster
   representatives only — see `pipeline/reduce.ts`); cluster-aware coverage
-  (any member fp matching a thread covers the whole cluster).
+  (a matching open thread covers the whole cluster; a resolved thread covers it
+  only when its settlement applies to the surviving findings).
 - **`render.ts`** — assembles the verdict-comment markdown body from a
   `ReviewBody` (findings, ledger, unanchored findings, cluster sections).
 - **`findings.ts`** — the `### Findings` layout (and `SEVERITY_RANK`, the
