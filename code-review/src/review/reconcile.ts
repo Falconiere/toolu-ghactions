@@ -6,7 +6,7 @@
 //     re-reviewed (with the author's reply in its prompt) and dropped it → close the thread.
 //   - toReply:   a finding that PERSISTS and maps to an unresolved thread where the author
 //     had the last word → post the bot's counter-reasoning IN that thread (no duplicate).
-//   - toCreate:  a finding with no matching prior thread → a genuinely new inline comment.
+//   - toCreate:  a finding without an open or settling thread → a fresh inline comment.
 //
 // A finding maps to a thread by fingerprint (stable across line drift) OR by exact
 // path+line (catches a reworded argument posted at the same spot). A finding that maps to
@@ -20,7 +20,7 @@
 // CLUSTERS (spec §Layer 3). When the caller collapsed this round's findings with
 // review/cluster.ts it passes the cluster REPRESENTATIVES as `findings` plus a
 // {@link ClusterContext}; every rule below then reads at CLUSTER level — a thread
-// matching ANY member covers (and settles) the whole cluster, and resolves only
+// matching ANY member covers the whole cluster while open or legitimately settling it, and resolves only
 // once no member of the cluster it maps to survives. Without a context each
 // finding is its own single-member cluster: every decision stays byte-identical.
 import { hasAcceptedResolutionNote } from "@/github/threads.js";
@@ -254,8 +254,8 @@ export function dropSettled<F extends ReconcileFinding>(
  * unlike {@link matchesResolved} it applies to blockers too.
  *
  * With a {@link ClusterContext}, `findings` are cluster representatives and every
- * rule reads at cluster level ({@link clusterFor}): one matched member covers the
- * whole cluster (no member can reach `toCreate`), a thread resolves only when its
+ * rule reads at cluster level ({@link clusterFor}): one open or legitimately settling
+ * matched member covers the whole cluster, a thread resolves only when its
  * cluster is gone entirely, and one whose exemplar was fixed while members survive
  * is REPLIED to against the promoted representative (`ReplyAction.promoted`).
  */

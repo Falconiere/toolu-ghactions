@@ -64,7 +64,7 @@ export interface DismissedFinding extends ReportedFinding {
 
 /** The four provably disjoint, exhaustive report buckets for one run. */
 export interface PartitionedFindings {
-  /** {@link Reconciliation.toCreate} — findings with no matching prior thread. */
+  /** {@link Reconciliation.toCreate} — findings needing a fresh inline comment. */
   new: ReportedFinding[];
   /** Findings that persist and were not otherwise classified this run — see the
    *  module doc for why an unclassified finding falls here rather than to `new`
