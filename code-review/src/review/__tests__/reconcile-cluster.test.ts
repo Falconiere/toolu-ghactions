@@ -54,6 +54,31 @@ function clusterMap(clusters: FindingCluster[]): Record<string, string> {
 }
 
 describe("reconcile — cluster coverage", () => {
+  it("creates a surviving blocker cluster when its only prior thread is resolved and nearby", () => {
+    const members = Array.from({ length: 3 }, (_, i) => member(i, "blocker"));
+    const clusters = clusterFindings(members);
+    expect(clusters).toHaveLength(1);
+    const first = members[0];
+    if (!first) throw new Error("fixture: member missing");
+    const t = thread({
+      fp: "fp-original",
+      path: first.path,
+      line: first.line + 1,
+      isResolved: true,
+    });
+    const reps = clusters.map((c) => c.exemplar);
+    const context = contextOf(clusters);
+
+    const { kept, suppressed } = dropSettled(reps, [t], context);
+    expect(kept).toEqual(reps);
+    expect(suppressed).toEqual([]);
+    expect(reconcile(kept, [t], context)).toEqual({
+      toCreate: reps,
+      toReply: [],
+      toResolve: [],
+    });
+  });
+
   it("one thread matching ONE member covers all 67: 1 reply, 0 creates, 0 resolves", () => {
     const members = pattern67();
     const clusters = clusterFindings(members);

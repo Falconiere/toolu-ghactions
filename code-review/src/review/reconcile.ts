@@ -6,12 +6,12 @@
 //     re-reviewed (with the author's reply in its prompt) and dropped it → close the thread.
 //   - toReply:   a finding that PERSISTS and maps to an unresolved thread where the author
 //     had the last word → post the bot's counter-reasoning IN that thread (no duplicate).
-//   - toCreate:  a finding with no matching prior thread → a genuinely new inline comment.
+//   - toCreate:  a finding without an open or settling thread → a fresh inline comment.
 //
 // A finding maps to a thread by fingerprint (stable across line drift) OR by exact
 // path+line (catches a reworded argument posted at the same spot). A finding that maps to
-// ANY prior thread — even a settled one — is never re-posted, so a settled thread is
-// respected rather than reopened. "Settled" is a GitHub resolution, an author-side
+// an open thread or one whose settlement covers it is never re-posted, so a settled
+// thread is respected rather than reopened. "Settled" is a GitHub resolution, an author-side
 // dismissal detected in the replies (see review/dismissal.ts), OR the bot's durable
 // acceptance note left behind when an earlier resolve mutation failed. {@link
 // dropSettled} removes those findings BEFORE this plan is built, so a settled thread
@@ -20,7 +20,7 @@
 // CLUSTERS (spec §Layer 3). When the caller collapsed this round's findings with
 // review/cluster.ts it passes the cluster REPRESENTATIVES as `findings` plus a
 // {@link ClusterContext}; every rule below then reads at CLUSTER level — a thread
-// matching ANY member covers (and settles) the whole cluster, and resolves only
+// matching ANY member covers the whole cluster while open or legitimately settling it, and resolves only
 // once no member of the cluster it maps to survives. Without a context each
 // finding is its own single-member cluster: every decision stays byte-identical.
 import { hasAcceptedResolutionNote } from "@/github/threads.js";
@@ -254,8 +254,8 @@ export function dropSettled<F extends ReconcileFinding>(
  * unlike {@link matchesResolved} it applies to blockers too.
  *
  * With a {@link ClusterContext}, `findings` are cluster representatives and every
- * rule reads at cluster level ({@link clusterFor}): one matched member covers the
- * whole cluster (no member can reach `toCreate`), a thread resolves only when its
+ * rule reads at cluster level ({@link clusterFor}): one open or legitimately settling
+ * matched member covers the whole cluster, a thread resolves only when its
  * cluster is gone entirely, and one whose exemplar was fixed while members survive
  * is REPLIED to against the promoted representative (`ReplyAction.promoted`).
  */
@@ -265,7 +265,7 @@ export function reconcile<F extends ReconcileFinding>(
   clusters?: ClusterContext<F>,
 ): Reconciliation<F> {
   const groups = memberLists(findings, clusters);
-  const covered = new Set<number>(); // cluster indices represented by ANY prior thread
+  const covered = new Set<number>(); // cluster indices represented by an open or settling thread
   const open = new Set<number>(); // cluster indices that already keep one OPEN bot thread
   const toReply: ReplyAction<F>[] = [];
   const toResolve: PriorThread[] = [];
@@ -274,7 +274,11 @@ export function reconcile<F extends ReconcileFinding>(
     const idx = clusterFor(groups, thread, clusters?.priorClusters);
     const matched = idx >= 0 ? findings[idx] : undefined;
     const group = idx >= 0 ? (groups[idx] ?? []) : [];
-    if (matched) covered.add(idx);
+    // A resolved loose-only match cannot host a surviving blocker. Apply the same
+    // settlement rules as dropSettled before letting it prevent a fresh comment.
+    if (matched && (!thread.isResolved || clusterSettled(group, thread, clusters?.priorClusters))) {
+      covered.add(idx);
+    }
     if (thread.isResolved) continue; // respect an existing resolution: never re-act
     // A blocker that only NEARBY-matches (not exact) stays live even on a noted thread —
     // the same strict-match-only rule matchesSettled applies to blocker suppression, so a
