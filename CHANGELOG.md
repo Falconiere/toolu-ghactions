@@ -1,5 +1,12 @@
 # Changelog
 
+## [8.6.2](https://github.com/Falconiere/toolu-ghactions/compare/v8.6.1...v8.6.2) (2026-11-07)
+
+
+### Bug Fixes
+
+* **review:** keep surviving blockers actionable after loose resolution ([#144](https://github.com/Falconiere/toolu-ghactions/issues/144)) ([2761dbf](https://github.com/Falconiere/toolu-ghactions/commit/2761dbf6a9e2f49a4b60be9040eda6e5c3ddc72d))
+
 ## [8.6.1](https://github.com/Falconiere/toolu-ghactions/compare/v8.6.0...v8.6.1) (2026-10-23)
 
 
