@@ -36,7 +36,10 @@ const HUNK_PREFIX = "@@ ";
  * each `@@ -a,b +c,d @@` to the number after `+`). Additions and context lines
  * are prefixed `Lnnn: ` and their line numbers recorded against the current
  * path; removed lines get `L---: `; headers and other lines pass through
- * unchanged. An empty input yields an empty diff and no files.
+ * unchanged. `--- `/`+++ ` count as headers only inside the block between a
+ * `diff --git ` line and that file's first `@@ `, so a body line whose content
+ * begins `-- ` or `++ ` is still primed as content. An empty input yields an
+ * empty diff and no files.
  */
 export function shapeDiff(rawDiff: string): ShapedDiff {
   if (rawDiff === "") {
@@ -53,6 +56,15 @@ export function shapeDiff(rawDiff: string): ShapedDiff {
   // jq group_by (which sorts by key — see note below).
   let path = "";
   let newLine = 0;
+  // True only while walking a file's HEADER block — from its `diff --git ` line
+  // up to (not including) its first `@@ `. `--- `/`+++ ` are headers ONLY here:
+  // a body line may start with them too (real git emits `+++ inserted para` for
+  // an added line whose content begins `++ `, and `--- drop it` for a removed
+  // SQL/Lua comment). Honouring the prefix unconditionally let such a line
+  // steal `path`, skip priming, and leave `newLine` behind — so every later
+  // line in the file was off by one and filed under a path that does not exist,
+  // which pipeline/validate.ts then drops as unanchored.
+  let inFileHeader = false;
 
   // printf '%s\n' adds a trailing newline the awk then reads as a final empty
   // record; splitting on "\n" of the (newline-terminated) raw diff reproduces
@@ -63,17 +75,19 @@ export function shapeDiff(rawDiff: string): ShapedDiff {
 
   for (const line of lines) {
     if (line.startsWith(DIFF_GIT_PREFIX)) {
+      inFileHeader = true;
       out.push(line);
-    } else if (line.startsWith(ADD_HEADER_PREFIX)) {
+    } else if (inFileHeader && line.startsWith(ADD_HEADER_PREFIX)) {
       // Decode git's C-quoting here so `files[].path` is the REAL path, matching
       // `changed_files` and chunk.ts's segment paths (git/path.ts).
       path = headerOperandPath(line.slice(ADD_HEADER_PREFIX.length));
       out.push(line);
-    } else if (line.startsWith(DEL_HEADER_PREFIX)) {
+    } else if (inFileHeader && line.startsWith(DEL_HEADER_PREFIX)) {
       out.push(line);
     } else if (line.startsWith(HUNK_PREFIX)) {
       const m = line.match(/\+[0-9]+/);
       if (m) newLine = Number.parseInt(m[0].slice(1), 10);
+      inFileHeader = false;
       out.push(line);
     } else if (line.startsWith("+")) {
       out.push(`L${newLine}: ${line}`);

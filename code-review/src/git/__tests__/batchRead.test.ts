@@ -5,8 +5,17 @@
 // record with no content and no trailing LF, and a blob larger than the content
 // bound still occupies its full `size + 1` bytes on the stream.
 import { describe, it, expect, afterEach } from "vitest";
-import { batchRead, MAX_BLOB_READ_BYTES } from "@/git/batchRead.js";
-import { git, setupGitRepo, writeFile, removeRepo } from "./helpers.js";
+import { batchRead, groupByByteBudget, MAX_BLOB_READ_BYTES } from "@/git/batchRead.js";
+import {
+  git,
+  setupGitRepo,
+  writeFile,
+  removeRepo,
+  canCreateFile,
+  installGitShim,
+  readSpawnLog,
+  resetSpawnLog,
+} from "./helpers.js";
 
 const repos: string[] = [];
 afterEach(() => {
@@ -115,5 +124,121 @@ describe("batchRead — record framing past the content bound", () => {
 
     expect(results.get("big.txt")).toEqual({ size: 2001, content: null });
     expect(results.get("small.txt")).toEqual({ size: 6, content: "small\n" });
+  });
+});
+
+// A path may legally contain a REAL newline, and `src/git/path.ts` deliberately
+// decodes git's `"evil\nx.ts"` spelling back into one — so such a path reaches
+// `specKey`. The batch protocol's stdin is LINE-delimited, so one such spec
+// arrives as two lines and git answers with two records: every later spec is
+// then matched positionally to its NEIGHBOUR's size and content (a real source
+// file inheriting another's >1MB size is dropped as large-file; inheriting
+// another's `@generated` header is dropped as generated). Verified against git
+// 2.54: 3 specs → 4 records.
+describe("batchRead — a path containing a real newline", () => {
+  it.skipIf(!canCreateFile("evil\nx.ts"))(
+    "leaves the newline-named path unread yet keeps every other spec's own size and content",
+    () => {
+      const dir = repoWith({
+        "README.md": "readme\n",
+        "evil\nx.ts": "evil\n",
+        LICENSE: "lic\n",
+        "src/app.ts": "app\n",
+      });
+      // Git really did track the awkward name, so this is a genuine 4-spec batch.
+      expect(git(dir, "ls-tree", "-r", "--name-only", "HEAD")).toContain("x.ts");
+
+      const results = batchRead(
+        [
+          { ref: "HEAD", path: "README.md" },
+          { ref: "HEAD", path: "evil\nx.ts" },
+          { ref: "HEAD", path: "LICENSE" },
+          { ref: "HEAD", path: "src/app.ts" },
+        ],
+        dir,
+        { sizeCutoff: 1_000_000 },
+      );
+
+      // The offender is unreadable by construction and FAILS SAFE: with no size
+      // and no content, noiseReason still applies every PATH rule and the file
+      // is reviewed rather than silently dropped as large-file/generated.
+      expect(results.get("evil\nx.ts")).toEqual({ size: null, content: null });
+      // Framing held for the specs on BOTH sides of the offender — pre-fix,
+      // LICENSE read as missing and src/app.ts inherited LICENSE's "lic\n".
+      expect(results.get("README.md")).toEqual({ size: 7, content: "readme\n" });
+      expect(results.get("LICENSE")).toEqual({ size: 4, content: "lic\n" });
+      expect(results.get("src/app.ts")).toEqual({ size: 4, content: "app\n" });
+    },
+  );
+});
+
+// The per-blob cutoff bounds ONE blob; nothing bounded the TOTAL. One `--batch`
+// over ~1500 files of ~700 KB each (CSV/JSON fixtures, a docs import — no noise
+// rule matches, all under LARGE_FILE_BYTES) produces ~1 GB of stdout, so
+// execFileSync threw `spawnSync git ENOBUFS` out of fetchDiff BEFORE the
+// MAX_FILES gate could run. Grouping is tested on its own terms here — a real
+// 1 GB fixture would be absurd — plus one small real repo forced into several
+// groups by a tiny budget, proving the byte-walk stays correct across them.
+describe("batchRead — byte-budget grouping", () => {
+  it("packs consecutive specs into groups that each stay under the budget", () => {
+    const groups = groupByByteBudget([6, 5, 6, 6, 4], (n) => n, 12);
+    expect(groups).toEqual([[6, 5], [6, 6], [4]]);
+  });
+
+  it("keeps spec ORDER, so a group is always a contiguous slice of the input", () => {
+    const groups = groupByByteBudget([1, 2, 3, 4], (n) => n, 4);
+    expect(groups).toEqual([[1, 2], [3], [4]]);
+    expect(groups.flat()).toEqual([1, 2, 3, 4]);
+  });
+
+  it("gives a spec larger than the whole budget its own group rather than dropping it", () => {
+    // Dropping it would silently lose that blob's content; the caller's
+    // maxBuffer (1 GiB) sits far above any single within-cutoff blob.
+    expect(groupByByteBudget([5, 99, 5], (n) => n, 12)).toEqual([[5], [99], [5]]);
+  });
+
+  it("yields no groups for an empty input", () => {
+    expect(groupByByteBudget<number>([], (n) => n, 12)).toEqual([]);
+  });
+
+  it("reads every path's own size and content across multiple real --batch groups", () => {
+    const dir = repoWith({
+      "a.txt": "alpha\n", // 6
+      "b.txt": "beta\n", // 5 → group 1 at 11/12
+      "c.txt": "gamma\n", // 6 → would be 17, opens group 2
+      "d.txt": "delta\n", // 6 → group 2 at 12/12
+      "e.txt": "eps\n", // 4 → opens group 3
+      "src/over.txt": "z".repeat(400) + "\n", // 401 → over the SIZE cutoff, never grouped
+    });
+
+    const specs = ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt", "src/over.txt"].map((path) => ({
+      ref: "HEAD",
+      path,
+    }));
+
+    const shim = installGitShim();
+    let results: ReturnType<typeof batchRead>;
+    let argvs: string[][];
+    try {
+      resetSpawnLog(shim);
+      // A budget of 12 bytes forces three separate `git cat-file --batch` runs.
+      results = batchRead(specs, dir, { sizeCutoff: 100, maxGroupBytes: 12 });
+      // Read the log before uninstall deletes the directory it lives in.
+      argvs = readSpawnLog(shim);
+    } finally {
+      shim.uninstall();
+    }
+
+    const batchRuns = argvs.filter((a) => a.includes("--batch"));
+    expect(batchRuns).toHaveLength(3);
+    expect(argvs.filter((a) => a.includes("--batch-check"))).toHaveLength(1);
+
+    expect(results.get("a.txt")).toEqual({ size: 6, content: "alpha\n" });
+    expect(results.get("b.txt")).toEqual({ size: 5, content: "beta\n" });
+    expect(results.get("c.txt")).toEqual({ size: 6, content: "gamma\n" });
+    expect(results.get("d.txt")).toEqual({ size: 6, content: "delta\n" });
+    expect(results.get("e.txt")).toEqual({ size: 4, content: "eps\n" });
+    // The size cutoff still wins: sized, but never content-read.
+    expect(results.get("src/over.txt")).toEqual({ size: 401, content: null });
   });
 });

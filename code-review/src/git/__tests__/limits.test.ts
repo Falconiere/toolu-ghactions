@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { fetchDiff } from "@/git/diff.js";
+import { countLines, fetchDiff } from "@/git/diff.js";
 import { git, setupGitRepo, writeFile, removeRepo } from "./helpers.js";
 
 // REAL temp git repos exercising the two opt-in limits (MAX_FILES skip and
@@ -67,5 +67,46 @@ describe("fetchDiff limits", () => {
     const full = fetchDiff({ ...BASE, cwd: dir, maxFiles: 100, maxDiffLines: 0 });
     expect(full.truncated).toBe(false);
     expect(r.total_lines).toBeLessThan(full.total_lines);
+  });
+
+  // MAX_DIFF_LINES must be a real cap. Hunk-boundary truncation can only cut at
+  // the NEXT `diff --git `/`@@ ` line, so when the budget runs out inside the
+  // LAST — or, here, the ONLY — hunk, no boundary ever arrives: the whole diff
+  // came back while `truncated` was still set true and prompt.ts told the model
+  // "[Diff truncated at N lines; some hunks omitted]" though nothing was omitted.
+  // The two-file case above cannot catch this, because a second file supplies a
+  // `diff --git` boundary to cut at.
+  it("hard-caps a single hunk longer than MAX_DIFF_LINES, and reports truncated truthfully", () => {
+    const dir = featureRepo();
+    let big = "";
+    for (let n = 1; n <= 60; n++) big += `line ${n}\n`;
+    writeFile(dir, "solo.ts", big);
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "one big file", "--quiet");
+
+    const full = fetchDiff({ ...BASE, cwd: dir, maxFiles: 100, maxDiffLines: 0 });
+    expect(full.truncated).toBe(false);
+    expect(full.total_lines).toBeGreaterThan(20);
+
+    const r = fetchDiff({ ...BASE, cwd: dir, maxFiles: 100, maxDiffLines: 20 });
+    expect(r.truncated).toBe(true);
+    // The cap holds on both the reported count and the actual payload.
+    expect(r.total_lines).toBe(20);
+    expect(countLines(r.diff)).toBe(20);
+    expect(r.total_lines).toBeLessThan(full.total_lines);
+  });
+
+  it("leaves truncated=false when the diff fits the budget exactly", () => {
+    // The other direction of "honest": fitting under the cap is not truncation.
+    const dir = featureRepo();
+    writeFile(dir, "small.ts", "one\ntwo\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "small file", "--quiet");
+
+    const full = fetchDiff({ ...BASE, cwd: dir, maxFiles: 100, maxDiffLines: 0 });
+    const r = fetchDiff({ ...BASE, cwd: dir, maxFiles: 100, maxDiffLines: full.total_lines });
+    expect(r.truncated).toBe(false);
+    expect(r.total_lines).toBe(full.total_lines);
+    expect(r.diff).toBe(full.diff);
   });
 });
