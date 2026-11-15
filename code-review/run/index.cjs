@@ -46314,7 +46314,7 @@ function rankOf(finding) {
 }
 function boundedMarker(state) {
   const full = encodeMarker(state);
-  if (full.length <= MARKER_BUDGET) return full;
+  if (full.length <= MARKER_BUDGET || state.findings.length === 0) return full;
   const worstFirst = state.findings.map((_, index) => index).sort((a, b) => rankOf(state.findings[a] ?? {}) - rankOf(state.findings[b] ?? {}) || a - b);
   const withTop = (keep) => {
     const kept = new Set(worstFirst.slice(0, keep));

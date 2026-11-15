@@ -270,6 +270,19 @@ describe("boundedMarker — the state marker cannot sink the verdict body", () =
     expect(warn).toHaveBeenCalledWith(expect.stringMatching(/dropped \d+ of 800/));
   });
 
+  it("an oversized state with no findings is returned as is, with no warning", () => {
+    // Nothing to drop: the size comes from elsewhere (thousands of unreviewed paths), so
+    // claiming "dropped 0 of 0 remembered findings" would be noise.
+    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+    const state: ReviewState = {
+      ...stateOf(0, 0),
+      unreviewed_paths: Array.from({ length: 6000 }, (_, i) => `src/${i}-${i * 7919}.ts`),
+    };
+    expect(encodeMarker(state).length).toBeGreaterThan(BODY_SIZE_LIMIT / 2);
+    expect(boundedMarker(state)).toBe(encodeMarker(state));
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("a normal-sized state encodes byte-identically, with no warning", () => {
     const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
     const state = stateOf(30, 3);

@@ -245,7 +245,8 @@ function rankOf(finding: ReviewState["findings"][number]): number {
  */
 export function boundedMarker(state: ReviewState): string {
   const full = encodeMarker(state);
-  if (full.length <= MARKER_BUDGET) return full;
+  // Nothing to drop when it already fits — or when no finding is remembered at all.
+  if (full.length <= MARKER_BUDGET || state.findings.length === 0) return full;
   const worstFirst = state.findings
     .map((_, index) => index)
     .sort((a, b) => rankOf(state.findings[a] ?? {}) - rankOf(state.findings[b] ?? {}) || a - b);
