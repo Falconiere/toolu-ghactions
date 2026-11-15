@@ -1,5 +1,13 @@
 # Changelog
 
+## [8.6.2](https://github.com/Falconiere/toolu-ghactions/compare/v8.6.1...v8.6.2) (2026-11-15)
+
+
+### Bug Fixes
+
+* **code-review:** close the forged-marker hole and 32 more audited bugs ([#146](https://github.com/Falconiere/toolu-ghactions/issues/146)) ([84a34f0](https://github.com/Falconiere/toolu-ghactions/commit/84a34f0e577708a1297c49b381e6b0091e038127))
+* **review:** keep surviving blockers actionable after loose resolution ([#144](https://github.com/Falconiere/toolu-ghactions/issues/144)) ([2761dbf](https://github.com/Falconiere/toolu-ghactions/commit/2761dbf6a9e2f49a4b60be9040eda6e5c3ddc72d))
+
 ## [8.6.1](https://github.com/Falconiere/toolu-ghactions/compare/v8.6.0...v8.6.1) (2026-10-23)
 
 
