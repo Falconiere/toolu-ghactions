@@ -1,5 +1,5 @@
-// settleRound.ts — the shared round-1 fixture for the settle scenarios (13: the
-// code-review settle pass, 14: merge-gate's read-only recompute). A REAL completed
+// settleRound.ts — the round-1 fixture for the settle scenario (13: the
+// code-review settle pass). A REAL completed
 // review round (runReview against a scratch repo + the local model server) asks for
 // changes and posts its inline threads; the scenarios then settle those threads and
 // run their pass on the same persisted GitHub store.

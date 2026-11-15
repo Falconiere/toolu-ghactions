@@ -180,6 +180,26 @@ describe("scenario 13 — @toolu dismiss settles the verdict without a model cal
     expect(writes(round)).toEqual(before);
   });
 
+  it("an unreadable comment list or thread list changes nothing", async () => {
+    const round = await reviewedRound(["medium"]);
+    dismiss(round.threads[0]);
+    const noComments = fakeOctokit({ threads: round.threads });
+    noComments.octokit.rest.issues.listComments = async () => {
+      throw new Error("HTTP 403: Resource not accessible by integration");
+    };
+    const noThreads = fakeOctokit({
+      existing: [{ id: 1, body: round.body }],
+      threads: round.threads,
+    });
+    noThreads.octokit.graphql = async () => {
+      throw new Error("HTTP 502: Bad Gateway");
+    };
+    for (const { octokit, rec } of [noComments, noThreads]) {
+      expect((await settle(round, { octokit })).verdict).toBe("skip");
+      expect(writes(round, rec)).toMatchObject({ created: 0, updated: 0, added: 0, removed: 0 });
+    }
+  });
+
   it("AC-9: an in-progress sticky is left alone", async () => {
     const round = await reviewedRound(["medium"]);
     dismiss(round.threads[0]);

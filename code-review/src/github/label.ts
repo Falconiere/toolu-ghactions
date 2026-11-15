@@ -119,8 +119,8 @@ export async function setVerdictLabel(
   }
 
   // Remove the opposite verdict label. A 404 means it was not set. Any other failure
-  // to drop merge-approved throws: merge-gate trusts that label alone, so a PR left
-  // carrying it beside request-changes would merge on a "changes" verdict.
+  // to drop merge-approved throws: a rule gating on that label trusts it alone, so a
+  // PR left carrying it beside request-changes would merge on a "changes" verdict.
   try {
     await octokit.rest.issues.removeLabel({
       owner,

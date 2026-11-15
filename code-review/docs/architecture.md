@@ -113,8 +113,7 @@ header for the full story, this is just the index).
   the last completed round's stored findings minus the ones settled on their
   threads (`dropSettled`, cluster-aware), labelled by `resolveLabelVerdict`.
   Fails closed on no state, an incomplete round, a stale head, or a last
-  verdict other than `changes`. Shared with merge-gate's recompute (#123) via
-  `pipeline/settleEvaluation.ts`.
+  verdict other than `changes`.
 - **`settledBody.ts`** — patches the sticky's verdict line, `Settled` note
   and label line after a settle pass; the marker is never touched, and an
   unrecognised body yields `null` (write nothing).
@@ -152,8 +151,7 @@ header for the full story, this is just the index).
 - **`settleEvaluation.ts`** — `evaluateSettle()`, the read-only half of the
   settle recompute: trusts only a Bot-authored, not-in-progress sticky and
   that bot's own threads, checks the LIVE head, classifies dismissals, then
-  runs `recompute.ts`. Shared by `dismissRecompute.ts` and merge-gate's
-  recompute (`src/gate/`), so both agree on what "settled" means.
+  runs `recompute.ts`. Used by `dismissRecompute.ts`.
 - **`dismissRecompute.ts`** — the settle pass a reply on a bot thread runs
   (`pull_request_review_comment`): `evaluateSettle()`, then flips
   `request-changes` → `merge-approved` via `settledBody.ts` + the label —
@@ -163,14 +161,6 @@ header for the full story, this is just the index).
   dropped findings can be rendered into it), and the toolu.sh report runs
   **after** the inline mutations (so it never claims a fix GitHub didn't
   accept).
-
-### `src/gate/`
-- **`settleCheck.ts` / `settleCheckCli.ts` / `settleCheckMain.ts`** —
-  merge-gate's read-only settle recompute (#123), bundled by `build.mjs` to
-  `../merge-gate/recompute/index.cjs` (a nested node24 action the merge-gate
-  composite runs before its bash gate). `evaluateSettle()` flattened into
-  step outputs (`outcome`, `reason`, `verdict`, `settled`, `total`); no model
-  call, no GitHub writes, and every failure is `outcome=unchanged`.
 
 ### `src/github/`
 - **`review.ts`** — `postInlineReview()`: builds inline comments, validates

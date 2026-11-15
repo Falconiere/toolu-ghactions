@@ -114,7 +114,7 @@ export function reduceFindings(input: {
  * while a member is `blocker`; feeding the gate representatives alone let that
  * blocker be hidden by its own cluster and downgraded a "changes" to
  * "approved". This is the same expansion review/recompute.ts performs before its
- * own `resolveLabelVerdict`, so the review path and the merge-gate recompute
+ * own `resolveLabelVerdict`, so the review path and the settle recompute
  * answer identically for the same commit state.
  *
  * Rendering is NOT affected: the comment body and the inline threads still speak

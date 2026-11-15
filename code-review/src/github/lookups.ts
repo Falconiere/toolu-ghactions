@@ -1,5 +1,5 @@
-// github/lookups.ts — the live GitHub lookups the settle recompute depends on, shared by
-// the review action (main.ts) and merge-gate's recompute (gate/settleCheckCli.ts). Each
+// github/lookups.ts — the live GitHub lookups the review action (main.ts) hands the
+// pipeline and its settle recompute. Each
 // THROWS on an API error; the callers treat a throw as "not authorized" / "head
 // unknown" and fail closed.
 

@@ -6,7 +6,7 @@
 // findings and NO thread mutations (spec 2026-09-27-code-review-dismiss-settle).
 //
 // FAIL CLOSED end to end: every guard in pipeline/settleEvaluation.ts (the read-only
-// half, shared with merge-gate's recompute) and review/recompute.ts ends the pass with a
+// half) and review/recompute.ts ends the pass with a
 // "[SKIP] settle: <reason>" line and zero GitHub writes. The only writes are the patched
 // sticky (review/settledBody.ts) and the label, and only on an approval.
 import { upsertComment } from "@/github/comment.js";

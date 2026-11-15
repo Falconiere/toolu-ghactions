@@ -771,14 +771,8 @@ be read, the PR's review threads cannot be read, or `REVIEW_MEMORY` is off.
 
 - **Keep it a separate workflow.** Sharing the review's per-PR `cancel-in-progress`
   group would let a reply cancel a running review.
-- **Don't make its job a required status check.** Its output is the label, which
-  `merge-gate` and branch protection read; a reply that settles nothing
-  reports `skip` and must not stand in for the review's own check.
-
-[`merge-gate`](../merge-gate/README.md#settled-findings) runs the same recompute on its own,
-read-only, whenever the label is missing. So its required check turns green on the reply
-itself even without this workflow, or when this workflow's label write lands after the
-gate has already read the labels.
+- **Don't make its job a required status check.** Its output is the label; a reply
+  that settles nothing reports `skip` and must not stand in for the review's own check.
 
 ## Review memory
 
@@ -997,8 +991,8 @@ The gate governs the verdict only; a thrown infra error fails the job regardless
 
 ### Advisory findings below a severity threshold
 
-`FAIL_ON` makes the *job* advisory for a verdict, but with `merge-gate` (or any
-branch-protection rule requiring the `merge-approved` label) the *label* is what
+`FAIL_ON` makes the *job* advisory for a verdict, but with a merge rule that
+requires the `merge-approved` label, the *label* is what
 actually controls mergeability — and by default any surviving finding, even a
 `low` or `nit`, withholds `merge-approved`. Set `APPROVE_BELOW` to let lower
 severities stay advisory for the label too, independently of `FAIL_ON`:

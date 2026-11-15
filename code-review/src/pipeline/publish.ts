@@ -179,7 +179,7 @@ export async function publish(input: PublishInput): Promise<ReviewResult> {
   // It is fed FULL cluster member lists, not representatives: severity is not part
   // of the cluster key, so a `low` exemplar must not hide a `blocker` member and
   // flip the label to merge-approved. This is what review/recompute.ts already did,
-  // so the review path and the merge-gate recompute now agree.
+  // so the review path and the settle recompute agree.
   const labelVerdict = resolveLabelVerdict({
     verdict,
     findings: expandForSeverityGate(findings, reduction),

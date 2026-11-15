@@ -645,7 +645,7 @@ describe("setVerdictLabel", () => {
     expect(r.reason).toContain("403");
   });
 
-  // merge-gate passes on `merge-approved` alone: a swallowed remove failure next to a
+  // Anything gating on `merge-approved` passes on that label alone: a swallowed remove failure next to a
   // successful add left the PR carrying BOTH labels on a "changes" verdict.
   it("throws when merge-approved cannot be removed on a changes verdict", async () => {
     const { client, calls } = fakeLabelClient({ removeStatus: 403 });

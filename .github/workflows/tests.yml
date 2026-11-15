@@ -23,7 +23,6 @@ jobs:
       tunnel: ${{ steps.filter.outputs.tunnel }}
       expo: ${{ steps.filter.outputs.expo }}
       scripts: ${{ steps.filter.outputs.scripts }}
-      merge_gate: ${{ steps.filter.outputs.merge_gate }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -44,7 +43,6 @@ jobs:
               echo "tunnel=true"
               echo "expo=true"
               echo "scripts=true"
-              echo "merge_gate=true"
             } >>"$GITHUB_OUTPUT"
             exit 0
           }
@@ -65,13 +63,10 @@ jobs:
           fi
           area() { grep -qE "$1" <<<"$files" && echo true || echo false; }
           {
-            # merge-gate/recompute/ is a code-review build output: an edit to it alone
-            # must still run code-review's bundle-sync check.
-            echo "code_review=$(area '^(code-review/|merge-gate/recompute/)')"
+            echo "code_review=$(area '^code-review/')"
             echo "tunnel=$(area '^cloudflare-tunnel/')"
             echo "expo=$(area '^expo-builder/')"
             echo "scripts=$(area '^scripts/')"
-            echo "merge_gate=$(area '^merge-gate/')"
           } >>"$GITHUB_OUTPUT"
 
   code-review:
@@ -121,10 +116,9 @@ jobs:
         if: ${{ env.RUN == 'true' }}
         run: bun run build
       - name: bundles are in sync with src
-        # The committed run/index.cjs + sanitize-sarif/index.cjs (and
-        # ../merge-gate/recompute/index.cjs, merge-gate's settle recompute, built from
-        # these same sources) must match a fresh build — consumers run the checked-in
-        # bundles, not the TS sources. Fail if `bun run build` produced any change.
+        # The committed run/index.cjs + sanitize-sarif/index.cjs must match a fresh
+        # build — consumers run the checked-in bundles, not the TS sources. Fail if
+        # `bun run build` produced any change.
         if: ${{ env.RUN == 'true' }}
         # Full-tree on purpose: a future bundle added to build.mjs is covered
         # without remembering to extend a pathspec.
@@ -166,31 +160,6 @@ jobs:
       - name: shellcheck
         if: ${{ env.RUN == 'true' }}
         run: shellcheck --severity=warning scripts/*.sh
-
-  merge-gate-test:
-    name: merge-gate bats + shellcheck + action-validator
-    needs: changes
-    runs-on: ubuntu-latest
-    env:
-      RUN: ${{ needs.changes.outputs.merge_gate == 'true' || github.ref == 'refs/heads/main' }}
-    steps:
-      - uses: actions/checkout@v5
-        if: ${{ env.RUN == 'true' }}
-      - name: Install bats + jq
-        if: ${{ env.RUN == 'true' }}
-        uses: ./.github/actions/setup-bats
-      - name: bats
-        if: ${{ env.RUN == 'true' }}
-        run: bats merge-gate/__tests__/*.bats
-      - name: shellcheck
-        if: ${{ env.RUN == 'true' }}
-        run: shellcheck --severity=warning merge-gate/src/*.sh
-      - name: Install action-validator
-        if: ${{ env.RUN == 'true' }}
-        run: npm i -g @action-validator/cli
-      - name: action-validator
-        if: ${{ env.RUN == 'true' }}
-        run: action-validator merge-gate/action.yml
 
   tunnel-test:
     name: tunnel bats (${{ matrix.os }})
