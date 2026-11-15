@@ -53,7 +53,8 @@ export interface PromptOptions {
   reviewPromptFile?: string;
   /** Git ref a RELATIVE `reviewPromptFile` is read from instead of the working tree (the
    *  same base/merge ref the project rules use), so a PR cannot supply its own system
-   *  prompt. `""` = no readable ref: the file is not read. Absent = filesystem read. */
+   *  prompt. `""` = no readable ref: a tracked file is not read. A file git does not
+   *  track (written by the workflow) is still read from disk. Absent = filesystem read. */
   reviewPromptRef?: string;
   codebaseOverview?: string;
   reviewInstruction?: string;
@@ -139,8 +140,18 @@ function resolveSystemPrompt(opts: PromptOptions): string {
     const ref = opts.reviewPromptRef;
     if (ref !== undefined && !isAbsolute(promptFile)) {
       // `git show :path` (empty ref) would read the index, so an empty ref never reaches git.
-      const blob = ref === "" ? null : defaultGitShow(workspace)(ref, promptFile);
+      const gitShow = defaultGitShow(workspace);
+      const blob = ref === "" ? null : gitShow(ref, promptFile);
       if (blob !== null) return blob.toString("utf8");
+      // Not at the ref. A file the checkout does not track either was written by the
+      // workflow itself (a shared prompt fetched at run time), never by the PR: read it.
+      if (gitShow("HEAD", promptFile) === null) {
+        try {
+          return readFileSync(join(workspace, promptFile), "utf8");
+        } catch {
+          // not on disk either → the warning below
+        }
+      }
       core.warning(
         `REVIEW_PROMPT_FILE "${promptFile}" is not readable at ${ref === "" ? "an unknown base ref" : ref}; ` +
           "using the shipped checklist (a PR cannot introduce its own system prompt).",

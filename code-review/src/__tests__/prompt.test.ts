@@ -222,6 +222,21 @@ describe("buildPrompt — envelope and inputs", () => {
       }
     });
 
+    it("reads a prompt an earlier workflow step wrote into the workspace (never committed)", () => {
+      // A shared prompt fetched at run time is not in git at all, so the PR cannot have
+      // supplied it: it is the workflow's own file and is read as before.
+      const dir = setupGitRepo();
+      const base = git(dir, "rev-parse", "HEAD").trim();
+      writeFile(dir, PROMPT, "FETCHED PROMPT");
+      const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+      try {
+        expect(systemFor(dir, base)).toBe("FETCHED PROMPT");
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        removeRepo(dir);
+      }
+    });
+
     it("falls back to the shipped checklist with one warning when the ref lacks the file", () => {
       const dir = setupGitRepo();
       const base = git(dir, "rev-parse", "HEAD").trim();

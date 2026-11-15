@@ -43727,8 +43727,15 @@ function resolveSystemPrompt(opts) {
     const workspace = opts.githubWorkspace && opts.githubWorkspace !== "" ? opts.githubWorkspace : "/github/workspace";
     const ref = opts.reviewPromptRef;
     if (ref !== void 0 && !(0, import_node_path2.isAbsolute)(promptFile)) {
-      const blob = ref === "" ? null : defaultGitShow(workspace)(ref, promptFile);
+      const gitShow = defaultGitShow(workspace);
+      const blob = ref === "" ? null : gitShow(ref, promptFile);
       if (blob !== null) return blob.toString("utf8");
+      if (gitShow("HEAD", promptFile) === null) {
+        try {
+          return (0, import_node_fs2.readFileSync)((0, import_node_path2.join)(workspace, promptFile), "utf8");
+        } catch {
+        }
+      }
       warning(
         `REVIEW_PROMPT_FILE "${promptFile}" is not readable at ${ref === "" ? "an unknown base ref" : ref}; using the shipped checklist (a PR cannot introduce its own system prompt).`
       );
