@@ -28604,7 +28604,7 @@ var ReviewStateSchema = external_exports.object({
   rounds: external_exports.number().int().min(0).optional().catch(void 0)
 });
 function normText(text) {
-  return (text ?? "").toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").replace(/^ +/, "").replace(/ +$/, "").slice(0, 200);
+  return (text ?? "").toLowerCase().replace(/[^\p{L}\p{N} ]/gu, "").replace(/\s+/g, " ").replace(/^ +/, "").replace(/ +$/, "").slice(0, 200);
 }
 function canonString(f) {
   const path = f.path ?? "";

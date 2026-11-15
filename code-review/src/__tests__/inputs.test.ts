@@ -59,9 +59,45 @@ describe("REQUEST_TIMEOUT_MS", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("not a positive timeout"));
   });
 
-  it("falls back to the default on a non-numeric value", () => {
-    setInput("REQUEST_TIMEOUT_MS", "abc");
+  it("falls back to the default on an empty value", () => {
+    setInput("REQUEST_TIMEOUT_MS", "  ");
     expect(readInputs().requestTimeoutMs).toBe(180000);
+  });
+});
+
+describe("malformed integer inputs fail at start, naming the input", () => {
+  // parseInt read a numeric PREFIX: "300s" became 300ms, "16k" 16 tokens, "abc" 0 (= unlimited).
+  it.each([
+    ["REQUEST_TIMEOUT_MS", "300s"],
+    ["REQUEST_TIMEOUT_MS", "3e5"],
+    ["MAX_TOKENS", "16k"],
+    ["MAX_FILES", "5o"],
+    ["MAX_FILES", "abc"],
+    ["MAX_DIFF_LINES", "1.5"],
+  ])("%s=%s throws", (name, value) => {
+    setInput(name, value);
+    expect(() => readInputs()).toThrow(new RegExp(`${name}.*"${value}"`));
+  });
+
+  it("an empty value still takes the default", () => {
+    setInput("MAX_FILES", "");
+    expect(readInputs().maxFiles).toBe(0);
+  });
+});
+
+describe("MIN_CONFIDENCE", () => {
+  it("defaults to high and accepts medium", () => {
+    expect(readInputs().minConfidence).toBe("high");
+    setInput("MIN_CONFIDENCE", "Medium");
+    expect(readInputs().minConfidence).toBe("medium");
+  });
+
+  it("warns once on an unrecognised value and falls back to high", () => {
+    setInput("MIN_CONFIDENCE", "low");
+    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+    expect(readInputs().minConfidence).toBe("high");
+    const hits = warn.mock.calls.filter(([m]) => String(m).includes("MIN_CONFIDENCE"));
+    expect(hits).toHaveLength(1);
   });
 });
 
@@ -86,9 +122,14 @@ describe("MAX_WALL_MS", () => {
     expect(readInputs().maxWallMs).toBe(600000);
   });
 
-  it("falls back to ten minutes on a non-numeric value", () => {
-    setInput("MAX_WALL_MS", "abc");
+  it("falls back to ten minutes on an empty value", () => {
+    setInput("MAX_WALL_MS", "");
     expect(readInputs().maxWallMs).toBe(600000);
+  });
+
+  it.each(["abc", "600s", "3e5"])("rejects %s instead of silently using the default", (value) => {
+    setInput("MAX_WALL_MS", value);
+    expect(() => readInputs()).toThrow("MAX_WALL_MS must be a non-negative integer");
   });
 
   it("allows an explicit zero to disable the budget", () => {
@@ -108,7 +149,7 @@ describe("MAX_WALL_MS", () => {
 
   it("does not interpret malformed zero text as an explicit opt-out", () => {
     setInput("MAX_WALL_MS", "0ms");
-    expect(readInputs().maxWallMs).toBe(600000);
+    expect(() => readInputs()).toThrow("MAX_WALL_MS must be a non-negative integer");
   });
 });
 

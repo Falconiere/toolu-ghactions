@@ -114,6 +114,16 @@ describe("fingerprint", () => {
     expect(fingerprint(a)).toBe(fingerprint(b));
   });
 
+  it.each([
+    ["Утечка памяти в цикле", "Неверный индекс массива"],
+    ["这里存在空指针", "数组越界访问"],
+  ])("keeps non-Latin text distinct: %s vs %s", (a, b) => {
+    // normText used to delete everything outside [a-z0-9 ], so both normalised to ""
+    // and different defects in one file+category shared a fingerprint.
+    const at = { path: "x.ts", category: "c" };
+    expect(fingerprint({ ...at, text: a })).not.toBe(fingerprint({ ...at, text: b }));
+  });
+
   it("differs when path or category differs", () => {
     expect(fingerprint({ path: "a.ts", text: "t" })).not.toBe(
       fingerprint({ path: "b.ts", text: "t" }),

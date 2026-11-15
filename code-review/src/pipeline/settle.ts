@@ -8,9 +8,11 @@
 // what makes "approved" honest (a would-be approval over unreviewed or pending
 // files degrades to `error`, exactly as mergeResults does for a failed chunk) and
 // what makes the marker resumable (`complete`, the exception lists, `reviewed_tree`).
+import * as core from "@actions/core";
 import { renderRecapSection, renderHistorySection } from "@/review/recap.js";
-import { resolveVerdict } from "@/review/verdict.js";
-import { completedRounds, diffState, encodeMarker } from "@/state.js";
+import { SEVERITY_RANK } from "@/review/findings.js";
+import { BODY_SIZE_LIMIT, resolveVerdict } from "@/review/verdict.js";
+import { completedRounds, diffState, encodeMarker, type ReviewState } from "@/state.js";
 import { dropSettled } from "@/review/reconcile.js";
 import { dropOutOfScope } from "@/review/incremental.js";
 import { applyRoundCap } from "@/review/gate.js";
@@ -223,6 +225,49 @@ function degradeOnCoverage(
   return "error";
 }
 
+/** Largest the encoded marker may be: half the body cap leaves the other half for the
+ *  verdict body, which `fitToSizeLimit` cannot shrink below recap + history + marker. */
+const MARKER_BUDGET = BODY_SIZE_LIMIT / 2;
+
+/** Worst-first rank of a stored finding; an unreadable severity ranks last. */
+const RANK_BY_SEVERITY = new Map<string, number>(Object.entries(SEVERITY_RANK));
+function rankOf(finding: ReviewState["findings"][number]): number {
+  const severity = finding["severity"];
+  return (typeof severity === "string" ? RANK_BY_SEVERITY.get(severity) : undefined) ?? 99;
+}
+
+/**
+ * Encode `next_state` for the sticky, dropping persisted findings lowest-severity-first
+ * when the marker alone would exceed {@link MARKER_BUDGET} (the verdict body would
+ * otherwise throw VerdictIntegrityError after the model was paid for, and the next
+ * push would repeat it). Blockers go last; counters and history are untouched. Warns
+ * once with the number dropped from review memory.
+ */
+export function boundedMarker(state: ReviewState): string {
+  const full = encodeMarker(state);
+  if (full.length <= MARKER_BUDGET) return full;
+  const worstFirst = state.findings
+    .map((_, index) => index)
+    .sort((a, b) => rankOf(state.findings[a] ?? {}) - rankOf(state.findings[b] ?? {}) || a - b);
+  const withTop = (keep: number): string => {
+    const kept = new Set(worstFirst.slice(0, keep));
+    return encodeMarker({ ...state, findings: state.findings.filter((_, i) => kept.has(i)) });
+  };
+  // Encoded size grows with `keep`: find the largest count that fits (0 if none does).
+  let lo = 0;
+  let hi = state.findings.length - 1;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (withTop(mid).length <= MARKER_BUDGET) lo = mid;
+    else hi = mid - 1;
+  }
+  core.warning(
+    `Review memory too large for the comment: dropped ${state.findings.length - lo} of ` +
+      `${state.findings.length} remembered findings (lowest severity first).`,
+  );
+  return withTop(lo);
+}
+
 /** Review memory: diff current findings vs prior, render recap + history + marker. */
 export function renderMemory(
   input: PublishInput,
@@ -274,6 +319,6 @@ export function renderMemory(
       state.next_state.history,
       completedRounds(state.next_state) - state.next_state.history.length + 1,
     ),
-    marker: encodeMarker(state.next_state),
+    marker: boundedMarker(state.next_state),
   };
 }

@@ -8,9 +8,11 @@
 // stripped, capped to 500 chars) and injected into the USER prompt only, fenced in
 // an UNTRUSTED block. The SYSTEM checklist is NEVER altered by it. The gathered
 // project rules are TRUSTED (read from the base ref) and go in a separate block.
+import * as core from "@actions/core";
 import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import type { DiffData } from "./git/diff.js";
+import { defaultGitShow } from "./rules.js";
 import type { MechanicalFinding } from "./mechanical/sarif.js";
 import type { Brief } from "./review/cartographer.js";
 import type { RepositoryContext } from "./review/repositoryContext.js";
@@ -49,6 +51,10 @@ export interface PromptOptions {
   maxTokens?: number;
   enforceJsonSchema?: boolean;
   reviewPromptFile?: string;
+  /** Git ref a RELATIVE `reviewPromptFile` is read from instead of the working tree (the
+   *  same base/merge ref the project rules use), so a PR cannot supply its own system
+   *  prompt. `""` = no readable ref: the file is not read. Absent = filesystem read. */
+  reviewPromptRef?: string;
   codebaseOverview?: string;
   reviewInstruction?: string;
   projectRules?: string;
@@ -94,15 +100,19 @@ export class PromptError extends Error {
  * Neutralize untrusted reviewer steering text — exact port of sanitize_instruction.
  * Strips the block delimiter tokens (`<<<`, `>>>`, literal `REQUEST`) and
  * triple-backtick fences so the payload can never break out of the UNTRUSTED
- * block, collapses every whitespace run (incl. newlines) to a single space, trims
+ * block (repeated until none remains, since a removal can reassemble one), collapses every whitespace run (incl. newlines) to a single space, trims
  * the ends, then caps the result at 500 characters.
  */
 export function sanitizeInstruction(raw: string): string {
   let s = raw;
-  s = s.split("<<<").join("");
-  s = s.split(">>>").join("");
-  s = s.split("REQUEST").join("");
-  s = s.split("```").join("");
+  // Repeat to a fixpoint: removing one token can reassemble another (`>>REQUEST>` → `>>>`).
+  for (let prev = ""; prev !== s;) {
+    prev = s;
+    s = s.split("<<<").join("");
+    s = s.split(">>>").join("");
+    s = s.split("REQUEST").join("");
+    s = s.split("```").join("");
+  }
   // Collapse all whitespace runs (incl. newlines) into single spaces.
   s = s.replace(/\s+/g, " ");
   // Trim leading/trailing space introduced by collapsing.
@@ -113,8 +123,10 @@ export function sanitizeInstruction(raw: string): string {
 
 /**
  * Resolve the system prompt: a custom INPUT_REVIEW_PROMPT_FILE (read relative to
- * githubWorkspace when not absolute) overrides the default; otherwise the shipped
- * review-checklist.txt is read from disk. Throws PromptError when the chosen file
+ * githubWorkspace when not absolute) overrides the default; with `reviewPromptRef` a
+ * relative path is read from that git ref instead and, when absent there, the shipped
+ * checklist is used with a warning. Otherwise the shipped review-checklist.txt is read
+ * from disk. Throws PromptError when the chosen file
  * is missing — the bash `exit 1` paths.
  */
 function resolveSystemPrompt(opts: PromptOptions): string {
@@ -124,11 +136,22 @@ function resolveSystemPrompt(opts: PromptOptions): string {
       opts.githubWorkspace && opts.githubWorkspace !== ""
         ? opts.githubWorkspace
         : "/github/workspace";
-    const promptPath = isAbsolute(promptFile) ? promptFile : join(workspace, promptFile);
-    try {
-      return readFileSync(promptPath, "utf8");
-    } catch {
-      throw new PromptError(`Custom review prompt file not found: ${promptFile}`);
+    const ref = opts.reviewPromptRef;
+    if (ref !== undefined && !isAbsolute(promptFile)) {
+      // `git show :path` (empty ref) would read the index, so an empty ref never reaches git.
+      const blob = ref === "" ? null : defaultGitShow(workspace)(ref, promptFile);
+      if (blob !== null) return blob.toString("utf8");
+      core.warning(
+        `REVIEW_PROMPT_FILE "${promptFile}" is not readable at ${ref === "" ? "an unknown base ref" : ref}; ` +
+          "using the shipped checklist (a PR cannot introduce its own system prompt).",
+      );
+    } else {
+      const promptPath = isAbsolute(promptFile) ? promptFile : join(workspace, promptFile);
+      try {
+        return readFileSync(promptPath, "utf8");
+      } catch {
+        throw new PromptError(`Custom review prompt file not found: ${promptFile}`);
+      }
     }
   }
   try {

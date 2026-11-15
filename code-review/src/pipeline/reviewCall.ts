@@ -166,6 +166,7 @@ export async function reviewAndValidate(input: ReviewCallInput): Promise<ReviewC
           maxTokens: inputs.maxTokens,
           enforceJsonSchema: inputs.enforceJsonSchema,
           reviewPromptFile: inputs.reviewPromptFile,
+          reviewPromptRef: inputs.rulesRef === "merge" ? reviewHead : diff.base_sha,
           codebaseOverview: inputs.codebaseOverview,
           reviewInstruction: event.instruction ?? "",
           projectRules,

@@ -62,7 +62,7 @@ function gitOrNull(args: string[], cwd: string): string | null {
  * "buffer" so a binary blob's NUL bytes survive for the binary check; null on a
  * non-zero git exit.
  */
-function defaultGitShow(cwd: string): GitShow {
+export function defaultGitShow(cwd: string): GitShow {
   return (ref: string, path: string): Buffer | null => {
     try {
       return execFileSync("git", ["show", `${ref}:${path}`], {

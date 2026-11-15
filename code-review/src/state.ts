@@ -122,14 +122,16 @@ export function completedRounds(state: ReviewState | null | undefined): number {
 
 /**
  * Normalize finding text the way the fingerprint does: lowercase, strip anything
- * but `[a-z0-9 ]`, collapse whitespace, trim, cap at 200 chars. Pure extraction
+ * but Unicode letters/digits and spaces (ASCII-only text normalizes exactly as when
+ * this kept `[a-z0-9 ]`; non-Latin text used to normalize to "" and collide), collapse
+ * whitespace, trim, cap at 200 UTF-16 units (deterministic, even mid-pair). Pure extraction
  * from {@link canonString} (no behavior change — AC-7's golden hexes pin that),
  * exported so review/cluster.ts's near-identical-text check reuses this exact rule.
  */
 export function normText(text: string | undefined): string {
   return (text ?? "")
     .toLowerCase()
-    .replace(/[^a-z0-9 ]/g, "")
+    .replace(/[^\p{L}\p{N} ]/gu, "")
     .replace(/\s+/g, " ")
     .replace(/^ +/, "")
     .replace(/ +$/, "")

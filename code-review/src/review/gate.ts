@@ -12,20 +12,29 @@ export type BlockableVerdict = "changes" | "error";
 const RECOGNIZED = new Set(["none", "changes", "error"]);
 
 /**
- * Parse the FAIL_ON input (CSV) into the set of verdicts that should fail the job.
- * Case-insensitive; whitespace trimmed; empty / "none" → empty set (gate off).
- * Unrecognized tokens (incl. "approved"/"skip") are dropped with a SINGLE
- * core.warning per call naming all of them.
+ * Parse the FAIL_ON input (comma/semicolon/whitespace-separated) into the set of
+ * verdicts that should fail the job. Case-insensitive; empty / "none" → empty set
+ * (gate off). Unrecognized tokens (incl. "approved"/"skip") are dropped with a SINGLE
+ * core.warning per call naming all of them — but when NO token is recognised at all
+ * (`chages`) it throws: the typo would otherwise silently turn a Required check
+ * advisory, the same fail-loud stance as inputs.ts's MAX_WALL_MS.
  */
 export function parseFailOn(raw: string): ReadonlySet<BlockableVerdict> {
   const result = new Set<BlockableVerdict>();
   const unknown: string[] = [];
-  for (const part of raw.split(",")) {
-    const token = part.trim().toLowerCase();
+  let recognized = 0;
+  for (const part of raw.split(/[,;\s]+/)) {
+    const token = part.toLowerCase();
     if (token === "") continue;
+    if (RECOGNIZED.has(token)) recognized++;
+    else unknown.push(token);
     if (token === "changes" || token === "error") result.add(token);
-    else if (!RECOGNIZED.has(token)) unknown.push(token);
     // "none" is recognized and non-blocking → intentionally ignored.
+  }
+  if (unknown.length > 0 && recognized === 0) {
+    throw new Error(
+      `FAIL_ON: unrecognized verdict(s) ${unknown.join(", ")} — valid values are 'changes', 'error', or 'none'.`,
+    );
   }
   if (unknown.length > 0) {
     core.warning(
