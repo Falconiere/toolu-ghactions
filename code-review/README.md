@@ -44,7 +44,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: falconiere/toolu-ghactions/code-review@custom-endpoint
+      - uses: falconiere/toolu-ghactions/code-review@v8
         with:
           PROVIDER: openai-compatible
           BASE_URL: http://127.0.0.1:8000/v1
@@ -59,8 +59,7 @@ jobs:
 With a public tunnel, use `BASE_URL: https://omlx.codasignal.com/v1` on a
 GitHub-hosted runner and store the oMLX key in `secrets.LOCAL_LLM_API_KEY`.
 
-The branch pin above is for testing this change; pin a release or commit containing
-it for ongoing use. Port 8000 is an example: use your oMLX server's actual port.
+Port 8000 is an example: use your oMLX server's actual port.
 A GitHub-hosted runner needs network access to your Mac mini through your VPN or
 an authenticated tunnel. Your workstation's `ssh macmini` alias does not make the
 Mac reachable from GitHub CI. With an SSH tunnel established by a prior workflow
@@ -309,9 +308,14 @@ Both run as steps of this composite action (pinned release binaries) and write S
 Their findings (1) **upload to the repo's Code Scanning tab** — which requires
 `security-events: write` and `actions: read` in your workflow `permissions` — and (2) are passed to the LLM
 as TRUSTED context to assess; confirmed ones appear in the verdict comment tagged with
-their tool. A scanner that fails to install or run is non-fatal: the review degrades to
-LLM-only. On a **fork PR** (where `security-events: write` and the token are read-only) the
-SARIF upload is skipped and the review still posts as a comment.
+their tool. The scanner install, SARIF sanitize and Code Scanning upload steps run only
+when `RUN_SECRET_SCAN` or `RUN_SAST` is `'true'`, and the upload runs only when a SARIF
+file was actually produced. With both scanners off nothing is installed or uploaded, and
+`security-events: write` is not needed. Scanner findings shown to the model are limited to
+lines the PR changes; Code Scanning still receives the full scan. A scanner that fails to
+install or run is non-fatal: the review degrades to LLM-only. On a **fork PR** (where
+`security-events: write` and the token are read-only) the SARIF upload is skipped and the
+review still posts as a comment.
 
 If the LLM call errors, the comment still shows the deterministic findings under a
 **Mechanical checks** section with an "LLM judgment unavailable" note — never a blank verdict.
@@ -343,13 +347,21 @@ The noise filter (each dropped file is reported in the comment) covers:
   .NET (`*.designer.cs`), Dart (`*.g.dart`, `*.freezed.dart`), JS bundles
   (`*.bundle.js`), plus any file flagged `@generated`/`DO NOT EDIT` by content.
 - **Repo-marked generated** — any path with `linguist-generated` in
-  `.gitattributes` (the same signal GitHub's diff UI uses).
+  `.gitattributes` (the same signal GitHub's diff UI uses). `.gitattributes`
+  (`linguist-generated`, `linguist-vendored`, `-diff`) is read from the PR's base when
+  the PR itself changes a `.gitattributes` file, so a PR cannot mark its own files as
+  generated. Reviewing such a PR needs **git ≥ 2.41** on the runner (GitHub-hosted
+  runners qualify); otherwise the run fails with an error naming the requirement.
 - **Drizzle metadata** — numbered `meta/*_snapshot.json` and `meta/_journal.json`
   under `drizzle/` or `migrations/`. SQL migrations and source schemas stay in review.
 - **Your own globs** — anything matched by the `EXCLUDE_GLOBS` input.
 
 Migrations (`migrations/`) and snapshot tests (`*.snap`) are **kept** for review
 by default — add them to `EXCLUDE_GLOBS` if you'd rather skip them.
+
+A file whose only changes are trailing whitespace or line endings is dropped as
+formatting only (reported as `formatting` in the [coverage ledger](#coverage-ledger)).
+Indentation changes and reordered lines are reviewed.
 
 **2 — Gather rules.** Reads the repo's own convention files from the base ref and
 folds them into the prompt (see [Project conventions](#project-conventions)).
@@ -383,7 +395,11 @@ under the verdict saying what was lost — the "Provider error" wording (and the
 no judgment at all.
 When nothing trustworthy survives, an empty or unparseable response surfaces an
 `error` verdict carrying the finish reason — never a silent null, and never a clean
-review over findings that had to be dropped.
+review over findings that had to be dropped. A response cut before its JSON closes is
+never treated as a complete review, and findings recovered from a cut response are kept
+as a partial review even if the retry fails. When the provider returns an HTTP error, the
+comment shows its status and the provider's own message; a network-level failure shows a
+generic "could not reach the model provider" line, with the detail only in the job log.
 
 **4 — Validate & anchor.** Findings are checked against the diff — hallucinated
 line numbers and low-confidence findings are dropped, findings are deduplicated by
@@ -408,7 +424,9 @@ without copying the source text into the log.
 **5 — Post.** A summary verdict comment (machine-readable label for `pr-babysit`),
 plus — when `INLINE_COMMENTS` is on — per-line review comments with committable
 ` ```suggestion ` blocks via the GitHub Reviews API (advisory `COMMENT` event; it
-never hard-blocks merge).
+never hard-blocks merge). Just before posting, the action checks that the reviewed
+commit is still the PR head: re-running the workflow of an older commit does not
+overwrite the review of the current head — it exits as skipped.
 
 ### Project conventions
 
@@ -456,8 +474,8 @@ and falls back to `base`.
 
 A generative reviewer re-derives its findings from the diff on every push, so left alone it can produce a *fresh* batch each round — reworded text (new fingerprint), drifted line anchors, findings wandering into untouched files — and a PR can accumulate dozens of findings without ever reaching the zero-findings verdict. Two mechanisms make the review converge:
 
-- **Settled threads suppress re-raises (always on).** A human resolving one of the bot's inline threads is a decision — and so is [dismissing it in a reply](#dismissing-a-finding-without-resolving-the-thread), either with `@toolu dismiss` or by holding your position after the bot's one rebuttal. A finding covered by a settled thread is dropped everywhere — verdict count, summary comment, inline posting. Coverage is deliberately wider than an exact match: same fingerprint, same `path:line`, same path within **10 lines** (a reworded finding drifts), or — when the settled thread has gone outdated after a push (GitHub detaches its line) — same path and same finding category. **Blocker-severity findings only ever match exactly**, so the loosening can never hide a genuine showstopper, and an *argued-out* thread never suppresses a blocker at all.
-- **`MAX_ROUNDS` surrender (opt-in).** Set `MAX_ROUNDS: 5` and the fifth review round (counted from the `REVIEW_MEMORY` history) that would still say `changes` with **only sub-blocker findings** is downgraded to `approved`: the findings stay listed as advisory, the comment carries an explicit `🔁 Round cap` callout, and `FAIL_ON` stops failing the job. One blocker finding disables the cap for that round. `0` (default) keeps the old block-forever behavior.
+- **Settled threads suppress re-raises (always on).** Someone with `MIN_TRIGGER_PERMISSION` resolving one of the bot's inline threads is a decision — and so is [dismissing it in a reply](#dismissing-a-finding-without-resolving-the-thread), either with `@toolu dismiss` or by holding your position after the bot's one rebuttal. A finding covered by a settled thread is dropped everywhere — verdict count, summary comment, inline posting. Coverage is deliberately wider than an exact match: same fingerprint, same `path:line`, same path within **10 lines** (a reworded finding drifts), or — when the settled thread has gone outdated after a push (GitHub detaches its line) — same path and same finding category. **Blocker-severity findings only ever match exactly**, so the loosening can never hide a genuine showstopper, and an *argued-out* thread never suppresses a blocker at all.
+- **`MAX_ROUNDS` surrender (opt-in).** Set `MAX_ROUNDS: 5` and the fifth review round (counted by the monotonic `rounds` counter in the `REVIEW_MEMORY` state marker) that would still say `changes` with **only sub-blocker findings** is downgraded to `approved`: the findings stay listed as advisory, the comment carries an explicit `🔁 Round cap` callout, and `FAIL_ON` stops failing the job. One blocker finding disables the cap for that round. `0` (default) keeps the old block-forever behavior.
 
 ### Inline comments & suggestions
 
@@ -508,7 +526,7 @@ Test assertion uses loose suffix match. Tighten to assert full identity.
 
 These changes apply in **both** modes, independent of `VERBOSITY`:
 
-- The auto-generated `### Top-N must-fix` section is gone — it was a verbatim duplicate of the (now worst-first-sorted) Findings list. The section renders only when the model supplies an explicit `top_must_fix`.
+- The `### Top-N must-fix` section lists up to the three worst surviving findings whenever any exist. It is derived from the findings, never from model-supplied `top_must_fix` text.
 - `### Review Plan` and `### Other checks` are omitted entirely when the model returns nothing for them (no `_No … provided._` filler).
 
 The verdict label at the bottom is machine-readable: `` `merge-approved` `` or `` `request-changes` ``. `pr-babysit` parses it to decide whether the PR is ready to merge. Unless `MANAGE_LABELS` is `false`, the same verdict is also applied as a real PR **label chip** (the opposite one is removed), so PRs are filterable in the GitHub UI — this needs `issues: write` in the workflow's `permissions` block.
@@ -522,7 +540,7 @@ Every review posts a **coverage ledger**, so a large PR can never silently lose 
 | `reviewed` | The model read this file's diff and returned a verdict for it. |
 | `pattern` | This file's change is byte-identical (once normalized) to the same change in 3+ other files — only the group's **exemplar** was actually sent to a model call; a finding on the exemplar applies to every member. See [Finding clustering](#finding-clustering). |
 | `rename` | An exact or near-exact rename with no content of its own to review. |
-| `formatting` | A whitespace-only change (empty diff under `git diff -w`). |
+| `formatting` | A trailing-whitespace or line-ending change only. Indentation changes and reordered lines are reviewed. |
 | `vendored` / `generated` | Excluded via a `linguist-vendored`/`linguist-generated` attribute in `.gitattributes` — a repo-declared exclusion, distinct from the built-in noise filter below. |
 | `excluded` | Dropped by the [noise filter](#how-it-works) or binary detection before diffing; a `reason` names why (`lockfile`, `build-output`, `large-file`, `minified`, `generated`, `binary`, …). |
 | `carried` | Out of this round's [incremental scope](#review-memory) (or a cluster member whose exemplar wasn't re-examined) — not re-reviewed this round, so its prior finding rides forward unchanged rather than being silently dropped or falsely reported fixed. |
@@ -551,6 +569,10 @@ header logo, create a GitHub App and pass its `APP_ID` + `APP_PRIVATE_KEY`. The
 private key is used *only* to mint a short-lived installation token at the start
 of the run; it is never logged, and the comment then posts under the App's
 identity. Without these inputs nothing changes — you stay on `github-actions[bot]`.
+
+> **Use `GITHUB_TOKEN` or the App, not a personal access token.** A personal access
+> token posts as a user identity rather than a bot, so with one the action does not
+> read prior review threads or review memory.
 
 > The body header (logo + name) renders on **both** paths — even the
 > `github-actions[bot]` fallback reads as "Toolu — Code Review". The App only
@@ -643,7 +665,7 @@ permissions:
   security-events: write # upload the gitleaks/opengrep SARIF to the Code Scanning tab
 
 concurrency:
-  group: code-review-${{ github.event.issue.number || github.event.pull_request.number }}
+  group: ${{ (github.event_name == 'issue_comment' && (github.event.comment.user.type == 'Bot' || !contains(github.event.comment.body, '@toolu'))) && format('code-review-noop-{0}', github.run_id) || format('code-review-{0}', github.event.issue.number || github.event.pull_request.number) }}
   cancel-in-progress: true
 
 jobs:
@@ -661,7 +683,9 @@ jobs:
 The `concurrency:` group is keyed per PR — note the
 `github.event.issue.number || github.event.pull_request.number` fallback, since
 `issue_comment` and `pull_request` events expose the PR number on different
-fields. On a comment trigger the action self-fetches the PR head, so no extra
+fields. Comments that don't contain the trigger phrase (and comments from bots) get
+their own group, so they cannot cancel a running review; replace `@toolu` in the
+expression if you customise `TRIGGER_PHRASE`. On a comment trigger the action self-fetches the PR head, so no extra
 checkout step is needed.
 
 **Security gate.** A comment trigger runs with the repo's secrets, so the gate
@@ -743,7 +767,7 @@ checks out or scans code, and never rewrites the memory marker.
 It fails closed and changes **nothing** (the log says `[SKIP] settle: <reason>`) when the
 PR has a newer push than the last review, the last review was incomplete or errored,
 findings are still blocking, the sticky comment was not posted by a bot, the PR head cannot
-be read, or `REVIEW_MEMORY` is off.
+be read, the PR's review threads cannot be read, or `REVIEW_MEMORY` is off.
 
 - **Keep it a separate workflow.** Sharing the review's per-PR `cancel-in-progress`
   group would let a reply cancel a running review.
@@ -774,7 +798,8 @@ last pass instead of starting from scratch:
 …plus a collapsed `<details>` **history** of recent passes (verdict + counts).
 Findings are matched across runs by a line-independent fingerprint
 (`path` + `category` + normalized text), so a finding that merely drifted to a
-new line stays **still open** rather than flipping to resolved + new.
+new line stays **still open** rather than flipping to resolved + new. A finding on a
+file that has left the PR (reverted to base or renamed away) is cleared.
 
 The state is stored in a **hidden HTML marker** inside the sticky review comment
 itself (gzip + base64) — no external store, no extra permissions, nothing to
@@ -796,14 +821,18 @@ earlier inline threads instead of blindly re-posting every finding:
   back into the model prompt (sanitized, in a delimited **UNTRUSTED** block — claims
   to weigh on merit, never instructions).
 - ✅ **accepts** — a finding whose rebuttal the model now agrees with is dropped, and
-  its thread is **resolved** (with a short note) rather than raised again.
+  its thread is **resolved** (with a short note) rather than raised again. A finding
+  the bot resolved this way is raised again in a new thread if a later review reports
+  it again.
 - 💬 **argues** — a finding the model still stands by is re-stated **as a reply in the
   existing thread** (engaging the author's reasoning), not as a duplicate comment.
 - ⤵️ **dedup** — new findings and surviving blockers with only a loose match to a
   resolved thread open actionable threads; leftover duplicate open threads for
   the same finding are resolved.
 - 🔒 **respects resolutions** — **resolving a bot thread dismisses findings it
-  actually settles**: on later runs they are dropped from the verdict count,
+  actually settles**, provided the resolver has `MIN_TRIGGER_PERMISSION` (default
+  `write`): a thread resolved by the PR author without that permission, or by the bot
+  itself, settles nothing. On later runs the settled findings are dropped from the verdict count,
   the summary comment, and inline posting alike. A nearby reworded blocker is
   not settled by that loose match and gets a fresh inline thread. When every
   remaining finding was human-resolved, a `request-changes` verdict downgrades to
@@ -816,9 +845,8 @@ earlier inline threads instead of blindly re-posting every finding:
 
 ### Dismissing a finding without resolving the thread
 
-Resolving a thread used to be the *only* way to settle a finding, so an author who
-**refused or explained a finding in a reply** got it raised again on every run. Two
-more channels close that:
+Resolving a thread is not the only way to settle a finding. An author who **refuses or
+explains a finding in a reply** has two more channels:
 
 - 🙅 **`@toolu dismiss`** — reply to the bot's thread with the trigger phrase plus
   `dismiss` (any explanation may follow: `@toolu dismiss — intentional, see ADR-12`).
@@ -844,14 +872,18 @@ the reply itself, with the [settle workflow](#settling-findings-without-a-re-rev
 Both are gated on the **same repo permission** as the `@mention` re-trigger
 (`MIN_TRIGGER_PERMISSION`, default `write`) and **fail closed** — an unprivileged
 commenter cannot silence the reviewer, and a failing permissions API leaves the finding
-standing. That matches GitHub's own model: resolving a thread already requires write or
-triage access.
+standing. A thread resolved by someone without that permission (GitHub lets the PR author
+resolve conversations) is treated as still open. When several `@toolu dismiss` replies
+exist, the newest **authorised** one wins; a later reply from someone without permission
+does not cancel it.
 
 Threads are matched to findings by the same line-independent fingerprint used by
 [Review memory](#review-memory), carried in a hidden marker on each inline comment.
-Only the bot's own threads are touched — human review threads are never modified.
-Thread reads/writes are best-effort: a GitHub API hiccup degrades to the previous
-"post fresh" behavior and never fails the job. If the bot's
+Only the bot's own threads are read or touched — threads whose first comment was posted
+by the same identity as the review comment; human review threads are never modified.
+If the bot's review threads cannot be read, the run fails as an infrastructure error
+rather than re-posting every finding. Writing to a thread (a reply or a resolve) is
+best-effort and never fails the job. If the bot's
 `Re-reviewed — this no longer applies (addressed, or point taken). Resolving.`
 reply lands but GitHub's separate resolve mutation fails, that exact bot-authored
 note acts as a durable marker: the next run suppresses the finding and retries the
@@ -865,35 +897,38 @@ resolution without posting the note again.
 | `MODEL_ID` | no | `deepseek/deepseek-v4-pro` (OpenRouter) | Endpoint model id; required for `openai-compatible`. |
 | `API_KEY` | OpenRouter only | — | Bearer key; optional for an unauthenticated custom endpoint and the no-model settle pass. |
 | `BASE_URL` | custom endpoints only | — | HTTP(S) API root, including `/v1` when needed. Rejected for OpenRouter. |
-| `EXTRA_BODY` | no | — | JSON object of custom server fields, e.g. oMLX `chat_template_kwargs`. Compatible provider only; review wire fields cannot be overridden. |
-| `MAX_TOKENS` | no | `8192` | Max completion-token budget per request (always sent — omitting it makes OpenRouter reserve the model's full output window against your credits and can 402-reject). A response truncated at this limit (`finish_reason: length`) is retried with a doubled budget up to the 131072 ceiling (escalations don't consume hang retries); whatever the outcome, the findings completed before a cut are salvaged. |
-| `MIN_CONFIDENCE` | no | `high` | Drop findings below this confidence at every severity, including blocker/high (`high` or `medium`) |
+| `EXTRA_BODY` | no | — | JSON object of custom server fields, e.g. oMLX `chat_template_kwargs`. Compatible provider only. Fields are merged into the request body as given (including `reasoning_effort`); review wire fields cannot be overridden. |
+| `JEV_ENABLED` | no | `false` | Opt in to Jev finding assessment and risk routing. Requires `PROVIDER: openrouter`; reuses `API_KEY` and the shared review deadline. See [Optional Jev assessments](#optional-jev-assessments-openrouter-only). |
+| `JEV_MODEL_ID` | no | `typesafe/jev-1.13` | OpenRouter System One model for optional assessments. |
+| `MAX_TOKENS` | no | `8192` | Max completion-token budget per request (always sent — omitting it makes OpenRouter reserve the model's full output window against your credits and can 402-reject). A response truncated at this limit (`finish_reason: length`) is retried with a doubled budget up to the 131072 ceiling (escalations don't consume hang retries); whatever the outcome — including a failed retry — the findings completed before a cut are salvaged, and the one being written when the cut landed is dropped. |
+| `MIN_CONFIDENCE` | no | `high` | Drop findings below this confidence at every severity, including blocker/high (`high` or `medium`). Any other value warns and uses `high`. |
 | `INLINE_COMMENTS` | no | `true` | Post per-line review comments with committable code suggestions (Reviews API), in addition to the summary comment |
-| `MANAGE_LABELS` | no | `true` | Set a real PR label chip matching the verdict (`merge-approved` / `request-changes`) and remove the opposite one. Requires `issues: write`. |
-| `FAIL_ON` | no | `changes` | Comma-separated verdicts that **fail the job** (turn this check red so branch protection can block the PR): `changes`, `error`, or both. **Defaults to `changes`** — the job goes red when the bot requests changes. Set `none` to keep the job green on every verdict (advisory only), or `changes,error` to also block when the review could not run (`error`). The comment, label, and outputs are still posted; only the exit code changes. Governs the verdict-driven gate only — a thrown infra error fails the job regardless. **Mark this check Required in branch protection** for the red to actually block a merge. See [Blocking merges](#blocking-merges). |
+| `MANAGE_LABELS` | no | `true` | Set a real PR label chip matching the verdict (`merge-approved` / `request-changes`) and remove the opposite one. Requires `issues: write`. Over `MAX_FILES` the PR gets `request-changes` (the job stays green and the existing review comment is updated rather than a new one posted); an infrastructure error also sets `request-changes`. If `merge-approved` cannot be removed on a `changes` verdict, the job fails. |
+| `FAIL_ON` | no | `changes` | Comma-, semicolon- or whitespace-separated verdicts that **fail the job** (turn this check red so branch protection can block the PR): `changes`, `error`, or both. **Defaults to `changes`** — the job goes red when the bot requests changes. Set `none` to keep the job green on every verdict (advisory only), or `changes,error` to also block when the review could not run (`error`). The comment, label, and outputs are still posted; only the exit code changes. A value with no recognised verdict fails the action at start instead of silently disabling the gate. Governs the verdict-driven gate only — a thrown infra error fails the job regardless. **Mark this check Required in branch protection** for the red to actually block a merge. See [Blocking merges](#blocking-merges). |
 | `APPROVE_BELOW` | no | `nit` | The lowest finding severity that still **withholds the `merge-approved` label**: `blocker`, `high`, `medium`, `low`, or `nit` (aliases like `critical` normalize the same way finding severities do). Findings strictly below this level no longer block the label — they still post inline, in the summary, and in the verdict text; only the label rule changes. **Defaults to `nit`**, the lowest severity, which preserves the pre-existing behavior where any finding withholds `merge-approved`. Independent of `FAIL_ON`: `FAIL_ON` governs the job exit code from the verdict; `APPROVE_BELOW` governs only the `merge-approved`/`request-changes` label. An incomplete or partial review still yields `request-changes` regardless of this setting. See [Blocking merges](#blocking-merges). |
-| `BASE_BRANCH` | no | `main` | Base branch for diff comparison. Falls back to `GITHUB_BASE_REF` if unset. |
-| `REVIEW_PROMPT_FILE` | no | *(8-dimension checklist)* | Path to a markdown file (relative to repo root) with a custom review prompt. Overrides the default checklist. Project conventions are still gathered and injected, but a custom prompt supplies its own dimensions. |
+| `BASE_BRANCH` | no | `main` | Base branch for diff comparison. The PR's own base branch from the triggering event overrides this input; it applies only when the event carries no base ref. |
+| `REVIEW_PROMPT_FILE` | no | *(8-dimension checklist)* | Path to a markdown file (relative to repo root) with a custom review prompt. Overrides the default checklist. Read from the base branch (like convention files), so a PR cannot change the prompt it is reviewed under; with `RULES_REF: merge` it is read from the PR's merge ref. If the file does not exist at that ref, the built-in checklist is used with a warning. Project conventions are still gathered and injected, but a custom prompt supplies its own dimensions. |
 | `CODEBASE_OVERVIEW` | no | — | High-level context about the codebase (framework, patterns, architecture) injected into the review prompt. |
 | `CHECK_PROJECT_RULES` | no | `true` | Auto-read the repo's own convention files **from the base ref** (`CLAUDE.md`, `AGENTS.md`, `.cursor/rules`, `.cursorrules`, `.windsurfrules`, `.github/copilot-instructions.md`, plus `CONVENTIONS.md` / `CONTRIBUTING.md` / `docs/conventions/`) and review the diff against them via the **Convention adherence** dimension. Set `false` to disable. See [Project conventions](#project-conventions). |
-| `RULES_GLOB` | no | — | Extra path globs (relative to repo root, newline- or comma-separated) to include as project rules, e.g. `docs/architecture/**`. Matched against tracked files at the rules ref (see `RULES_REF`). |
+| `RULES_GLOB` | no | — | Extra path globs (relative to repo root, newline- or comma-separated) to include as project rules, e.g. `docs/architecture/**`. Matched against tracked files at the rules ref (see `RULES_REF`). Same pattern syntax as `EXCLUDE_GLOBS`. |
 | `RULES_REF` | no | `base` | Which ref the convention files are read from. `base` (default) reads the base-branch tip — injection-safe: a PR cannot change the rules it is reviewed against. `merge` reads the checked-out PR merge ref instead, so a same-repo PR that legitimately updates a convention is reviewed against its own text — **only enable it where PR authors are already trusted** (same-repo branches, protected by required review); it lets a PR modify its own review rules, so never use it on repos accepting fork PRs. An unrecognized value warns and falls back to `base`. See [Project conventions](#project-conventions). |
-| `EXCLUDE_GLOBS` | no | — | Extra path globs (newline- or comma-separated) to **exclude** from the reviewed diff, on top of the built-in generated/vendored/lockfile set and any `.gitattributes` `linguist-generated` paths, e.g. `migrations/**, **/*.snap`. Excluded files are still committed and CI-checked — only kept out of the LLM review. |
+| `EXCLUDE_GLOBS` | no | — | Extra path globs (newline- or comma-separated) to **exclude** from the reviewed diff, on top of the built-in generated/vendored/lockfile set and any `.gitattributes` `linguist-generated` paths, e.g. `migrations/**, **/*.snap`. Excluded files are still committed and CI-checked — only kept out of the LLM review. In a pattern, `*` matches any run of characters including `/` and `?` matches one character; `dir/**` and `dir/` match everything under `dir/`; wildcards work anywhere in an entry (e.g. `**/generated/**`, `packages/*/dist/**`). Brace lists like `*.{snap,lock}` are **not** supported (entries are split on commas) — write one entry per pattern. |
 | `RULES_MAX_BYTES` | no | `32768` | Byte cap on the gathered rules. Files are added in priority order until the cap; whole files past it are dropped with a truncation notice. |
-| `MAX_FILES` | no | `0` (unlimited) | Maximum changed files (counted **after** generated/vendored/excluded files are dropped) before the action skips. `0` reviews any number of files — the only ceiling is your OpenRouter billing balance. Set a positive value to opt into a hard skip on huge PRs. |
-| `MAX_DIFF_LINES` | no | `0` (unlimited) | Maximum diff lines before truncation, applied **before** chunking. `0` reviews the whole diff. Set a positive value to keep the first N lines (lexicographic by file path) and append a truncation notice. |
+| `MAX_FILES` | no | `0` (unlimited) | Maximum changed files (counted **after** generated/vendored/excluded files are dropped) before the action skips. `0` reviews any number of files — the only ceiling is your OpenRouter billing balance. Set a positive value to opt into a hard skip on huge PRs: the PR is labelled `request-changes`, the job stays green and the existing review comment is updated. |
+| `MAX_DIFF_LINES` | no | `0` (unlimited) | Maximum diff lines before truncation, applied **before** chunking. `0` reviews the whole diff. Set a positive value to keep the first N lines (lexicographic by file path) and append a truncation notice; files past the cut are reported as unreviewed in the [coverage ledger](#coverage-ledger), so the review cannot approve. |
 | `MAX_CHUNK_LINES` | no | `1500` | Per-chunk diff-line budget, applied to the diff **after** [distillation](#how-it-works) has collapsed mechanical repeats/renames/formatting away. When the remaining diff exceeds this, it is split into packages of **whole files** (≤ this many primed lines each), each reviewed in its own model call and the results merged — so a large PR no longer overwhelms a single call and abstains. Module-coupled files (e.g. a Rust `#[path]`/`mod` parent and its child) always share a package, and a single file over the budget rides alone **with its full post-change content attached** as read-only context, so the model never judges a construct from a truncated view. A package whose call fails to produce valid structured output is split and retried in bisecting halves (up to 4 leaves) to isolate just the file(s) actually at fault, instead of writing off the whole package; a leaf that still fails is recorded `unreviewed` in the [coverage ledger](#coverage-ledger) (never a confident approval over unreviewed files). `0` disables chunking (always one call). |
 | `MAX_CHUNKS` | no | `0` | Maximum chunks (= model calls) per review, bounding cost and wall-clock on very large PRs. **`0` (default, changed from `20` prior to `@v7` — see [v7 migration](#v7-migration)) = unlimited.** When set, files beyond the cap are recorded **per-file** as `unreviewed` in the [coverage ledger](#coverage-ledger), which also degrades a would-be `approved` verdict to `error`; the `### Other checks` section of the summary comment also carries a short notice naming them, on top of (not instead of) the per-file ledger rows. |
 | `MAX_WALL_MS` | no | `600000` (10 min) | Shared model-work deadline covering cartography, retries, backoff and token escalation. `0` explicitly disables it. Active requests abort at expiry; recovered findings remain partial and their files stay `unreviewed`, while unstarted packages become `pending`. Neither advances `reviewed_tree`; both resume via [`@toolu resume`](#toolu-resume-resuming-a-paused-run), a workflow re-run, or the next push. Publishing runs outside this budget; use a workflow job timeout (for example 15 minutes) as an outer ceiling. |
 | `REQUEST_TIMEOUT_MS` | no | `180000` (3 min) | Per-attempt model deadline in milliseconds. Each chunk gets up to this long per attempt (retried a few times) before it is aborted and the chunk abstains (`This operation was aborted`). Raise it for slow/large models, lower it to fail faster. A non-positive value falls back to the default. |
-| `TOKEN` | no | `${{ github.token }}` | GitHub token for posting and editing comments. |
+| `TOKEN` | no | `${{ github.token }}` | GitHub token for posting and editing comments. Use `github.token` or a GitHub App token; a personal access token is a user identity rather than a bot, so prior review threads and review memory are not read. |
 | `APP_ID` | no | — | GitHub App id. Set together with `APP_PRIVATE_KEY` to post as a custom-branded App (`Toolu — Code Review`) instead of `github-actions[bot]`. Both must be set or the action falls back to the default identity. See [Custom identity](#custom-identity-github-app). |
 | `APP_PRIVATE_KEY` | no | — | GitHub App private key — raw PEM **or** base64-encoded PEM (auto-decoded). Pair with `APP_ID`. Pass via a secret; never inline. Used only to mint a short-lived installation token — never logged. |
 | `TRIGGER_PHRASE` | no | `@toolu` | Mention prefix for the bot's two comment commands: `@toolu review [focus on …]` re-triggers a review (requires the workflow to also listen on `issue_comment` — see [@mention re-trigger](#mention-re-trigger)), and `@toolu dismiss` in a reply on one of the bot's inline threads settles that finding (see [Dismissing a finding](#dismissing-a-finding-without-resolving-the-thread); the label follows on the next review, or at once with the [settle workflow](#settling-findings-without-a-re-review)). |
-| `MIN_TRIGGER_PERMISSION` | no | `write` | Minimum repo permission a commenter needs to trigger a review via `@mention` **or** dismiss a finding on a bot thread: `write` or `admin`. The check fails closed (denied on any error). |
+| `MIN_TRIGGER_PERMISSION` | no | `write` | Minimum repo permission a person needs to trigger a review via `@mention`, dismiss a finding on a bot thread, **or** settle a finding by resolving its thread: `write` or `admin`. The check fails closed (denied on any error). |
 | `BOT_NAME` | no | `Toolu — Code Review` | Display name shown in the comment body header. |
 | `BOT_LOGO_URL` | no | `…/code-review/assets/logo.png` | Logo image shown in the comment body header. |
-| `REVIEW_MEMORY` | no | `true` | Recap what changed since the last review (resolved / still-open / new) and keep a collapsed history, using a hidden state marker in the sticky comment. Set `false` to disable. See [Review memory](#review-memory). |
+| `REVIEW_MEMORY` | no | `true` | Recap what changed since the last review (resolved / still-open / new) and keep a collapsed history, using a hidden state marker in the sticky comment. If the marker would outgrow the comment, the lowest-severity remembered findings are dropped from it first, with a warning. Set `false` to disable. See [Review memory](#review-memory). |
+| `MAX_ROUNDS` | no | `0` | Review-round surrender cap. When set to N > 0, a `changes` verdict on round N (or later) whose findings are **all** below blocker severity is downgraded to `approved`: the findings stay listed as advisory, the comment carries a `🔁 Round cap` callout, and `FAIL_ON` stops failing the job. A single blocker finding (counting every finding in a cluster) disables the cap for that round. Rounds are counted by the monotonic `rounds` counter in the `REVIEW_MEMORY` marker. Requires `REVIEW_MEMORY`. `0` = never surrender. See [Convergence](#convergence-settled-threads--the-round-cap). |
 | `VERBOSITY` | no | `compact` | Verdict-comment shape: `compact` (default) collapses the checklist to one line and renders recap buckets as `path:line` refs; `full` restores the multi-line checklist and inline recap text. Findings, the `### Findings` heading, and the state marker are identical in both. An unrecognized value warns and falls back to `compact`. See [Example verdict](#example-verdict). |
 | `RUN_SECRET_SCAN` | no | `true` | Run the deterministic secret scan (gitleaks) before the LLM review; its findings feed the LLM as triage context and upload to Code Scanning. See [Deterministic checks](#deterministic-checks). |
 | `RUN_SAST` | no | `true` | Run the deterministic SAST pass (Opengrep) before the LLM review; same flow as above. |
@@ -901,12 +936,14 @@ resolution without posting the note again.
 | `TOOLU_API_KEY` | no | `` | toolu.sh org API token (`toolu_…`) enabling review-run reporting to the platform. Empty (default) disables reporting. Only finding metadata is sent — never code, text, suggestions, or quoted lines. Requires `INLINE_COMMENTS: true`. See [Platform reporting](#platform-reporting). |
 | `TOOLU_API_URL` | no | `https://api.toolu.sh` | Base URL of the toolu.sh API. Override only for a self-hosted platform. |
 
+The integer inputs (`MAX_TOKENS`, `MAX_FILES`, `MAX_DIFF_LINES`, `MAX_CHUNK_LINES`, `MAX_CHUNKS`, `MAX_WALL_MS`, `REQUEST_TIMEOUT_MS`, `RULES_MAX_BYTES`, `MAX_ROUNDS`) must be plain integers: a value like `300s` or `16k` fails the action at start.
+
 
 ### Platform reporting (optional)
 
 When `TOOLU_API_KEY` is set, the action reports each review run to the toolu.sh platform so findings and verdicts are aggregated for metrics and history — metrics that would otherwise be lost when the PR closes. Reporting is opt-in (empty by default).
 
-**Metadata only.** Only finding metadata is sent: fingerprint, file path, line, severity, category, and provenance (the source tool: `llm`, `gitleaks`, `opengrep`, or `eslint`). The verdict and run timing are included. **Never** sent: the finding text, the quoted source line, code suggestions, or any code of any kind. The console links back to the GitHub comment for the full finding prose.
+**Metadata only.** Only finding metadata is sent: fingerprint, file path, line, severity, category, and provenance (the source tool: `llm`, `gitleaks`, or `opengrep`). The verdict and run timing are included. **Never** sent: the finding text, the quoted source line, code suggestions, or any code of any kind. The console links back to the GitHub comment for the full finding prose.
 
 **Requires inline comments.** Reporting is skipped when `INLINE_COMMENTS` is false — the action only reports findings that appear in inline threads, and without inline comments, no threads are posted. In that case, every persisting finding would look new on every push, making reconciliation impossible. A warning is logged when reporting is skipped.
 
@@ -953,7 +990,7 @@ By default (`FAIL_ON: changes`) the action **fails its own job** when the bot's 
 `changes` requires at least one surviving actionable finding. Explicit "No findings" and recognized praise-only comments are removed before the verdict is settled. A finding whose `quoted_line` is not at its cited line (a quote may run onto adjacent wrapped lines) is dropped like any other unverifiable claim: the file still counts as reviewed, and the comment notes how many findings were dropped. Only when findings carry no quote at all and nothing else survives for a file does that file remain unreviewed, making the verdict `error` ("Review incomplete — source evidence") rather than a request for changes. A model response that requests changes without any supporting finding is also `error` because the action cannot establish an actionable verdict. Under the default `FAIL_ON: changes`, these `error` verdicts do not fail the job; use `FAIL_ON: changes,error` to block incomplete reviews too. When a model's only findings are recognized as non-actionable and coverage is complete, the verdict is `approved`.
 
 - `FAIL_ON: changes` (default) — block when the bot requests changes.
-- `FAIL_ON: changes,error` — also block when the review could not run (provider error/timeout). Safer, but a transient failure reds the check until re-run.
+- `FAIL_ON: changes,error` — also block when the review could not complete (provider error or timeout, missing source evidence, incomplete coverage, or every finding discarded by the confidence and anchor gates). Safer, but a transient failure reds the check until re-run.
 - `FAIL_ON: none` — never fail on a verdict; the review stays purely advisory (the pre-4.x behavior). You can still gate yourself with `if: steps.review.outputs.verdict == 'changes'`.
 
 The gate governs the verdict only; a thrown infra error fails the job regardless of `FAIL_ON`. A `skip` (non-trigger event) never blocks.
@@ -1083,7 +1120,7 @@ model call, but with GitHub posting swapped for a recording fake so nothing is
 actually posted. It then prints a scorecard: changed files, per-stratum counts,
 pattern groups (count + biggest), packages, model calls (cartographer vs.
 package-layer, which folds in any bisection retries), findings raw vs. clustered,
-coverage-status counts, marker bytes vs. the 65 000-char comment-size ceiling, and
+coverage-status counts, comment size (chars) vs. the 65 000-char comment-size ceiling, and
 wall time.
 
 Its own tests live in `evals/__tests__/` and run via `bun run test:evals`, which

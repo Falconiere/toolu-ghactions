@@ -131,7 +131,7 @@ export function renderTable(sc: Scorecard): string {
     `${pad("Model calls")}cartographer: ${sc.modelCalls.cartographer} · package-layer: ${sc.modelCalls.packageLayer} · total: ${sc.modelCalls.total}`,
     `${pad("Findings")}raw: ${sc.findings.raw} · clustered: ${sc.findings.clustered}`,
     `${pad("Coverage")}${formatCounts(sc.coverage)}`,
-    `${pad("Marker bytes")}${sc.markerBytes.body} / ${sc.markerBytes.limit}`,
+    `${pad("Comment chars")}${sc.markerBytes.body} / ${sc.markerBytes.limit}`,
     `${pad("Wall time")}${sc.wallMs} ms`,
     `${pad("Verdict")}${sc.verdict}`,
   ];

@@ -96,6 +96,11 @@ export function accounting(body: string) {
   }
   return { model, usage };
 }
+/** The review inputs for one variant; `--max-wall-ms` is passed through as given (0 = unlimited, as on the non-compare path). */
+export function compareInputs(args: EvalArgs, apiKey: string, jevEnabled: boolean) {
+  return { ...buildInputs(args, apiKey, "__jev_eval_base"), jevEnabled, inlineComments: false };
+}
+
 /** Run both variants on the exact same Git tree and replay baseline responses in variant two. */
 export async function compareJev(args: EvalArgs, apiKey: string) {
   if (args.provider !== "openrouter") throw new Error("--compare-jev requires openrouter");
@@ -208,12 +213,7 @@ export async function compareJev(args: EvalArgs, apiKey: string) {
         );
         return response;
       };
-      const inputs = {
-        ...buildInputs(args, apiKey, "__jev_eval_base"),
-        jevEnabled: enabled,
-        inlineComments: false,
-        maxWallMs: args.maxWallMs || 600000,
-      };
+      const inputs = compareInputs(args, apiKey, enabled);
       const start = Date.now();
       const result = await runReview({
         inputs,
