@@ -13,10 +13,14 @@ import type { ActionInputs } from "./inputs.js";
 import { runReview } from "./pipeline.js";
 import type { GithubContext } from "./pipeline.js";
 import { shouldBlock } from "./review/gate.js";
-import { mintAppToken } from "./github/appToken.js";
+import { normalizeKey, resolveInstallationId } from "./github/appToken.js";
 import { createAppAuth } from "@octokit/auth-app";
+import { retry } from "@octokit/plugin-retry";
 import type { EventPayload } from "./github/event.js";
 import { baseRefLookup, headShaLookup, permissionLookup } from "./github/lookups.js";
+
+/** The Octokit client this action threads through the pipeline. */
+type Octokit = ReturnType<typeof github.getOctokit>;
 
 /**
  * The PR author's login, resolved from whichever payload path the triggering
@@ -58,34 +62,55 @@ function buildContext(): GithubContext {
 }
 
 /**
- * Resolve the Octokit token: mint a GitHub App installation token when APP_ID +
- * APP_PRIVATE_KEY are set (so the bot posts under the App identity), else the
- * default TOKEN. Mint failures fall back to the default token (never throws).
+ * Resolve the Octokit client: authenticated as the GitHub App when APP_ID +
+ * APP_PRIVATE_KEY are set (so the bot posts under the App identity), else with the
+ * default TOKEN. App misconfiguration or a failed lookup falls back to the default
+ * token (never throws).
+ *
+ * The App path hands auth-app the INSTALLATION ID rather than a pre-minted token
+ * string, so auth-app mints and refreshes installation tokens per request. A token
+ * minted once up front expires after an hour, and MAX_WALL_MS: 0 has no ceiling —
+ * a long chunked review would otherwise reach its publish phase with a dead token
+ * and lose the comment, the label and the report after the model work was paid for.
+ *
+ * Every client carries @octokit/plugin-retry: one run makes dozens of API calls
+ * (comment pages, file pages, thread pages, one reply and one resolve per thread),
+ * several runs can share a PR, and GitHub answers rate limits with 403/429 plus a
+ * Retry-After. Without it a single secondary-limit response fails the call outright.
  */
-async function resolveToken(inputs: ActionInputs): Promise<string> {
-  if (inputs.appId === "" || inputs.appPrivateKey === "") return inputs.token;
+async function resolveOctokit(inputs: ActionInputs): Promise<Octokit> {
+  if (inputs.appId === "" || inputs.appPrivateKey === "") {
+    return github.getOctokit(inputs.token, {}, retry);
+  }
   const repo = `${github.context.repo.owner}/${github.context.repo.repo}`;
-  const minted = await mintAppToken(inputs.appId, inputs.appPrivateKey, repo, {
+  const privateKey = normalizeKey(inputs.appPrivateKey);
+  const installationId = await resolveInstallationId(inputs.appId, privateKey, repo, {
     // App-JWT-authed Octokit used only to resolve the installation. createAppAuth
     // is the authStrategy; the app credentials ride in `auth`.
-    octokitFactory: ({ appId, privateKey }) =>
-      github.getOctokit("", {
-        authStrategy: createAppAuth,
-        auth: { appId, privateKey },
-      }),
-  }).catch(() => null);
-  if (minted) {
-    core.info("Using GitHub App identity for PR comments");
-    return minted;
-  }
-  return inputs.token;
+    octokitFactory: ({ appId, privateKey: pem }) =>
+      github.getOctokit(
+        "",
+        {
+          authStrategy: createAppAuth,
+          auth: { appId, privateKey: pem },
+        },
+        retry,
+      ),
+  });
+  if (installationId === null) return github.getOctokit(inputs.token, {}, retry);
+  core.info("Using GitHub App identity for PR comments");
+  return github.getOctokit(
+    "",
+    {
+      authStrategy: createAppAuth,
+      auth: { appId: inputs.appId, privateKey, installationId },
+    },
+    retry,
+  );
 }
 
 /** Post a best-effort error comment when the pipeline crashes before posting one. */
-async function postErrorComment(
-  octokit: ReturnType<typeof github.getOctokit>,
-  message: string,
-): Promise<string> {
+async function postErrorComment(octokit: Octokit, message: string): Promise<string> {
   const ctx = github.context;
   const url = `${ctx.serverUrl}/${ctx.repo.owner}/${ctx.repo.repo}/actions/runs/${ctx.runId}`;
   const prNumber = ctx.payload.pull_request?.number ?? ctx.payload.issue?.number;
@@ -110,8 +135,7 @@ async function postErrorComment(
 
 async function main(): Promise<void> {
   const inputs = readInputs();
-  const token = await resolveToken(inputs);
-  const octokit = github.getOctokit(token);
+  const octokit = await resolveOctokit(inputs);
 
   try {
     const result = await runReview({

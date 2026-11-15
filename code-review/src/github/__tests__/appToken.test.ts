@@ -1,18 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
-import { mintAppToken, normalizeKey } from "@/github/appToken.js";
-import type {
-  AppAuthFactory,
-  OctokitFactory,
-  InstallationLookupClient,
-} from "@/github/appToken.js";
+import { resolveInstallationId, normalizeKey } from "@/github/appToken.js";
+import type { OctokitFactory, InstallationLookupClient } from "@/github/appToken.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 // REAL RSA key (generated per run, never committed) + the REAL recorded
-// installation payload — no fabricated GitHub data, no network. The auth/octokit
-// factories are injected and assert the args the mint issues them with.
+// installation payload — no fabricated GitHub data, no network. The octokit
+// factory is injected and records the args the lookup issues it with.
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "app");
 
 /** A real PEM, freshly generated so we exercise the actual PKCS#8 parse path. */
@@ -30,27 +26,19 @@ function installationFixture(): { id: number } {
   return JSON.parse(readFileSync(join(FIXTURES, "installation.json"), "utf8"));
 }
 
-/** Build the injected factories, recording the args each is called with. */
-function recordingSeams(token: string): {
-  authFactory: AppAuthFactory;
+/** Build the injected factory, recording the args it is called with. */
+function recordingSeams(): {
   octokitFactory: OctokitFactory;
   calls: {
-    authFactoryArgs?: { appId: string; privateKey: string };
-    installArgs?: { type: string; installationId: number };
     lookupArgs?: { owner: string; repo: string };
     octokitFactoryArgs?: { appId: string; privateKey: string };
   };
 } {
-  const calls: ReturnType<typeof recordingSeams>["calls"] = {};
+  const calls: {
+    lookupArgs?: { owner: string; repo: string };
+    octokitFactoryArgs?: { appId: string; privateKey: string };
+  } = {};
   const installation = installationFixture();
-
-  const authFactory: AppAuthFactory = (options) => {
-    calls.authFactoryArgs = options;
-    return async (installOptions) => {
-      calls.installArgs = installOptions;
-      return { token };
-    };
-  };
 
   const octokitFactory: OctokitFactory = (options) => {
     calls.octokitFactoryArgs = options;
@@ -67,7 +55,7 @@ function recordingSeams(token: string): {
     return client;
   };
 
-  return { authFactory, octokitFactory, calls };
+  return { octokitFactory, calls };
 }
 
 describe("normalizeKey", () => {
@@ -90,66 +78,51 @@ describe("normalizeKey", () => {
   });
 });
 
-describe("mintAppToken", () => {
-  it("mints a token from a RAW PEM, issuing the lookup + install with the right args", async () => {
+describe("resolveInstallationId", () => {
+  it("resolves the id from a RAW PEM, issuing the lookup with the right args", async () => {
     const pem = realPem();
-    const { authFactory, octokitFactory, calls } = recordingSeams("ghs_minted_raw");
+    const { octokitFactory, calls } = recordingSeams();
 
-    const token = await mintAppToken("901234", pem, "test-org/test-repo", {
-      authFactory,
-      octokitFactory,
-    });
+    const id = await resolveInstallationId("901234", pem, "test-org/test-repo", { octokitFactory });
 
-    expect(token).toBe("ghs_minted_raw");
+    expect(id).toBe(installationFixture().id);
     // The repo-installation lookup got the split owner/repo.
     expect(calls.lookupArgs).toEqual({ owner: "test-org", repo: "test-repo" });
-    // The install token call used the installation id from the recorded payload.
-    expect(calls.installArgs).toEqual({
-      type: "installation",
-      installationId: installationFixture().id,
-    });
     // The app id + normalized key reached the auth factory.
-    expect(calls.authFactoryArgs?.appId).toBe("901234");
-    expect(calls.authFactoryArgs?.privateKey).toBe(pem);
+    expect(calls.octokitFactoryArgs?.appId).toBe("901234");
+    expect(calls.octokitFactoryArgs?.privateKey).toBe(pem);
   });
 
-  it("mints a token from a BASE64-encoded PEM (auto-decoded before signing)", async () => {
+  it("resolves from a BASE64-encoded PEM (decoded before it reaches auth-app)", async () => {
     const pem = realPem();
     const b64 = Buffer.from(pem, "utf8").toString("base64");
-    const { authFactory, octokitFactory, calls } = recordingSeams("ghs_minted_b64");
+    const { octokitFactory, calls } = recordingSeams();
 
-    const token = await mintAppToken("901234", b64, "test-org/test-repo", {
-      authFactory,
-      octokitFactory,
-    });
+    const id = await resolveInstallationId("901234", b64, "test-org/test-repo", { octokitFactory });
 
-    expect(token).toBe("ghs_minted_b64");
+    expect(id).toBe(installationFixture().id);
     // The DECODED PEM (not the base64) is what auth-app receives.
-    expect(calls.authFactoryArgs?.privateKey).toBe(pem);
+    expect(calls.octokitFactoryArgs?.privateKey).toBe(pem);
   });
 
   it("returns null when NEITHER credential is set (no App configured)", async () => {
-    const { authFactory, octokitFactory } = recordingSeams("unused");
-    const token = await mintAppToken("", "", "test-org/test-repo", { authFactory, octokitFactory });
-    expect(token).toBeNull();
+    const { octokitFactory, calls } = recordingSeams();
+    const id = await resolveInstallationId("", "", "test-org/test-repo", { octokitFactory });
+    expect(id).toBeNull();
+    // No App configured must not even attempt a lookup.
+    expect(calls.lookupArgs).toBeUndefined();
   });
 
   it("returns null when only the app id is set (misconfiguration)", async () => {
-    const { authFactory, octokitFactory } = recordingSeams("unused");
-    const token = await mintAppToken("901234", "", "test-org/test-repo", {
-      authFactory,
-      octokitFactory,
-    });
-    expect(token).toBeNull();
+    const { octokitFactory } = recordingSeams();
+    const id = await resolveInstallationId("901234", "", "test-org/test-repo", { octokitFactory });
+    expect(id).toBeNull();
   });
 
   it("returns null when only the private key is set (misconfiguration)", async () => {
-    const { authFactory, octokitFactory } = recordingSeams("unused");
-    const token = await mintAppToken("", realPem(), "test-org/test-repo", {
-      authFactory,
-      octokitFactory,
-    });
-    expect(token).toBeNull();
+    const { octokitFactory } = recordingSeams();
+    const id = await resolveInstallationId("", realPem(), "test-org/test-repo", { octokitFactory });
+    expect(id).toBeNull();
   });
 
   it("returns null (never throws) when the installation lookup fails", async () => {
@@ -162,7 +135,26 @@ describe("mintAppToken", () => {
         },
       },
     });
-    const token = await mintAppToken("901234", realPem(), "test-org/test-repo", { octokitFactory });
-    expect(token).toBeNull();
+    const id = await resolveInstallationId("901234", realPem(), "test-org/test-repo", {
+      octokitFactory,
+    });
+    expect(id).toBeNull();
+  });
+
+  it("returns null when GITHUB_REPOSITORY is not 'owner/repo'", async () => {
+    const { octokitFactory, calls } = recordingSeams();
+    const id = await resolveInstallationId("901234", realPem(), "not-a-repo", { octokitFactory });
+    expect(id).toBeNull();
+    expect(calls.lookupArgs).toBeUndefined();
+  });
+
+  it("returns null when the lookup response carries no installation id", async () => {
+    const octokitFactory: OctokitFactory = () => ({
+      rest: { apps: { getRepoInstallation: async () => ({ data: { id: 0 } }) } },
+    });
+    const id = await resolveInstallationId("901234", realPem(), "test-org/test-repo", {
+      octokitFactory,
+    });
+    expect(id).toBeNull();
   });
 });

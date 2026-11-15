@@ -7,8 +7,9 @@
 // §True incremental + resumable); because issue_comment runs with the
 // repo's secrets, the permission gate FAILS CLOSED — ANY uncertainty (the
 // permission lookup throwing, or returning no permission string) means
-// run=false. A bot-authored comment never triggers, and an @mention that
-// carries an instruction runs a SCOPED review (full_review=false).
+// run=false. A bot-authored comment never triggers, only a `created` activity
+// does (an edit or delete of a trigger comment is not a new trigger), and an
+// @mention that carries an instruction runs a SCOPED review (full_review=false).
 import { resolveReviewComment } from "./reviewCommentEvent.js";
 
 /** The fields of the GitHub event payload this resolver reads (loose by design). */
@@ -117,10 +118,6 @@ export interface EventResolution {
   resume?: boolean;
   /** The PR number, when resolved. */
   pr_number?: number;
-  /** The triggering commenter login (@mention only). */
-  commenter?: string;
-  /** The triggering comment id (@mention only, on the allowed path). */
-  comment_id?: number;
   /** A review-comment reply: run the no-model SETTLE pass (pipeline/dismissRecompute.ts). */
   settle?: true;
 }
@@ -130,8 +127,9 @@ export interface EventResolution {
  *
  * `pull_request` → run a full review of HEAD. `issue_comment` → gate on the
  * `@toolu review` trigger and a fail-closed permission floor. Any other event,
- * a missing payload, a bot author, a non-PR comment, a missing trigger, or a
- * failed/insufficient permission check all yield `run:false`. Never throws.
+ * a missing payload, a non-`created` comment activity, a bot author, a non-PR
+ * comment, a missing trigger, or a failed/insufficient permission check all
+ * yield `run:false`. Never throws.
  */
 export async function resolveEvent(
   ctx: EventContext,
@@ -168,8 +166,9 @@ function resolvePullRequest(payload: EventPayload): EventResolution {
 }
 
 /**
- * An `issue_comment` event. Cheap guards first (bot author, not-a-PR, no
- * trigger), then the fail-closed permission gate, then the allowed decision.
+ * An `issue_comment` event. Cheap guards first (activity type, bot author,
+ * not-a-PR, no trigger), then the fail-closed permission gate, then the allowed
+ * decision.
  */
 async function resolveIssueComment(
   payload: EventPayload,
@@ -178,6 +177,15 @@ async function resolveIssueComment(
   const triggerPhrase = opts.triggerPhrase ?? "@toolu";
   const minPermission = opts.minTriggerPermission ?? "write";
   const ownLogin = opts.ownLogin ?? "github-actions[bot]";
+
+  // Guard 0: only a just-CREATED comment is a new trigger. GitHub delivers
+  // `issue_comment` for created, edited AND deleted, and a consumer's workflow
+  // commonly omits a `types:` filter — so without this an edit that fixes a typo
+  // in "@toolu review …" would start a second full (billable) review, which under
+  // the documented `cancel-in-progress` concurrency group can cancel the first run
+  // mid-publish. Mirrors reviewCommentEvent.ts's guard of the same name.
+  const action = payload.action ?? "created";
+  if (action !== "created") return deny("unsupported-action");
 
   // Guard 1: ignore bot authors (the action's own comments included).
   const commenter = payload.comment?.user?.login ?? "";
@@ -195,7 +203,6 @@ async function resolveIssueComment(
   const { resume, instruction } = trigger;
 
   const prNumber = payload.issue?.number;
-  const commentId = payload.comment?.id;
 
   // Permission gate — FAIL CLOSED. A throw (curl error / non-2xx in the bash)
   // or a falsy permission string both deny.
@@ -203,11 +210,11 @@ async function resolveIssueComment(
   try {
     permission = (await opts.lookupPermission?.(commenter)) ?? "";
   } catch {
-    return deny("permission-check-failed", { commenter });
+    return deny("permission-check-failed");
   }
-  if (!permission) return deny("permission-check-failed", { commenter });
+  if (!permission) return deny("permission-check-failed");
   if (!meetsPermission(permission, minPermission)) {
-    return deny("insufficient-permission", { commenter });
+    return deny("insufficient-permission");
   }
 
   // Allowed. Resolve the base ref best-effort (a throw → "").
@@ -231,8 +238,6 @@ async function resolveIssueComment(
     ...(resume ? { resume: true } : {}),
     instruction,
     ...(prNumber !== undefined ? { pr_number: prNumber } : {}),
-    commenter,
-    ...(commentId !== undefined ? { comment_id: commentId } : {}),
   };
 }
 
@@ -289,12 +294,7 @@ export function meetsPermission(permission: string, min: "write" | "admin"): boo
   return permission === "admin" || permission === "write";
 }
 
-/** Build a run=false decision with a reason and optional commenter. */
-function deny(reason: string, extra: { commenter?: string } = {}): EventResolution {
-  return {
-    run: false,
-    reason,
-    full_review: false,
-    ...(extra.commenter !== undefined ? { commenter: extra.commenter } : {}),
-  };
+/** Build a run=false decision with its machine-readable reason. */
+function deny(reason: string): EventResolution {
+  return { run: false, reason, full_review: false };
 }

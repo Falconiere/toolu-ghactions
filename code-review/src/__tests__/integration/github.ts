@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { appendFpMarker } from "@/review/fpmarker.js";
 import type { ReviewComment } from "@/github/review.js";
+import { PER_PAGE } from "@/github/comment.js";
 import type { PipelineOctokit } from "@/pipeline.js";
 
 /** The REAL 422 body PR-72's `createReview` got back (github/__tests__/fixtures). */
@@ -117,7 +118,12 @@ export function fakeOctokit(opts: OctokitOptions = {}): {
   const octokit: PipelineOctokit = {
     rest: {
       issues: {
-        listComments: async (p) => ({ data: p.page === 1 ? store : [] }),
+        // Serve the store in real pages, so a scenario that grows it past PER_PAGE
+        // exercises findSticky's multi-page walk instead of hiding everything on page 1.
+        listComments: async (p) => {
+          const start = (p.page - 1) * PER_PAGE;
+          return { data: store.slice(start, start + PER_PAGE) };
+        },
         createComment: async (p) => {
           rec.created.push({ body: p.body });
           const id = nextId++;

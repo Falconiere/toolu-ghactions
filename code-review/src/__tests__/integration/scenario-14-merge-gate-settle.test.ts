@@ -121,9 +121,13 @@ describe("scenario 14 — merge-gate recomputes settled findings read-only (#123
     const round = await reviewedRound(["medium"]);
     dismiss(round.threads[0]);
     const { octokit } = storeWith(round, round.body, { login: "mallory", type: "User" });
+    // findSticky now filters non-Bot authors out entirely, so the forged marker is
+    // never returned and the recompute reports "no-sticky" rather than reaching
+    // settleEvaluation's own not-bot-sticky guard. Still fail-closed: unchanged,
+    // and nothing is written.
     expect(await check(round, { octokit })).toMatchObject({
       outcome: "unchanged",
-      reason: "not-bot-sticky",
+      reason: "no-sticky",
     });
   });
 

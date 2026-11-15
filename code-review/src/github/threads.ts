@@ -165,8 +165,11 @@ const RESOLVE_MUTATION = `
  * Fetch the bot's own inline review threads (paginated), normalised to {@link PriorThread}.
  * A thread is kept only when its FIRST comment carries the bot's fingerprint marker AND a
  * usable root databaseId — i.e. it is a bot finding we can later reply to or resolve. Human
- * threads and malformed nodes are dropped. Never throws: any API error yields `[]` so a
- * re-review degrades to the old "post fresh" behaviour rather than failing the job.
+ * threads and malformed nodes are dropped. Never throws: a failure on the FIRST call yields
+ * `[]` so a re-review degrades to the old "post fresh" behaviour rather than failing the job,
+ * and a failure MID-PAGINATION (e.g. a 403 secondary rate limit on page 2) degrades to the
+ * pages already fetched — discarding them would make the caller treat every known finding as
+ * brand new, re-posting duplicates and losing every settlement.
  */
 export async function fetchReviewThreads(
   client: ThreadClient,
@@ -197,7 +200,8 @@ export async function fetchReviewThreads(
       if (cursor === null) break;
     }
   } catch {
-    return [];
+    // Keep the pages that succeeded — strictly more information than starting over.
+    return threads;
   }
   return threads;
 }

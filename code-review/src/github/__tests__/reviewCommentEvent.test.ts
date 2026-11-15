@@ -26,7 +26,6 @@ describe("resolveEvent — pull_request_review_comment (settle pass)", () => {
       settle: true,
       pr_number: 42,
       head_sha: "abc123def456",
-      commenter: "human-dev",
       full_review: false,
     });
   });

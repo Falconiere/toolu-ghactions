@@ -8,12 +8,13 @@
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:evals": "bun test evals/__tests__",
     "lint": "oxlint --type-aware --deny-warnings --ignore-pattern=evals",
     "lint:fix": "oxlint --fix --ignore-pattern=evals",
     "fmt": "oxfmt '!evals/**' '!run/index.cjs' '!sanitize-sarif/index.cjs'",
     "fmt:check": "oxfmt --check '!evals/**' '!run/index.cjs' '!sanitize-sarif/index.cjs'",
     "prepare": "cd \"$(git rev-parse --show-toplevel)\" && lefthook install",
-    "check": "bun run typecheck && bun run lint && bun run fmt:check && bun run test",
+    "check": "bun run typecheck && bun run lint && bun run fmt:check && bun run test && bun run test:evals",
     "eval": "bun evals/run.ts"
   },
   "dependencies": {
@@ -21,6 +22,7 @@
     "@actions/github": "^9.1.1",
     "@ai-sdk/openai-compatible": "^0.2.16",
     "@octokit/auth-app": "^8.3.1",
+    "@octokit/plugin-retry": "^8.1.1",
     "@openrouter/ai-sdk-provider": "^0.7.0",
     "ai": "^4.3.0",
     "jsonrepair": "^3.15.0",
