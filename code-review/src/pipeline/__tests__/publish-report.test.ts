@@ -195,7 +195,7 @@ it("does not resurrect dismissed clusters or model commentary in the posted summ
         findings: stamped,
         other_checks: "Fix all the invented barrels.",
       },
-      priorThreads: stamped.map((f) => thread({ ...f, isResolved: true })),
+      priorThreads: stamped.map((f) => thread({ ...f, isResolved: true, dismissal: "resolved" })),
       ledger: {
         entries: Object.fromEntries(stamped.map((f) => [f.path, { status: "reviewed" as const }])),
       },

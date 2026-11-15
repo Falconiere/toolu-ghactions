@@ -1,6 +1,6 @@
 // settlement.test.ts — proves settlement.ts's matching/attribution logic,
 // exercised through the public partitionFindings() entry point: every
-// Settlement value derives correctly, all three isSettled prongs are covered,
+// Settlement value derives correctly, every settlement kind is covered (the bot's own note is none),
 // and an AMBIGUOUS settled-thread match (two settled threads on one path both
 // covering one finding) is refused rather than silently attributed to the
 // wrong physical thread. Split from partition.test.ts (which stayed under the
@@ -35,7 +35,7 @@ function expectOk(result: PartitionResult): PartitionedFindings {
   return result.partitions;
 }
 
-describe("partitionFindings — settlement values (all three isSettled prongs)", () => {
+describe("partitionFindings — settlement values (every settlement kind)", () => {
   it("emits 'explicit'/'exhausted' straight off a dismissed toResolve thread", () => {
     const explicit = thread({ fp: "fp-explicit", dismissal: "explicit" });
     const exhausted = thread({ threadId: "T_2", fp: "fp-exhausted", dismissal: "exhausted" });
@@ -55,11 +55,17 @@ describe("partitionFindings — settlement values (all three isSettled prongs)",
     expect(p.fixed).toEqual([]);
   });
 
-  it("emits 'resolved' for a suppressed finding matched to an isResolved:true, dismissal:undefined thread", () => {
+  it("emits 'resolved' for a suppressed finding matched to a thread an authorized human resolved", () => {
     // isResolved threads never reach applied.toResolve (reconcile() `continue`s on
     // them) — this settlement can only arise via the `suppressed` side.
     const f = stampedFinding({ fp: "fp-sup", path: "src/y.ts", line: 5 });
-    const t = thread({ fp: "fp-sup-t", path: "src/y.ts", line: 5, isResolved: true });
+    const t = thread({
+      fp: "fp-sup-t",
+      path: "src/y.ts",
+      line: 5,
+      isResolved: true,
+      dismissal: "resolved",
+    });
     const applied: Reconciliation<StampedFinding> = { toCreate: [], toReply: [], toResolve: [] };
     const p = expectOk(
       partitionFindings({ applied, findings: [], suppressed: [f], priorThreads: [t], prior: null }),
@@ -76,29 +82,23 @@ describe("partitionFindings — settlement values (all three isSettled prongs)",
     ]);
   });
 
-  it("emits 'resolved' via the accepted-resolution-note prong — the third isSettled disjunct, not isResolved or dismissal", () => {
+  it("the bot's accepted-resolution note settles nothing — a re-raised finding reports open", () => {
     // The bot's own note posted after an EARLIER resolveThread mutation failed
-    // (github/threads.ts's ACCEPTED_RESOLUTION_NOTE): isResolved is false and
-    // dismissal is undefined, so only this third disjunct explains suppression.
+    // (github/threads.ts's ACCEPTED_RESOLUTION_NOTE) is the bot's judgement, not a
+    // human ruling: the finding is not suppressed and its thread stays its open home.
     const f = stampedFinding({ fp: "fp-accepted" });
     const t = thread({
       fp: "fp-accepted",
       replies: [{ author: BOT, body: ACCEPTED_RESOLUTION_NOTE }],
     });
-    const applied: Reconciliation<StampedFinding> = { toCreate: [], toReply: [], toResolve: [] };
+    const { kept, suppressed } = dropSettled([f], [t]);
+    expect(suppressed).toEqual([]);
+    const applied = reconcile(kept, [t]);
     const p = expectOk(
-      partitionFindings({ applied, findings: [], suppressed: [f], priorThreads: [t], prior: null }),
+      partitionFindings({ applied, findings: kept, suppressed, priorThreads: [t], prior: null }),
     );
-    expect(p.dismissed).toEqual([
-      {
-        fp: "fp-accepted",
-        path: "src/a.ts",
-        line: 10,
-        severity: "medium",
-        category: "correctness",
-        settlement: "resolved",
-      },
-    ]);
+    expect(p.dismissed).toEqual([]);
+    expect(p.open.map((o) => o.fp)).toEqual(["fp-accepted"]);
   });
 
   it("emits 'resolved' via the category-tag-on-a-detached-thread prong, reusing reconcile.ts's matchesSettled (not a reimplementation)", () => {
@@ -109,6 +109,7 @@ describe("partitionFindings — settlement values (all three isSettled prongs)",
       path: "src/z.ts",
       line: null,
       isResolved: true,
+      dismissal: "resolved",
       isOutdated: true,
       rootBody: "**medium** _(CORRECTNESS)_: some text\n\n<!-- toolu-fp:fp-detached-orig -->",
     });

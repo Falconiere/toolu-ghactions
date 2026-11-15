@@ -29,6 +29,7 @@ export function thread(over: Partial<PriorThread> = {}): PriorThread {
     path: "src/a.ts",
     line: 10,
     isResolved: false,
+    resolvedBy: "",
     isOutdated: false,
     rootBody: "**medium**: a finding\n\n<!-- toolu-fp:fp-default -->",
     replies: [],

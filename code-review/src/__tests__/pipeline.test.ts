@@ -78,6 +78,8 @@ interface SeedThread {
   path: string;
   line: number | null;
   isResolved?: boolean;
+  /** GraphQL `resolvedBy.login`; omitted → `null` (GitHub did not say who). */
+  resolvedBy?: string;
   isOutdated?: boolean;
   botLogin?: string;
   replies?: { author: string; body: string }[];
@@ -187,6 +189,7 @@ function fakeOctokit(
               nodes: seedThreads.map((t) => ({
                 id: t.threadId,
                 isResolved: t.isResolved ?? false,
+                resolvedBy: t.resolvedBy === undefined ? null : { login: t.resolvedBy },
                 isOutdated: t.isOutdated ?? false,
                 path: t.path,
                 line: t.line,
@@ -825,7 +828,39 @@ describe("runReview — thread-aware inline reconciliation", () => {
     expect(bodies).toContain("no longer applies");
   });
 
-  it("retries an unresolved accepted thread without duplicating its closing note", async () => {
+  it("retries resolving an accepted thread whose finding is gone, without repeating its note", async () => {
+    const { dir, headSha } = track(featureRepoWithChange());
+    const f0 = fixtureFinding("findings", 0);
+    const seed: SeedThread = {
+      threadId: "T_accept_retry",
+      rootCommentId: 8004,
+      fp: fingerprint(f0),
+      path: f0.path,
+      line: 2,
+      replies: [
+        {
+          author: "toolu-bot",
+          body: "Re-reviewed — this no longer applies (addressed, or point taken). Resolving.",
+        },
+      ],
+    };
+    const { octokit, rec } = fakeOctokit([], [seed]);
+
+    const result = await runReview({
+      inputs: baseInputs(),
+      octokit,
+      context: prContext(headSha),
+      fetch: replayFetch("approved"),
+      cwd: dir,
+      now: () => 1_700_000_000_000,
+    });
+
+    expect(result.verdict).toBe("approved");
+    expect(rec.resolved).toEqual(["T_accept_retry"]);
+    expect(rec.replies).toEqual([]);
+  });
+
+  it("an accepted note is the bot's own judgement: a re-raised finding stays live on that thread", async () => {
     const { dir, headSha } = track(featureRepoWithChange());
     const f0 = fixtureFinding("findings", 0);
     const seed: SeedThread = {
@@ -852,9 +887,11 @@ describe("runReview — thread-aware inline reconciliation", () => {
       now: () => 1_700_000_000_000,
     });
 
-    expect(result.findingsCount).toBe(0);
-    expect(result.verdict).toBe("approved");
-    expect(rec.resolved).toEqual(["T_accept_retry"]);
+    expect(result.findingsCount).toBe(1);
+    expect(result.verdict).toBe("changes");
+    // The noted thread covers the finding: no duplicate, no reply (the bot spoke last),
+    // and no resolve while the finding is live.
+    expect(rec.resolved).toEqual([]);
     expect(rec.replies).toEqual([]);
     expect(rec.reviews).toEqual([]);
   });
@@ -869,6 +906,7 @@ describe("runReview — thread-aware inline reconciliation", () => {
       path: f0.path,
       line: 2,
       isResolved: true,
+      resolvedBy: "maintainer",
     };
     const { octokit } = fakeOctokit([], [seed]);
     const captured: { body: CapturedRequestBody | null } = { body: null };
@@ -880,6 +918,7 @@ describe("runReview — thread-aware inline reconciliation", () => {
       fetch: capturingReplayFetch("findings", captured),
       cwd: dir,
       now: () => 1_700_000_000_000,
+      lookupPermission: async () => "write",
     });
     expect(result.verdict).toBe("approved"); // suppression still handles the count
 
@@ -1054,7 +1093,8 @@ describe("runReview — thread-aware inline reconciliation", () => {
       fp: fingerprint(f0),
       path: f0.path,
       line: 2,
-      isResolved: true, // a human closed the conversation
+      isResolved: true, // a human with write access closed the conversation
+      resolvedBy: "maintainer",
     };
     const { octokit, rec } = fakeOctokit([], [seed]);
 
@@ -1065,6 +1105,7 @@ describe("runReview — thread-aware inline reconciliation", () => {
       fetch: replayFetch("findings"),
       cwd: dir,
       now: () => 1_700_000_000_000,
+      lookupPermission: async () => "write",
     });
 
     // The only finding was human-resolved → dropped from the count AND the model's
@@ -1118,6 +1159,7 @@ describe("runReview — thread-aware inline reconciliation", () => {
       path: f0.path,
       line: 2,
       isResolved: true,
+      resolvedBy: "maintainer",
     };
     const { octokit, rec } = fakeOctokit([], [seed]);
 
@@ -1128,6 +1170,7 @@ describe("runReview — thread-aware inline reconciliation", () => {
       fetch: replayFetch("findings"),
       cwd: dir,
       now: () => 1_700_000_000_000,
+      lookupPermission: async () => "write",
     });
 
     expect(result.findingsCount).toBe(0);

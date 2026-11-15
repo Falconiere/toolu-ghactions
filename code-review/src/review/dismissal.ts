@@ -15,15 +15,17 @@
 // Both are gated on the SAME repo-permission floor as the @mention re-trigger
 // (MIN_TRIGGER_PERMISSION) and FAIL CLOSED — no lookup, a throwing lookup, or an
 // insufficient permission all leave the thread undismissed. Without that gate any
-// drive-by commenter on a public PR could silence the reviewer, which resolving a
-// thread (write/triage only) never allowed.
+// drive-by commenter on a public PR could silence the reviewer. The same gate decides
+// whether a GitHub RESOLUTION settles (`"resolved"`): the PR's opener may resolve any
+// thread without write access, and the bot resolves its own — neither is a ruling.
 //
 // Pure detection + one injected permission lookup; the pipeline stamps the result onto
 // each PriorThread and reconcile/prompt/publish read it from there.
 import { meetsPermission } from "@/github/event.js";
+import { bare } from "@/github/threads.js";
 import type { PriorThread, ThreadComment } from "@/github/threads.js";
 
-/** How a thread was settled by the author short of resolving it on GitHub. */
+/** How a thread was settled (see {@link classifyDismissals}). */
 export type Dismissal = NonNullable<PriorThread["dismissal"]>;
 
 /** What {@link classifyDismissals} needs: the mention phrase and the permission gate. */
@@ -85,56 +87,55 @@ function stripQuoted(body: string): string {
 }
 
 /**
- * The LAST non-bot reply carrying `<phrase> dismiss`, or null. Last wins: an author
- * may argue first and dismiss later in the same thread. The bot's own replies are
+ * Every non-bot reply carrying `<phrase> dismiss`, NEWEST first — the caller takes the
+ * first whose author is authorized, so a drive-by command posted later can never
+ * cancel a maintainer's earlier one. The bot's own replies are
  * skipped (it must never dismiss on its own words), as are unattributable ones (a
  * null GitHub author surfaces as `""` and is indistinguishable from the bot).
  * `dismiss` must END the word — `@toolu dismissive`, `dismiss3` and `dismiss_it` are
  * prose or some other token, not this command (hence `\w`, not just letters).
  */
-export function explicitDismissReply(
-  thread: PriorThread,
-  triggerPhrase: string,
-): ThreadComment | null {
+export function explicitDismissReply(thread: PriorThread, triggerPhrase: string): ThreadComment[] {
   const phrase = triggerPhrase.trim();
-  if (phrase === "") return null;
+  if (phrase === "") return [];
   const command = new RegExp(`${escapeRegExp(phrase)}\\s+dismiss(?!\\w)`, "i");
-  for (let i = thread.replies.length - 1; i >= 0; i--) {
-    const reply = thread.replies[i];
-    if (!reply || reply.author === "" || reply.author === thread.botLogin) continue;
-    if (command.test(stripQuoted(reply.body))) return reply;
-  }
-  return null;
+  return thread.replies
+    .filter((r) => r.author !== "" && r.author !== thread.botLogin)
+    .filter((r) => command.test(stripQuoted(r.body)))
+    .reverse();
 }
 
 /**
- * The author reply that ENDS the argument, or null. Exhaustion needs the bot to have
+ * The replies that could END the argument, NEWEST first: every attributable non-bot
+ * reply posted after the bot's first counter-argument. Exhaustion needs the bot to have
  * already stated its counter-argument in this thread AND the author to have answered
  * after that: the author's first reply is not exhaustion — it is exactly the input the
  * model is asked to weigh this run, and the bot is owed one rebuttal. A second author
- * reply after that rebuttal means neither side is moving.
+ * reply after that rebuttal means neither side is moving. The caller takes the first
+ * authorized one, so a drive-by reply posted last cannot cancel the stalemate.
  *
- * TRAILING bot replies are ignored, so the verdict is IDEMPOTENT once the argument has
+ * TRAILING bot replies change nothing, so the verdict is IDEMPOTENT once the argument has
  * ended. publish.ts posts its closing note before the resolveReviewThread mutation and
  * both are best-effort: when the note lands but the resolve fails, the bot is the last
  * speaker on a thread whose argument really did end. Reading that as "still live" would
  * un-suppress the finding on the next run — with no reply posted to explain it, since
  * the bot then holds the last word — resurrecting the exact loop this module closes.
  */
-export function argumentExhausted(thread: PriorThread): ThreadComment | null {
-  if (thread.botLogin === "") return null; // can't tell our replies from theirs
-  let end = thread.replies.length;
-  while (end > 0 && thread.replies[end - 1]?.author === thread.botLogin) end--;
-  const last = thread.replies[end - 1];
-  if (!last || last.author === "") return null;
-  const botArgued = thread.replies.slice(0, end - 1).some((r) => r.author === thread.botLogin);
-  return botArgued ? last : null;
+export function argumentExhausted(thread: PriorThread): ThreadComment[] {
+  if (thread.botLogin === "") return []; // can't tell our replies from theirs
+  const firstBot = thread.replies.findIndex((r) => r.author === thread.botLogin);
+  if (firstBot < 0) return [];
+  return thread.replies
+    .slice(firstBot + 1)
+    .filter((r) => r.author !== "" && r.author !== thread.botLogin)
+    .reverse();
 }
 
 /**
- * Stamp `.dismissal` on every thread the author has settled without resolving it.
- * Already-resolved threads are returned untouched (GitHub's own resolution already
- * suppresses them). Permission lookups are memoised per login — a PR with thirty
+ * Stamp `.dismissal` on every thread that is settled. A GitHub resolution counts only
+ * when an authorized human made it: GitHub lets whoever OPENED the PR resolve review
+ * threads, write access or not, and the bot resolves its own threads too — neither is
+ * a ruling on the finding. Permission lookups are memoised per login — a PR with thirty
  * threads and one author costs one API call — and every failure path yields "not
  * dismissed", so a flaky permissions API degrades to today's behaviour instead of
  * silencing findings. Never throws.
@@ -159,22 +160,34 @@ export async function classifyDismissals(
   return out;
 }
 
-/** Classify ONE thread: explicit command first (a ruling outranks a stalemate). */
+/** Classify ONE thread: human rulings (an explicit command, then an authorized
+ *  resolution) outrank a stalemate, whatever the thread's GitHub state. */
 async function classifyOne(
   thread: PriorThread,
   opts: DismissalOptions,
   authorize: (login: string) => Promise<boolean>,
 ): Promise<PriorThread> {
-  if (thread.isResolved) return thread;
-  const explicit = explicitDismissReply(thread, opts.triggerPhrase);
-  if (explicit && (await authorize(explicit.author))) {
+  if (await anyAuthorized(explicitDismissReply(thread, opts.triggerPhrase), authorize)) {
     return { ...thread, dismissal: "explicit" };
   }
-  const closing = argumentExhausted(thread);
-  if (closing && (await authorize(closing.author))) {
+  const resolver = thread.resolvedBy;
+  const byBot = bare(resolver) === bare(thread.botLogin);
+  if (thread.isResolved && resolver !== "" && !byBot && (await authorize(resolver))) {
+    return { ...thread, dismissal: "resolved" };
+  }
+  if (await anyAuthorized(argumentExhausted(thread), authorize)) {
     return { ...thread, dismissal: "exhausted" };
   }
   return thread;
+}
+
+/** True when any candidate's author passes the permission gate (checked in order). */
+async function anyAuthorized(
+  candidates: ThreadComment[],
+  authorize: (login: string) => Promise<boolean>,
+): Promise<boolean> {
+  for (const c of candidates) if (await authorize(c.author)) return true;
+  return false;
 }
 
 /** FAIL-CLOSED permission check: no login, no lookup, a throw, or too little access → false. */

@@ -24,7 +24,14 @@ describe("fpmarker", () => {
     expect(extractFpMarker("<!-- toolu-fp:NOT-HEX -->")).toBeNull();
   });
 
-  it("extracts the first marker's fingerprint from a real rendered finding body", () => {
+  it("reads the real (last) marker, never one echoed inside the finding text", () => {
+    const real = "0123456789abcdef0123456789abcdef01234567";
+    const body = appendFpMarker("**high**: the file says <!-- toolu-fp:0 --> here", real);
+    expect(extractFpMarker(body)).toBe(real);
+    expect(extractFpMarker("text <!-- toolu-fp:0 --> then more prose")).toBeNull();
+  });
+
+  it("extracts the marker's fingerprint from a real rendered finding body", () => {
     const fp = "0123456789abcdef0123456789abcdef01234567";
     const rendered = appendFpMarker(
       "**medium** (correctness): off-by-one in the loop\n\n```suggestion\nfor (i=0;i<=n;i++)\n```",

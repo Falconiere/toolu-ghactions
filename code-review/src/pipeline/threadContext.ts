@@ -3,8 +3,10 @@ import type { PriorThreadContext } from "@/prompt.js";
 import type { PriorThread } from "@/github/threads.js";
 /**
  * Map the bot's prior threads to the prompt's context block: accept-or-argue for
- * still-live threads, DISMISSED (settled, do not re-raise or reword) for those the
- * author resolved on GitHub or dismissed in a reply (see review/dismissal.ts).
+ * still-live threads, DISMISSED (settled, do not re-raise or reword) for those an
+ * authorized human resolved on GitHub or dismissed in a reply (see review/dismissal.ts).
+ * A thread the bot resolved itself, or one resolved by a login below the permission
+ * floor, is still live — its GitHub `isResolved` is deliberately not read here.
  */
 export function buildThreadContexts(priorThreads: PriorThread[]): PriorThreadContext[] {
   return priorThreads.map((t) => ({
@@ -12,8 +14,10 @@ export function buildThreadContexts(priorThreads: PriorThread[]): PriorThreadCon
     line: t.line,
     finding: cleanFindingBody(t.rootBody),
     replies: t.replies,
-    resolved: t.isResolved,
-    ...(t.dismissal !== undefined ? { dismissal: t.dismissal } : {}),
+    resolved: t.dismissal === "resolved",
+    ...(t.dismissal === "explicit" || t.dismissal === "exhausted"
+      ? { dismissal: t.dismissal }
+      : {}),
   }));
 }
 

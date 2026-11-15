@@ -4,6 +4,7 @@
 // (line radius, detached-thread category) live in reconcile-loose.test.ts.
 import { describe, expect, it } from "vitest";
 import { ACCEPTED_RESOLUTION_NOTE } from "@/github/threads.js";
+import { classifyDismissals } from "@/review/dismissal.js";
 import { dropSettled, reconcile } from "@/review/reconcile.js";
 import {
   BOT,
@@ -55,13 +56,24 @@ describe("reconcile", () => {
   });
 
   it("retries resolution when the accepted note landed but the mutation failed", () => {
+    const t = thread({
+      fp: "fp-accepted",
+      replies: [{ author: BOT, body: ACCEPTED_RESOLUTION_NOTE }],
+    });
+    const plan = reconcile([], [t]);
+    expect(plan.toResolve).toEqual([t]);
+  });
+
+  it("a noted thread whose finding is LIVE again is that finding's open thread", () => {
+    // The note is the bot's own judgement, never a settlement: the model re-raised the
+    // finding, so the thread stays open and covers it (no duplicate, no resolve).
     const f = finding({ fp: "fp-accepted" });
     const t = thread({
       fp: "fp-accepted",
       replies: [{ author: BOT, body: ACCEPTED_RESOLUTION_NOTE }],
     });
     const plan = reconcile([f], [t]);
-    expect(plan.toResolve).toEqual([t]);
+    expect(plan.toResolve).toEqual([]);
     expect(plan.toReply).toEqual([]);
     expect(plan.toCreate).toEqual([]);
   });
@@ -96,7 +108,12 @@ describe("reconcile", () => {
 
   it("never re-acts on a resolved thread but still covers its finding (no dup re-post)", () => {
     const f = finding({ fp: "fp-resolved" });
-    const t = thread({ fp: "fp-resolved", isResolved: true, replies: [authorReply] });
+    const t = thread({
+      fp: "fp-resolved",
+      isResolved: true,
+      dismissal: "resolved",
+      replies: [authorReply],
+    });
     const plan = reconcile([f], [t]);
     expect(plan.toReply).toEqual([]); // respect the resolution
     expect(plan.toResolve).toEqual([]); // not re-resolved
@@ -104,7 +121,7 @@ describe("reconcile", () => {
   });
 
   it("does not resolve a resolved thread whose finding is also gone", () => {
-    const t = thread({ fp: "fp-x", isResolved: true });
+    const t = thread({ fp: "fp-x", isResolved: true, dismissal: "resolved" });
     const plan = reconcile([], [t]);
     expect(plan.toResolve).toEqual([]);
   });
@@ -172,7 +189,7 @@ describe("reconcile", () => {
 describe("dropSettled", () => {
   it("suppresses a finding whose resolved thread matches by fingerprint (line drifted)", () => {
     const f = finding({ fp: "fp-done", line: 42 });
-    const t = thread({ fp: "fp-done", line: 10, isResolved: true });
+    const t = thread({ fp: "fp-done", line: 10, isResolved: true, dismissal: "resolved" });
     const { kept, suppressed } = dropSettled([f], [t]);
     expect(kept).toEqual([]);
     expect(suppressed).toEqual([f]);
@@ -180,7 +197,13 @@ describe("dropSettled", () => {
 
   it("suppresses a reworded finding whose resolved thread matches by exact path+line", () => {
     const f = finding({ fp: "fp-reworded", path: "src/a.ts", line: 10 });
-    const t = thread({ fp: "fp-original", path: "src/a.ts", line: 10, isResolved: true });
+    const t = thread({
+      fp: "fp-original",
+      path: "src/a.ts",
+      line: 10,
+      isResolved: true,
+      dismissal: "resolved",
+    });
     const { kept, suppressed } = dropSettled([f], [t]);
     expect(kept).toEqual([]);
     expect(suppressed).toEqual([f]);
@@ -194,15 +217,16 @@ describe("dropSettled", () => {
     expect(suppressed).toEqual([]);
   });
 
-  it("suppresses a finding after the accepted note lands on an unresolved thread", () => {
+  it("does NOT suppress a finding the bot's own accepted note sits on", () => {
+    // The note records the bot's judgement on an earlier run; only a human settles.
     const f = finding({ fp: "fp-accepted" });
     const t = thread({
       fp: "fp-accepted",
       replies: [{ author: BOT, body: ACCEPTED_RESOLUTION_NOTE }],
     });
     const { kept, suppressed } = dropSettled([f], [t]);
-    expect(kept).toEqual([]);
-    expect(suppressed).toEqual([f]);
+    expect(kept).toEqual([f]);
+    expect(suppressed).toEqual([]);
   });
 
   it("does not trust the accepted note when a non-bot commenter copies it", () => {
@@ -226,7 +250,13 @@ describe("dropSettled", () => {
   it("splits a mixed run: resolved-covered suppressed, the rest kept", () => {
     const done = finding({ fp: "fp-done", path: "src/d.ts", line: 3 });
     const live = finding({ fp: "fp-live", path: "src/l.ts", line: 4 });
-    const resolvedThread = thread({ fp: "fp-done", path: "src/d.ts", line: 3, isResolved: true });
+    const resolvedThread = thread({
+      fp: "fp-done",
+      path: "src/d.ts",
+      line: 3,
+      isResolved: true,
+      dismissal: "resolved",
+    });
     const openThread = thread({ fp: "fp-live", path: "src/l.ts", line: 4, isResolved: false });
     const { kept, suppressed } = dropSettled([done, live], [resolvedThread, openThread]);
     expect(kept).toEqual([live]);
@@ -295,5 +325,59 @@ describe("reconcile on a dismissed thread", () => {
     expect(plan.toResolve).toEqual([]);
     expect(plan.toReply.map((r) => r.thread.threadId)).toEqual(["T_1"]);
     expect(plan.toCreate).toEqual([]);
+  });
+});
+
+// T2 + T11: a GitHub resolution settles a finding only when classifyDismissals trusted it
+// (`dismissal: "resolved"` — a human above MIN_TRIGGER_PERMISSION resolved it). The bot's
+// own resolutions and those by the PR's opener without write access settle nothing.
+describe("only an authorized human resolution settles", () => {
+  const blocker = finding({ fp: "fp-F", severity: "blocker" });
+  const permissions = async (login: string): Promise<string> =>
+    login === "maintainer" ? "write" : "read";
+  const classify = (threads: Parameters<typeof classifyDismissals>[0]) =>
+    classifyDismissals(threads, {
+      triggerPhrase: "@toolu",
+      minPermission: "write",
+      lookupPermission: permissions,
+    });
+  const botResolved = thread({
+    threadId: "T_2",
+    fp: "fp-F",
+    isResolved: true,
+    resolvedBy: `${BOT}[bot]`,
+    replies: [{ author: BOT, body: ACCEPTED_RESOLUTION_NOTE }],
+  });
+
+  it("the bot's duplicate cleanup does not settle a live blocker; the kept thread covers it", async () => {
+    // Run N kept T_1 and resolved the duplicate T_2; run N+1 must still block on F.
+    const threads = await classify([thread({ threadId: "T_1", fp: "fp-F" }), botResolved]);
+    expect(dropSettled([blocker], threads).kept).toEqual([blocker]);
+    const plan = reconcile([blocker], threads);
+    expect(plan.toCreate).toEqual([]);
+    expect(plan.toResolve).toEqual([]);
+  });
+
+  it("a finding re-raised after the bot resolved its only thread gets a fresh thread", async () => {
+    const threads = await classify([botResolved]);
+    expect(dropSettled([blocker], threads).kept).toEqual([blocker]);
+    const plan = reconcile([blocker], threads);
+    expect(plan.toCreate).toEqual([blocker]);
+    expect(plan.toResolve).toEqual([]);
+  });
+
+  it.each([
+    { resolver: "driveby", settles: false },
+    { resolver: "", settles: false },
+    { resolver: "maintainer", settles: true },
+  ])("resolved by '$resolver' → settles: $settles", async ({ resolver, settles }) => {
+    const threads = await classify([
+      thread({ fp: "fp-F", isResolved: true, resolvedBy: resolver }),
+    ]);
+    const { kept, suppressed } = dropSettled([blocker], threads);
+    expect(settles ? suppressed : kept).toEqual([blocker]);
+    // Either way the resolved thread is never re-acted on, and it covers the finding.
+    const plan = reconcile(kept, threads);
+    expect(plan).toEqual({ toCreate: [], toReply: [], toResolve: [] });
   });
 });

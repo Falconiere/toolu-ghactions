@@ -31,6 +31,9 @@ export interface SeedThread {
   path: string;
   line: number | null;
   isResolved?: boolean;
+  /** Who resolved it (GraphQL `resolvedBy.login`; an App reads `name[bot]`). Omitted →
+   *  `null`, as GitHub reports an unknown resolver — which never settles a finding. */
+  resolvedBy?: string;
   isOutdated?: boolean;
   botLogin?: string;
   replies?: { author: string; body: string }[];
@@ -195,6 +198,7 @@ export function fakeOctokit(opts: OctokitOptions = {}): {
               nodes: threads.map((t) => ({
                 id: t.threadId,
                 isResolved: t.isResolved ?? false,
+                resolvedBy: t.resolvedBy === undefined ? null : { login: t.resolvedBy },
                 isOutdated: t.isOutdated ?? false,
                 path: t.path,
                 line: t.line,

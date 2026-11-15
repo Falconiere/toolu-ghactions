@@ -35,7 +35,7 @@ function threadPage(
                   {
                     databaseId: thread.databaseId,
                     body: `**finding** at ${thread.path}\n<!-- toolu-fp:${thread.fp} -->`,
-                    author: { login: "bot" },
+                    author: { login: "toolu-bot" },
                   },
                 ],
               },
@@ -48,6 +48,8 @@ function threadPage(
 }
 
 const TARGET: ThreadTarget = { owner: "o", repo: "r", prNumber: 7 };
+/** The sticky author's login as REST spells it; GraphQL roots read `toolu-bot`. */
+const BOT_LOGIN = "toolu-bot[bot]";
 
 /** A fake ThreadClient that records calls and replays a configured graphql response. */
 function fakeClient(opts: {
@@ -93,7 +95,7 @@ function fakeClient(opts: {
 describe("fetchReviewThreads", () => {
   it("returns ONLY bot threads with a usable root (marker + databaseId)", async () => {
     const { client } = fakeClient({ graphqlResponses: [reviewThreadsFixture()] });
-    const threads = await fetchReviewThreads(client, TARGET);
+    const threads = await fetchReviewThreads(client, TARGET, BOT_LOGIN);
 
     // The human thread (no marker) and the no-databaseId thread are dropped.
     expect(threads).toHaveLength(1);
@@ -110,7 +112,7 @@ describe("fetchReviewThreads", () => {
 
   it("parses the author replies (everything after the root comment)", async () => {
     const { client } = fakeClient({ graphqlResponses: [reviewThreadsFixture()] });
-    const [t] = await fetchReviewThreads(client, TARGET);
+    const [t] = await fetchReviewThreads(client, TARGET, BOT_LOGIN);
     expect(t?.replies).toEqual([
       { author: "human-dev", body: "This is intentional — the value is already HMAC'd upstream." },
     ]);
@@ -134,7 +136,7 @@ describe("fetchReviewThreads", () => {
                     {
                       databaseId: 11,
                       body: "p1\n<!-- toolu-fp:aaaa11 -->",
-                      author: { login: "bot" },
+                      author: { login: "toolu-bot" },
                     },
                   ],
                 },
@@ -161,7 +163,7 @@ describe("fetchReviewThreads", () => {
                     {
                       databaseId: 22,
                       body: "p2\n<!-- toolu-fp:bbbb22 -->",
-                      author: { login: "bot" },
+                      author: { login: "toolu-bot" },
                     },
                   ],
                 },
@@ -172,7 +174,7 @@ describe("fetchReviewThreads", () => {
       },
     };
     const { client, calls } = fakeClient({ graphqlResponses: [page1, page2] });
-    const threads = await fetchReviewThreads(client, TARGET);
+    const threads = await fetchReviewThreads(client, TARGET, BOT_LOGIN);
     expect(threads.map((t) => t.threadId)).toEqual(["T_page1", "T_page2"]);
     // Second call carried the endCursor from page 1.
     expect(calls.graphql[1]?.variables?.["cursor"]).toBe("CURSOR_1");
@@ -184,7 +186,7 @@ describe("fetchReviewThreads", () => {
       "CURSOR_1",
     );
     const { client, calls } = fakeClient({ graphqlResponses: [page1], throwOnCall: 2 });
-    const threads = await fetchReviewThreads(client, TARGET);
+    const threads = await fetchReviewThreads(client, TARGET, BOT_LOGIN);
     // A 403 on page 2 must NOT discard page 1: an empty list makes the caller
     // treat every already-reported finding as brand new — re-posting duplicates,
     // resolving nothing, and losing every settlement the author had argued out.
@@ -192,19 +194,64 @@ describe("fetchReviewThreads", () => {
     expect(calls.graphql).toHaveLength(2);
   });
 
-  it("returns [] when the FIRST page throws (nothing was fetched to keep)", async () => {
+  // An unread first page is NOT "no threads": the review would re-post every finding
+  // as a duplicate and resurrect every settled one. It is an infra error.
+  it("throws when the FIRST page throws (nothing was read)", async () => {
     const { client } = fakeClient({ throwOnCall: 1 });
-    await expect(fetchReviewThreads(client, TARGET)).resolves.toEqual([]);
+    await expect(fetchReviewThreads(client, TARGET, BOT_LOGIN)).rejects.toThrow(
+      /could not read review threads: .*secondary rate limit/,
+    );
   });
 
-  it("returns [] (never throws) when graphql fails", async () => {
+  it("throws when graphql fails", async () => {
     const { client } = fakeClient({ graphqlThrows: true });
-    await expect(fetchReviewThreads(client, TARGET)).resolves.toEqual([]);
+    await expect(fetchReviewThreads(client, TARGET, BOT_LOGIN)).rejects.toThrow(
+      /could not read review threads/,
+    );
   });
 
-  it("returns [] for a malformed response shape", async () => {
-    const { client } = fakeClient({ graphqlResponses: [{ unexpected: "shape" }] });
-    await expect(fetchReviewThreads(client, TARGET)).resolves.toEqual([]);
+  it("throws for a malformed first page or a missing pull request", async () => {
+    for (const page of [{ unexpected: "shape" }, { repository: { pullRequest: null } }]) {
+      const { client } = fakeClient({ graphqlResponses: [page] });
+      await expect(fetchReviewThreads(client, TARGET, BOT_LOGIN)).rejects.toThrow(
+        /could not read review threads/,
+      );
+    }
+  });
+
+  // A thread is the bot's only when the bot ROOTED it: anyone can post an inline
+  // comment carrying `<!-- toolu-fp:… -->` and resolve it to settle a real blocker.
+  it("keeps only threads rooted by the sticky's author (bare login match)", async () => {
+    const forged = threadPage({ id: "T_forged", databaseId: 31, path: "a.ts", fp: "0" }, null);
+    const json = JSON.stringify(forged).replace('"toolu-bot"', '"mallory"');
+    const { client } = fakeClient({ graphqlResponses: [JSON.parse(json)] });
+    expect(await fetchReviewThreads(client, TARGET, BOT_LOGIN)).toEqual([]);
+
+    const own = fakeClient({ graphqlResponses: [reviewThreadsFixture()] });
+    const threads = await fetchReviewThreads(own.client, TARGET, BOT_LOGIN);
+    expect(threads.map((t) => t.threadId)).toEqual(["PRRT_kwBOTthread1"]);
+  });
+
+  it("reads nothing without a bot identity (no API call)", async () => {
+    const { client, calls } = fakeClient({ graphqlResponses: [reviewThreadsFixture()] });
+    expect(await fetchReviewThreads(client, TARGET, "")).toEqual([]);
+    expect(calls.graphql).toEqual([]);
+  });
+
+  it("carries who resolved the thread ('' when GitHub does not say)", async () => {
+    const page = threadPage({ id: "T_r", databaseId: 41, path: "a.ts", fp: "ab" }, null);
+    const json = JSON.stringify(page).replace(
+      '"isResolved":false',
+      '"isResolved":true,"resolvedBy":{"login":"maintainer"}',
+    );
+    const resolved = fakeClient({ graphqlResponses: [JSON.parse(json)] });
+    const [t] = await fetchReviewThreads(resolved.client, TARGET, BOT_LOGIN);
+    expect(t?.resolvedBy).toBe("maintainer");
+    expect(resolved.calls.graphql[0]?.query).toContain("resolvedBy { login }");
+
+    const unknown = fakeClient({ graphqlResponses: [reviewThreadsFixture()] });
+    const [u] = await fetchReviewThreads(unknown.client, TARGET, BOT_LOGIN);
+    expect(u?.resolvedBy).toBe("");
   });
 });
 

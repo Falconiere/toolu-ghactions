@@ -22,6 +22,9 @@ export interface PriorSticky {
   prior: ReviewState | null;
   /** The RAW marker line, carried forward verbatim (survives cancelled runs). */
   priorMarker: string | null;
+  /** The sticky's author login (always a Bot — see findSticky): the identity whose
+   *  review threads are the bot's own. "" when no sticky exists yet. */
+  botLogin: string;
 }
 
 /**
@@ -51,24 +54,33 @@ export async function locatePrior(
   } catch (err) {
     throw new Error(`could not read PR comments to locate the prior review: ${errorMessage(err)}`);
   }
-  if (sticky === null) return { stickyId: undefined, prior: null, priorMarker: null };
+  if (sticky === null) {
+    return { stickyId: undefined, prior: null, priorMarker: null, botLogin: "" };
+  }
   const prior = reviewMemory ? asReviewState(decodeMarker(sticky.body)) : null;
-  return { stickyId: sticky.id, prior, priorMarker: extractMarker(sticky.body) };
+  return {
+    stickyId: sticky.id,
+    prior,
+    priorMarker: extractMarker(sticky.body),
+    botLogin: sticky.author?.login ?? "",
+  };
 }
 
 /**
  * Post the in-progress body (prior marker riding along) and return the sticky id
- * so subsequent posts update in place. Re-locates the sticky after creating it (a
- * fresh create has no id otherwise), keeping the in-progress comment and the final
- * verdict comment together in ONE sticky. Best-effort: a failure must not abort
- * the review — the caller keeps whatever sticky id it already had.
+ * so subsequent posts update in place, with its author. Re-locates the sticky after
+ * creating it (a fresh create has no id otherwise), keeping the in-progress comment
+ * and the final verdict comment together in ONE sticky — and learning, at no extra
+ * cost, the identity the first run's threads must be rooted by. Best-effort: a failure
+ * must not abort the review — the caller keeps whatever sticky it already had.
  */
 export async function postInProgress(
   octokit: PipelineOctokit,
   target: CommentTarget,
   context: GithubContext,
   found: PriorSticky,
-): Promise<number | undefined> {
+): Promise<Pick<PriorSticky, "stickyId" | "botLogin">> {
+  const known = { stickyId: found.stickyId, botLogin: found.botLogin };
   try {
     await upsertComment(
       octokit,
@@ -76,17 +88,17 @@ export async function postInProgress(
       inProgressBody(context, found.priorMarker),
       found.stickyId,
     );
-    if (found.stickyId !== undefined) return found.stickyId;
+    if (found.stickyId !== undefined) return known;
     const sticky = await findSticky(octokit, target).catch((err: unknown) => {
       process.stderr.write(
         `  Warning: could not re-locate the sticky after creating it (${err instanceof Error ? err.message : String(err)})\n`,
       );
       return null;
     });
-    return sticky?.id;
+    return { stickyId: sticky?.id, botLogin: sticky?.author?.login ?? "" };
   } catch {
     process.stderr.write("  Warning: could not post in-progress comment\n");
-    return found.stickyId;
+    return known;
   }
 }
 

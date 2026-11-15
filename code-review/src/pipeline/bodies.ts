@@ -63,19 +63,25 @@ export function jobUrl(ctx: GithubContext): string {
   return `${ctx.serverUrl}/${ctx.repo.owner}/${ctx.repo.repo}/actions/runs/${ctx.runId}`;
 }
 
+/** The prior RAW marker as the body's LAST line ("" when there is none) — updating the
+ *  sticky without it would wipe the review memory (see {@link inProgressBody}). */
+function carriedMarker(priorMarker?: string | null): string {
+  return priorMarker != null && priorMarker !== "" ? `\n${priorMarker}\n` : "";
+}
+
 /** The MAX_FILES / fetch-skip comment body (parity with main.sh's SKIP_BODY). */
-export function skipBody(ctx: GithubContext, reason: string): string {
+export function skipBody(ctx: GithubContext, reason: string, priorMarker?: string | null): string {
   return `**AI Code Review skipped** —— [View job](${jobUrl(ctx)})
 
 ---
 ### Code Review — skipped
 
 **Skipped:** ${reason}
-`;
+${carriedMarker(priorMarker)}`;
 }
 
 /** The no-file-changes comment body (parity with main.sh's NOOP_BODY). */
-export function noopBody(ctx: GithubContext): string {
+export function noopBody(ctx: GithubContext, priorMarker?: string | null): string {
   return `**AI Code Review finished** —— [View job](${jobUrl(ctx)})
 
 ---
@@ -84,7 +90,7 @@ export function noopBody(ctx: GithubContext): string {
 **No file changes to review.** 🎉
 
 \`merge-approved\`
-`;
+${carriedMarker(priorMarker)}`;
 }
 
 /**
@@ -97,7 +103,7 @@ export function noopBody(ctx: GithubContext): string {
  * MAX_ROUNDS counter back to zero.
  */
 export function inProgressBody(ctx: GithubContext, priorMarker?: string | null): string {
-  const marker = priorMarker != null && priorMarker !== "" ? `\n${priorMarker}\n` : "";
+  const marker = carriedMarker(priorMarker);
   return `**AI Code Review running** —— [View job](${jobUrl(ctx)})
 
 ---

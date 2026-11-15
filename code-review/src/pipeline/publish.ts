@@ -119,8 +119,9 @@ interface InlineOutcome {
 
 /**
  * Publish the settled verdict: inline threads (non-fatal), sticky comment (a
- * failure here IS an infra error → propagate), label (non-fatal), then the
- * best-effort run report. Returns the pipeline's result.
+ * failure here IS an infra error → propagate), label (non-fatal, except failing to
+ * remove `merge-approved` — that propagates too), then the best-effort run report.
+ * Returns the pipeline's result.
  */
 export async function publish(input: PublishInput): Promise<ReviewResult> {
   const { octokit, context, target, inputs } = input;
@@ -184,8 +185,9 @@ export async function publish(input: PublishInput): Promise<ReviewResult> {
     findings: expandForSeverityGate(findings, reduction),
     approveBelow: inputs.approveBelow,
   });
-  // setVerdictLabel never throws — every labels-API call is caught inside
-  // github/label.ts and reported via its LabelResult, so no try/catch here.
+  // setVerdictLabel reports label-API failures via its LabelResult, except one it
+  // throws on purpose: `merge-approved` that cannot be removed. That propagates to
+  // main.ts as an infra error (verdict error, red job) — no try/catch here.
   await setVerdictLabel(octokit, labelVerdict, target, { manageLabels: inputs.manageLabels });
   // AFTER postInline — ordering is load-bearing, see report/report-run.ts's doc.
   // Both sides of the partition carry expanded member lists (report/expand.ts).

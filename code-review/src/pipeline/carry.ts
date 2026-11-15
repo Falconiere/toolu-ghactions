@@ -58,9 +58,11 @@ function pathOf(prior: StoredFinding): string | null {
 /**
  * Re-inject the prior findings of every path this round did not review.
  *
- * A path is re-injected unless its ledger entry says `"reviewed"` — a path MISSING
- * from the ledger carries too, because a path nothing recorded is by definition a
- * path nothing reviewed. Model findings win any fp collision (this round's text,
+ * A path is re-injected only when the ledger lists it with a status other than
+ * `"reviewed"`. A path MISSING from the ledger has left the PR: the ledger lists every
+ * base..head path (in-scope, tree-scope-carried, binary, dropped), so a missing one no
+ * longer differs from base — reverted, or renamed away — and its finding is gone with
+ * it (its thread resolves). Model findings win any fp collision (this round's text,
  * line and severity are the fresher truth) and are never reordered. A prior
  * finding failing {@link CarriedFindingSchema} is dropped from the findings and
  * its path reported in `carriedWithoutFinding` instead; one without a usable
@@ -74,7 +76,8 @@ export function carryForward(input: CarryForwardInput): CarryForwardResult {
   for (const prior of input.priorFindings) {
     const path = pathOf(prior);
     if (path === null) continue;
-    if (input.ledger.entries[path]?.status === "reviewed") continue;
+    const status = input.ledger.entries[path]?.status;
+    if (status === undefined || status === "reviewed") continue;
 
     const parsed = CarriedFindingSchema.safeParse(prior);
     if (!parsed.success) {

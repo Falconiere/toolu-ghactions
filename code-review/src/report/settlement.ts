@@ -23,8 +23,8 @@ export function matchingSettledThreads(
   return priorThreads.filter(isSettled).filter((t) => matchesSettled(f, t));
 }
 
-/** `t.dismissal` when set; otherwise `isSettled(t)` was true some other way
- *  (GitHub resolution or the bot's accepted-resolution note) — see {@link Settlement}. */
+/** `t.dismissal` — set on every settled thread (`isSettled`); the `"resolved"`
+ *  fallback only labels an unclassified thread — see {@link Settlement}. */
 export function settlementOf(t: PriorThread): Settlement {
   return t.dismissal ?? "resolved";
 }

@@ -24,11 +24,11 @@ import {
 } from "./settlement.js";
 import type { SuppressedAttribution } from "./settlement.js";
 
-/** How a `dismissed` finding was settled. `"explicit"`/`"exhausted"` come from
- *  {@link import("@/review/dismissal.js").classifyDismissals} via `t.dismissal`;
- *  `"resolved"` is {@link import("@/review/reconcile.js").isSettled} being true
- *  with `dismissal` undefined — a human resolving the thread in the GitHub UI,
- *  or the bot's own accepted-resolution note. */
+/** How a `dismissed` finding was settled — always
+ *  {@link import("@/review/dismissal.js").classifyDismissals}'s `t.dismissal`.
+ *  `"resolved"` is a human above MIN_TRIGGER_PERMISSION resolving the thread in the
+ *  GitHub UI; a resolution by the bot itself (or its accepted-resolution note) is
+ *  never a settlement. */
 export type Settlement = "explicit" | "exhausted" | "resolved";
 
 /** The action's finding severity enum, reused rather than re-declared. */

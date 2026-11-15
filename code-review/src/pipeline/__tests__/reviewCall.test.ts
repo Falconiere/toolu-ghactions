@@ -612,6 +612,7 @@ describe("reviewAndValidate — the source-evidence gate's coverage consequence"
           line: finding.line,
           fp: fingerprint(finding),
           isResolved: true,
+          dismissal: "resolved",
         }),
       ],
       reviewHead: "HEAD",
@@ -643,7 +644,13 @@ describe("reviewAndValidate — the source-evidence gate's coverage consequence"
       diff: diffOf(dir),
       event: EVENT,
       priorThreads: [
-        thread({ path: first.path, line: 1, fp: fingerprint(first), isResolved: true }),
+        thread({
+          path: first.path,
+          line: 1,
+          fp: fingerprint(first),
+          isResolved: true,
+          dismissal: "resolved",
+        }),
       ],
       reviewHead: "HEAD",
       cwd: dir,

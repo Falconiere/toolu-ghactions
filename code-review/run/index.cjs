@@ -34357,7 +34357,7 @@ function appendFpMarker(body, fp) {
 <!-- toolu-fp:${fp} -->`;
 }
 function extractFpMarker(body) {
-  const m = body.match(/<!-- toolu-fp:([0-9a-f]+) -->/);
+  const m = body.match(/<!-- toolu-fp:([0-9a-f]+) -->\s*$/);
   return m?.[1] ?? null;
 }
 
@@ -34369,9 +34369,13 @@ function hasAcceptedResolutionNote(thread) {
     (reply) => reply.author === thread.botLogin && reply.body.trim() === ACCEPTED_RESOLUTION_NOTE
   );
 }
+function bare(login) {
+  return login.replace(/\[bot\]$/, "");
+}
 var GqlThreadSchema = external_exports.object({
   id: external_exports.string(),
   isResolved: external_exports.boolean(),
+  resolvedBy: external_exports.object({ login: external_exports.string() }).nullable().optional(),
   isOutdated: external_exports.boolean(),
   path: external_exports.string(),
   line: external_exports.number().nullable(),
@@ -34404,6 +34408,7 @@ var THREADS_QUERY = `
           nodes {
             id
             isResolved
+            resolvedBy { login }
             isOutdated
             path
             line
@@ -34423,33 +34428,42 @@ var RESOLVE_MUTATION = `
     }
   }
 `;
-async function fetchReviewThreads(client, target) {
+async function fetchReviewThreads(client, target, botLogin) {
+  const bot = bare(botLogin);
+  if (bot === "") return [];
   const threads = [];
   let cursor = null;
-  try {
-    for (let page = 0; page < 20; page++) {
-      const raw = await client.graphql(THREADS_QUERY, {
-        owner: target.owner,
-        repo: target.repo,
-        number: target.prNumber,
-        cursor
-      });
-      const parsed = GqlResponseSchema.safeParse(raw);
-      if (!parsed.success) break;
-      const conn = parsed.data.repository?.pullRequest?.reviewThreads;
-      if (!conn) break;
-      for (const node of conn.nodes) {
-        const parsed2 = normalizeThread(node);
-        if (parsed2) threads.push(parsed2);
+  for (let page = 0; page < 20; page++) {
+    let conn;
+    try {
+      conn = await readPage(client, target, cursor);
+    } catch (err) {
+      if (page === 0) {
+        throw new Error(`could not read review threads: ${errorMessage(err)}`, { cause: err });
       }
-      if (!conn.pageInfo.hasNextPage) break;
-      cursor = conn.pageInfo.endCursor;
-      if (cursor === null) break;
+      return threads;
     }
-  } catch {
-    return threads;
+    for (const node of conn.nodes) {
+      const thread = normalizeThread(node);
+      if (thread && bare(thread.botLogin) === bot) threads.push(thread);
+    }
+    cursor = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
+    if (cursor === null) break;
   }
   return threads;
+}
+async function readPage(client, target, cursor) {
+  const raw = await client.graphql(THREADS_QUERY, {
+    owner: target.owner,
+    repo: target.repo,
+    number: target.prNumber,
+    cursor
+  });
+  const parsed = GqlResponseSchema.safeParse(raw);
+  if (!parsed.success) throw new Error("malformed reviewThreads response");
+  const conn = parsed.data.repository?.pullRequest?.reviewThreads;
+  if (!conn) throw new Error("pull request not found");
+  return conn;
 }
 function normalizeThread(node) {
   const comments = node.comments.nodes;
@@ -34464,6 +34478,7 @@ function normalizeThread(node) {
     path: node.path,
     line: node.line,
     isResolved: node.isResolved,
+    resolvedBy: node.resolvedBy?.login ?? "",
     isOutdated: node.isOutdated,
     rootBody: root.body,
     botLogin: root.author?.login ?? "",
@@ -34520,23 +34535,15 @@ function stripQuoted(body) {
 }
 function explicitDismissReply(thread, triggerPhrase) {
   const phrase = triggerPhrase.trim();
-  if (phrase === "") return null;
+  if (phrase === "") return [];
   const command = new RegExp(`${escapeRegExp2(phrase)}\\s+dismiss(?!\\w)`, "i");
-  for (let i = thread.replies.length - 1; i >= 0; i--) {
-    const reply = thread.replies[i];
-    if (!reply || reply.author === "" || reply.author === thread.botLogin) continue;
-    if (command.test(stripQuoted(reply.body))) return reply;
-  }
-  return null;
+  return thread.replies.filter((r) => r.author !== "" && r.author !== thread.botLogin).filter((r) => command.test(stripQuoted(r.body))).reverse();
 }
 function argumentExhausted(thread) {
-  if (thread.botLogin === "") return null;
-  let end = thread.replies.length;
-  while (end > 0 && thread.replies[end - 1]?.author === thread.botLogin) end--;
-  const last = thread.replies[end - 1];
-  if (!last || last.author === "") return null;
-  const botArgued = thread.replies.slice(0, end - 1).some((r) => r.author === thread.botLogin);
-  return botArgued ? last : null;
+  if (thread.botLogin === "") return [];
+  const firstBot = thread.replies.findIndex((r) => r.author === thread.botLogin);
+  if (firstBot < 0) return [];
+  return thread.replies.slice(firstBot + 1).filter((r) => r.author !== "" && r.author !== thread.botLogin).reverse();
 }
 async function classifyDismissals(threads, opts) {
   const seen = /* @__PURE__ */ new Map();
@@ -34554,16 +34561,22 @@ async function classifyDismissals(threads, opts) {
   return out;
 }
 async function classifyOne(thread, opts, authorize) {
-  if (thread.isResolved) return thread;
-  const explicit = explicitDismissReply(thread, opts.triggerPhrase);
-  if (explicit && await authorize(explicit.author)) {
+  if (await anyAuthorized(explicitDismissReply(thread, opts.triggerPhrase), authorize)) {
     return { ...thread, dismissal: "explicit" };
   }
-  const closing = argumentExhausted(thread);
-  if (closing && await authorize(closing.author)) {
+  const resolver = thread.resolvedBy;
+  const byBot = bare(resolver) === bare(thread.botLogin);
+  if (thread.isResolved && resolver !== "" && !byBot && await authorize(resolver)) {
+    return { ...thread, dismissal: "resolved" };
+  }
+  if (await anyAuthorized(argumentExhausted(thread), authorize)) {
     return { ...thread, dismissal: "exhausted" };
   }
   return thread;
+}
+async function anyAuthorized(candidates2, authorize) {
+  for (const c of candidates2) if (await authorize(c.author)) return true;
+  return false;
 }
 async function isAuthorized(login, opts) {
   if (login === "" || !opts.lookupPermission) return false;
@@ -34612,7 +34625,11 @@ async function setVerdictLabel(octokit, verdict, target, opts = {}) {
       issue_number: prNumber,
       name: mapping.remove
     });
-  } catch {
+  } catch (err) {
+    const notSet = typeof err === "object" && err !== null && "status" in err && err.status === 404;
+    if (!notSet && mapping.remove === APPROVED_LABEL) {
+      throw new Error(`could not remove ${APPROVED_LABEL}: ${errorMessage(err)}`, { cause: err });
+    }
   }
   try {
     await octokit.rest.issues.addLabels({
@@ -34953,7 +34970,7 @@ function encodeMarker(state) {
 }
 function decodeMarker(body) {
   const re2 = new RegExp(
-    `${escapeRegExp3(MARKER_PREFIX2)}([A-Za-z0-9+/=]*)${escapeRegExp3(MARKER_SUFFIX)}`
+    `${escapeRegExp3(MARKER_PREFIX2)}([A-Za-z0-9+/=]*)${escapeRegExp3(MARKER_SUFFIX)}\\s*$`
   );
   const m = body.match(re2);
   const payload = m?.[1];
@@ -34984,9 +35001,9 @@ function escapeRegExp3(s) {
 }
 function extractMarker(body) {
   const re2 = new RegExp(
-    `${escapeRegExp3(MARKER_PREFIX2)}[A-Za-z0-9+/=]*${escapeRegExp3(MARKER_SUFFIX)}`
+    `(${escapeRegExp3(MARKER_PREFIX2)}[A-Za-z0-9+/=]*${escapeRegExp3(MARKER_SUFFIX)})\\s*$`
   );
-  return body.match(re2)?.[0] ?? null;
+  return body.match(re2)?.[1] ?? null;
 }
 function diffState(input) {
   const current = attachFps(input.current_findings);
@@ -35073,16 +35090,21 @@ function formatDuration(ms) {
 function jobUrl(ctx) {
   return `${ctx.serverUrl}/${ctx.repo.owner}/${ctx.repo.repo}/actions/runs/${ctx.runId}`;
 }
-function skipBody(ctx, reason) {
+function carriedMarker(priorMarker) {
+  return priorMarker != null && priorMarker !== "" ? `
+${priorMarker}
+` : "";
+}
+function skipBody(ctx, reason, priorMarker) {
   return `**AI Code Review skipped** \u2014\u2014 [View job](${jobUrl(ctx)})
 
 ---
 ### Code Review \u2014 skipped
 
 **Skipped:** ${reason}
-`;
+${carriedMarker(priorMarker)}`;
 }
-function noopBody(ctx) {
+function noopBody(ctx, priorMarker) {
   return `**AI Code Review finished** \u2014\u2014 [View job](${jobUrl(ctx)})
 
 ---
@@ -35091,12 +35113,10 @@ function noopBody(ctx) {
 **No file changes to review.** \u{1F389}
 
 \`merge-approved\`
-`;
+${carriedMarker(priorMarker)}`;
 }
 function inProgressBody(ctx, priorMarker) {
-  const marker17 = priorMarker != null && priorMarker !== "" ? `
-${priorMarker}
-` : "";
+  const marker17 = carriedMarker(priorMarker);
   return `**AI Code Review running** \u2014\u2014 [View job](${jobUrl(ctx)})
 
 ---
@@ -35120,11 +35140,19 @@ async function locatePrior(octokit, target, reviewMemory) {
   } catch (err) {
     throw new Error(`could not read PR comments to locate the prior review: ${errorMessage(err)}`);
   }
-  if (sticky === null) return { stickyId: void 0, prior: null, priorMarker: null };
+  if (sticky === null) {
+    return { stickyId: void 0, prior: null, priorMarker: null, botLogin: "" };
+  }
   const prior = reviewMemory ? asReviewState(decodeMarker(sticky.body)) : null;
-  return { stickyId: sticky.id, prior, priorMarker: extractMarker(sticky.body) };
+  return {
+    stickyId: sticky.id,
+    prior,
+    priorMarker: extractMarker(sticky.body),
+    botLogin: sticky.author?.login ?? ""
+  };
 }
 async function postInProgress(octokit, target, context3, found) {
+  const known = { stickyId: found.stickyId, botLogin: found.botLogin };
   try {
     await upsertComment(
       octokit,
@@ -35132,7 +35160,7 @@ async function postInProgress(octokit, target, context3, found) {
       inProgressBody(context3, found.priorMarker),
       found.stickyId
     );
-    if (found.stickyId !== void 0) return found.stickyId;
+    if (found.stickyId !== void 0) return known;
     const sticky = await findSticky(octokit, target).catch((err) => {
       process.stderr.write(
         `  Warning: could not re-locate the sticky after creating it (${err instanceof Error ? err.message : String(err)})
@@ -35140,10 +35168,10 @@ async function postInProgress(octokit, target, context3, found) {
       );
       return null;
     });
-    return sticky?.id;
+    return { stickyId: sticky?.id, botLogin: sticky?.author?.login ?? "" };
   } catch {
     process.stderr.write("  Warning: could not post in-progress comment\n");
-    return found.stickyId;
+    return known;
   }
 }
 function isReviewState(decoded) {
@@ -43825,8 +43853,8 @@ function buildThreadContexts(priorThreads) {
     line: t.line,
     finding: cleanFindingBody(t.rootBody),
     replies: t.replies,
-    resolved: t.isResolved,
-    ...t.dismissal !== void 0 ? { dismissal: t.dismissal } : {}
+    resolved: t.dismissal === "resolved",
+    ...t.dismissal === "explicit" || t.dismissal === "exhausted" ? { dismissal: t.dismissal } : {}
   }));
 }
 function cleanFindingBody(body) {
@@ -45079,7 +45107,10 @@ function matchesNearby(f, t) {
   return category !== null && category === (f.category ?? "").trim().toLowerCase();
 }
 function isSettled(t) {
-  return t.isResolved || t.dismissal !== void 0 || hasAcceptedResolutionNote(t);
+  return t.dismissal !== void 0;
+}
+function resolvedByBot(t) {
+  return t.isResolved && t.resolvedBy !== "" && bare(t.resolvedBy) === bare(t.botLogin);
 }
 function matchesSettled(f, t) {
   const blocker = f.severity === "blocker";
@@ -45148,16 +45179,9 @@ function reconcile(findings, priorThreads, clusters) {
     const idx = clusterFor(groups, thread, clusters?.priorClusters);
     const matched = idx >= 0 ? findings[idx] : void 0;
     const group = idx >= 0 ? groups[idx] ?? [] : [];
-    if (matched && (!thread.isResolved || clusterSettled(group, thread, clusters?.priorClusters))) {
-      covered.add(idx);
-    }
+    const hosts = !thread.isResolved || (isSettled(thread) ? clusterSettled(group, thread, clusters?.priorClusters) : !resolvedByBot(thread));
+    if (matched && hosts) covered.add(idx);
     if (thread.isResolved) continue;
-    const strict = group.some((m) => matches(m, thread));
-    const blockerStillOpen = !strict && group.some((m) => m.severity === "blocker");
-    if (hasAcceptedResolutionNote(thread) && !blockerStillOpen) {
-      toResolve.push(thread);
-      continue;
-    }
     if (!matched) {
       toResolve.push(thread);
       continue;
@@ -46025,7 +46049,8 @@ function carryForward(input) {
   for (const prior of input.priorFindings) {
     const path = pathOf(prior);
     if (path === null) continue;
-    if (input.ledger.entries[path]?.status === "reviewed") continue;
+    const status = input.ledger.entries[path]?.status;
+    if (status === void 0 || status === "reviewed") continue;
     const parsed = CarriedFindingSchema.safeParse(prior);
     if (!parsed.success) {
       withoutFinding.add(path);
@@ -46914,14 +46939,17 @@ async function evaluateSettle(deps) {
   if (isInProgressBody(sticky.body)) return { kind: "skip", reason: "in-progress" };
   const headSha = await liveHead(deps);
   if (headSha === null) return { kind: "skip", reason: "no-head" };
-  const threads = await classifyDismissals(
-    ownThreads(await fetchReviewThreads(deps.octokit, deps.target), sticky),
-    {
-      triggerPhrase: deps.triggerPhrase,
-      minPermission: deps.minPermission,
-      lookupPermission: deps.lookupPermission
-    }
-  );
+  let own;
+  try {
+    own = await fetchReviewThreads(deps.octokit, deps.target, sticky.author.login);
+  } catch (err) {
+    return { kind: "skip", reason: "comments-unreadable", detail: errorMessage(err) };
+  }
+  const threads = await classifyDismissals(own, {
+    triggerPhrase: deps.triggerPhrase,
+    minPermission: deps.minPermission,
+    lookupPermission: deps.lookupPermission
+  });
   const outcome = recomputeVerdict({
     state: asReviewState(decodeMarker(sticky.body)),
     headSha,
@@ -46931,6 +46959,14 @@ async function evaluateSettle(deps) {
   if (outcome.kind === "unchanged") return { kind: "unchanged", reason: outcome.reason };
   return { kind: "approve", outcome, sticky };
 }
+async function staleHead(deps, sha) {
+  if (sha === void 0 || sha === "") return false;
+  const live = await liveHead(deps);
+  if (live === null || live === sha) return false;
+  process.stderr.write(`[SKIP] stale-head: reviewed ${sha}, but the PR head is now ${live}
+`);
+  return true;
+}
 async function liveHead(deps) {
   if (!deps.lookupHeadSha) return null;
   try {
@@ -46939,14 +46975,6 @@ async function liveHead(deps) {
   } catch {
     return null;
   }
-}
-function ownThreads(threads, sticky) {
-  const bot = bare(sticky.author?.login ?? "");
-  if (bot === "") return [];
-  return threads.filter((t) => bare(t.botLogin) === bot);
-}
-function bare(login) {
-  return login.replace(/\[bot\]$/, "");
 }
 
 // src/pipeline/dismissRecompute.ts
@@ -47020,12 +47048,15 @@ async function runReview(deps) {
   };
   const reviewHead = event.review_head ?? "HEAD";
   const baseBranch = event.base_ref && event.base_ref !== "" ? event.base_ref : inputs.baseBranch;
-  const resolved = await resolveDiffOrSkip(deps, target, reviewHead, baseBranch, cwd);
+  if (await staleHead({ target, lookupHeadSha: deps.lookupHeadSha }, event.head_sha)) return STALE;
+  const found = await locatePrior(octokit, target, inputs.reviewMemory);
+  const resolved = await resolveDiffOrSkip(deps, target, reviewHead, baseBranch, cwd, found);
   if ("done" in resolved) return resolved.done;
   const diff = resolved.diff;
-  const found = await locatePrior(octokit, target, inputs.reviewMemory);
-  const stickyId = await postInProgress(octokit, target, context3, found);
-  const priorThreads = await classifyDismissals(await fetchReviewThreads(octokit, target), {
+  const sticky = await postInProgress(octokit, target, context3, found);
+  const stickyId = sticky.stickyId;
+  const ownThreads = await fetchReviewThreads(octokit, target, sticky.botLogin);
+  const priorThreads = await classifyDismissals(ownThreads, {
     triggerPhrase: inputs.triggerPhrase,
     minPermission: inputs.minTriggerPermission,
     lookupPermission: deps.lookupPermission
@@ -47060,6 +47091,7 @@ async function runReview(deps) {
     wallDeadline,
     ...prText(context3)
   });
+  if (await staleHead({ target, lookupHeadSha: deps.lookupHeadSha }, reviewedSha)) return STALE;
   return publish({
     octokit,
     context: context3,
@@ -47139,7 +47171,8 @@ async function resolveTrigger(deps) {
   }
   return event;
 }
-async function resolveDiffOrSkip(deps, target, reviewHead, baseBranch, cwd) {
+var STALE = { verdict: "skip", findingsCount: 0, commentUrl: "" };
+async function resolveDiffOrSkip(deps, target, reviewHead, baseBranch, cwd, found) {
   const { inputs, octokit, context: context3 } = deps;
   const diff = fetchDiff({
     baseBranch,
@@ -47150,16 +47183,20 @@ async function resolveDiffOrSkip(deps, target, reviewHead, baseBranch, cwd) {
     githubBaseRef: baseBranch,
     cwd
   });
+  const labels = { manageLabels: inputs.manageLabels };
   if (diff.error !== void 0) {
     process.stderr.write(`[SKIP] ${diff.error}
 `);
-    const url = await upsertComment(octokit, target, skipBody(context3, diff.error), void 0);
+    const body = skipBody(context3, diff.error, found.priorMarker);
+    const url = await upsertComment(octokit, target, body, found.stickyId);
+    await setVerdictLabel(octokit, "error", target, labels);
     return { done: { verdict: "skip", findingsCount: 0, commentUrl: url } };
   }
   if (diff.total_files === 0) {
     process.stderr.write("[SKIP] No file changes to review\n");
-    const url = await upsertComment(octokit, target, noopBody(context3), void 0);
-    await setVerdictLabel(octokit, "approved", target, { manageLabels: inputs.manageLabels });
+    const body = noopBody(context3, found.priorMarker);
+    const url = await upsertComment(octokit, target, body, found.stickyId);
+    await setVerdictLabel(octokit, "approved", target, labels);
     return { done: { verdict: "skip", findingsCount: 0, commentUrl: url } };
   }
   return { diff };
@@ -48654,7 +48691,7 @@ function buildContext() {
   };
 }
 async function resolveOctokit(inputs) {
-  if (inputs.appId === "" || inputs.appPrivateKey === "") {
+  if (inputs.appId === "" && inputs.appPrivateKey === "") {
     return getOctokit(inputs.token, {}, retry);
   }
   const repo = `${context2.repo.owner}/${context2.repo.repo}`;
@@ -48682,10 +48719,14 @@ async function resolveOctokit(inputs) {
     retry
   );
 }
+function eventPrNumber() {
+  const payload = context2.payload;
+  return payload.pull_request?.number ?? payload.issue?.number;
+}
 async function postErrorComment(octokit, message) {
   const ctx = context2;
   const url = `${ctx.serverUrl}/${ctx.repo.owner}/${ctx.repo.repo}/actions/runs/${ctx.runId}`;
-  const prNumber = ctx.payload.pull_request?.number ?? ctx.payload.issue?.number;
+  const prNumber = eventPrNumber();
   if (prNumber === void 0) return "";
   const body = `**AI Code Review failed** \u2014\u2014 [View job](${url})
 
@@ -48735,6 +48776,13 @@ async function main() {
     setOutput("findings-count", 0);
     const url = await postErrorComment(octokit, message).catch(() => "");
     if (url !== "") setOutput("comment-url", url);
+    const prNumber = eventPrNumber();
+    if (prNumber !== void 0) {
+      const target = { ...context2.repo, prNumber };
+      await setVerdictLabel(octokit, "error", target, { manageLabels: inputs.manageLabels }).catch(
+        (labelErr) => warning(`Could not set the error label: ${String(labelErr)}`)
+      );
+    }
     setFailed(`AI Code Review failed: ${message}`);
   }
 }
