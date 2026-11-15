@@ -1,8 +1,16 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { fingerprint, decodeMarker, type Finding } from "@/state.js";
+import {
+  fingerprint,
+  decodeMarker,
+  completedRounds,
+  diffState,
+  type Finding,
+  type ReviewState,
+} from "@/state.js";
 import { normalizeCategory } from "@/report/categories.js";
+import { asReviewState } from "@/pipeline/sticky.js";
 
 // Fixtures are REAL output from the bash review-state.sh under alpine/busybox
 // (captured via the deployed code-review:v2 image). These lock byte-compat:
@@ -156,5 +164,62 @@ describe("src/state.ts does not import from src/report/ (AC-21 structural guard)
       "src/state.ts must not import anything from src/report/ — that would put " +
         "category normalization in the fingerprint path and rotate every stored fingerprint",
     ).toBe(false);
+  });
+});
+
+// --- `rounds` back-compat: the MAX_ROUNDS counter is OPTIONAL and ADDITIVE. ---
+// Sticky comments written before that field are live on open PRs right now, and
+// MAX_ROUNDS compared `history.length` before it existed. Such a marker must decode
+// unchanged, keep counting rounds from its history length, and adopt the counter on
+// the next COMPLETE round — never reset to zero, which would silently extend a PR's
+// blocking window by ten more rounds.
+describe("a marker written before the `rounds` field still counts rounds correctly", () => {
+  /** The real bash fixture, decoded and narrowed — it must parse or nothing here runs. */
+  function bashState(): ReviewState {
+    const state = asReviewState(decodeMarker(marker));
+    if (state === null) throw new Error("decoded marker is missing findings");
+    return state;
+  }
+
+  it("the REAL bash marker carries no `rounds` and counts rounds from its history", () => {
+    const state = bashState();
+    // The fixture's own shape, asserted rather than assumed: it predates the field,
+    // so the round count falls back to the history length — today's behaviour.
+    expect(state.rounds).toBeUndefined();
+    expect(state.history).toHaveLength(1);
+    expect(completedRounds(state)).toBe(state.history.length);
+    expect(completedRounds(state)).toBe(1);
+  });
+
+  it("the next COMPLETE round adopts the history length rather than restarting at 1", () => {
+    const state = bashState();
+    const before = completedRounds(state);
+
+    const r = diffState({
+      prior: state,
+      current_findings: [],
+      scope: { in_scope_paths: ["src/auth.ts"], full_review: true },
+      head_sha: "deadbeefcafe",
+      verdict: "approved",
+      complete: true,
+    });
+    expect(r.next_state.rounds).toBe(before + 1);
+    expect(completedRounds(r.next_state)).toBe(before + 1);
+  });
+
+  it("a PARTIAL round over an old marker leaves the round count where it was", () => {
+    const state = bashState();
+
+    const r = diffState({
+      prior: state,
+      current_findings: [],
+      scope: { in_scope_paths: ["src/auth.ts"], full_review: true },
+      head_sha: "deadbeefcafe",
+      verdict: "changes",
+      complete: false,
+    });
+    // A resume never burns a MAX_ROUNDS slot — the rule the counter inherits.
+    expect(completedRounds(r.next_state)).toBe(completedRounds(state));
+    expect(r.next_state.history).toEqual(state.history);
   });
 });

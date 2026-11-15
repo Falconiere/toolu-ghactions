@@ -39,7 +39,6 @@ export function resolveReviewComment(
     base_ref: payload.pull_request?.base?.ref ?? "",
     full_review: false,
     pr_number: prNumber,
-    commenter,
     ...(headSha !== undefined && headSha !== "" ? { head_sha: headSha } : {}),
   };
 }

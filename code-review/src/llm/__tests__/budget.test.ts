@@ -53,6 +53,40 @@ const RATE_LIMIT_429 = JSON.stringify({
   },
 });
 
+/** A gateway 400 for an UNRELATED reason that dumps the request payload back at us. This
+ *  action ALWAYS sends max_tokens, so a raw substring match over the body reads this as a
+ *  budget cap: the reader is told "the output budget is at its ceiling (131072)" when the
+ *  real budget was 16384, and the provider's actual complaint is thrown away entirely. */
+const ECHOED_PAYLOAD_400 = JSON.stringify({
+  error: {
+    message: "The model 'deepseek/deepseek-v4-flash' does not exist or you do not have access.",
+    type: "invalid_request_error",
+    param: null,
+    code: "model_not_found",
+  },
+  request: {
+    model: "deepseek/deepseek-v4-flash",
+    max_tokens: 16384,
+    temperature: 0,
+    stream: true,
+  },
+});
+
+/** A provider that names the offending parameter STRUCTURALLY instead of in prose. */
+const PARAM_ONLY_400 = JSON.stringify({
+  error: {
+    message: "Value out of range.",
+    type: "invalid_request_error",
+    param: "max_tokens",
+    code: "invalid_request_error",
+  },
+});
+
+/** A gateway answering 400 with HTML — no JSON to read, and the text still names the field
+ *  a raw substring match would have tripped on. */
+const NON_JSON_400 =
+  "<html><head><title>400 Bad Request</title></head><body>max_tokens</body></html>";
+
 const JSON_HEADERS = { "content-type": "application/json" };
 
 /** The `max_tokens` each outgoing request asked for, in call order. */
@@ -209,4 +243,79 @@ describe("the provider's own max_tokens cap (AC-7)", () => {
     expect(isProviderCap(call(400, '{"error":"bad temperature"}', "Bad Request"))).toBe(false);
     expect(isProviderCap(new Error("max_tokens"))).toBe(false);
   });
+});
+
+describe("isProviderCap reads the provider's OWN complaint, not the raw body", () => {
+  /** A real SDK error instance built from a status, a body and the SDK's own message. */
+  const call = (status: number, responseBody: string, message: string): APICallError =>
+    new APICallError({
+      message,
+      url: "https://openrouter.ai/api/v1/chat/completions",
+      requestBodyValues: {},
+      statusCode: status,
+      responseBody,
+    });
+
+  it("does NOT read a 400 that merely echoes our request payload as a cap", () => {
+    // The body contains "max_tokens" only because the gateway dumped OUR request back at us;
+    // the provider's complaint is a missing model. Calling this a cap silently rewrites a
+    // configuration failure into budget advice.
+    expect(ECHOED_PAYLOAD_400).toContain("max_tokens");
+    expect(isProviderCap(call(400, ECHOED_PAYLOAD_400, "Bad Request"))).toBe(false);
+  });
+
+  it("DOES read error.param naming max_tokens as a cap", () => {
+    expect(isProviderCap(call(400, PARAM_ONLY_400, "Bad Request"))).toBe(true);
+  });
+
+  it("still reads error.message naming max_tokens as a cap (the DeepSeek fixture)", () => {
+    expect(isProviderCap(call(400, MAX_TOKENS_400, "Bad Request"))).toBe(true);
+  });
+
+  it("neither throws nor matches on a non-JSON body", () => {
+    expect(() => isProviderCap(call(400, NON_JSON_400, "Bad Request"))).not.toThrow();
+    expect(isProviderCap(call(400, NON_JSON_400, "Bad Request"))).toBe(false);
+  });
+
+  it("ignores JSON that is not the provider error envelope", () => {
+    expect(isProviderCap(call(400, '{"message":"max_tokens too large"}', "Bad Request"))).toBe(
+      false,
+    );
+    expect(isProviderCap(call(400, '{"error":"max_tokens"}', "Bad Request"))).toBe(false);
+    expect(isProviderCap(call(400, "[]", "Bad Request"))).toBe(false);
+    expect(isProviderCap(call(400, "null", "Bad Request"))).toBe(false);
+  });
+
+  it("still honours err.message, which the SDK builds from the provider's own text", () => {
+    expect(isProviderCap(call(400, "{}", "Invalid max_tokens value"))).toBe(true);
+  });
+
+  it("does NOT launder a retained prefix into a budget-exhausted verdict on an echoed 400", async () => {
+    // The user-visible half of the bug: attempt 1 truncates (a prefix is retained), attempt
+    // 2 gets an unrelated 400 from a payload-echoing gateway. reviewWithModel used to take
+    // the `isProviderCap(err) && best !== undefined` branch and salvage as budget-exhausted,
+    // so the PR comment claimed "the output budget is at its ceiling (131072)" while the real
+    // budget was 16384 and the provider's real message never reached the reader. It must
+    // stay the honest transport abstention, exactly like the 429 case above.
+    const { fetch: fetchImpl, bodies } = scripted((callIndex, init) =>
+      callIndex === 0
+        ? replayCompletion(fixture("truncated-findings"), init)
+        : new Response(ECHOED_PAYLOAD_400, { status: 400, headers: JSON_HEADERS }),
+    );
+
+    const result = await reviewWithModel(ENVELOPE, {
+      model: "deepseek/deepseek-v4-flash",
+      apiKey: "sk-test",
+      fetch: fetchImpl,
+      maxRetries: 0,
+      maxAttempts: 1,
+    });
+
+    expect(bodies).toHaveLength(2);
+    expect(result.verdict).toBe("error");
+    expect(result.partial).toBeUndefined();
+    expect(result.budgetExhausted).toBeUndefined();
+    expect(result.failure).toBe("transport");
+    expect(result.error ?? "").not.toContain("at its ceiling");
+  }, 20_000);
 });

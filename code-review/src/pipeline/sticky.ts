@@ -10,7 +10,8 @@
 import { decodeMarker, extractMarker } from "@/state.js";
 import type { ReviewState } from "@/state.js";
 import { findSticky, upsertComment } from "@/github/comment.js";
-import type { CommentTarget } from "@/github/comment.js";
+import type { CommentTarget, StickyComment } from "@/github/comment.js";
+import { errorMessage } from "@/errors.js";
 import { inProgressBody } from "./bodies.js";
 import type { GithubContext, PipelineOctokit } from "./types.js";
 
@@ -28,20 +29,29 @@ export interface PriorSticky {
  * upsert dedup, so a pre-existing sticky is updated in place, not duplicated
  * each run. DECODE its marker into `prior` only when memory is on; EXTRACT the
  * raw marker regardless, so a cancelled run never wipes state a future
- * memory-on run would read. Best-effort: any lookup failure yields empties.
+ * memory-on run would read. `findSticky` only ever returns a BOT-authored
+ * comment, so a marker hand-posted by any other commenter can never become this
+ * run's prior state.
+ *
+ * A FAILED lookup is an infra error, NOT "no sticky yet" — the two are
+ * indistinguishable downstream, and guessing "no sticky" makes postInProgress
+ * CREATE a second comment (both then carry markers, so later runs pick between
+ * them by created_at) while `prior: null` resets the round's memory: history,
+ * recap and the MAX_ROUNDS counter. Throw instead; main.ts turns it into
+ * verdict=error, a best-effort error comment and a red job.
  */
 export async function locatePrior(
   octokit: PipelineOctokit,
   target: CommentTarget,
   reviewMemory: boolean,
 ): Promise<PriorSticky> {
-  const sticky = await findSticky(octokit, target).catch((err: unknown) => {
-    process.stderr.write(
-      `  Warning: could not locate the sticky comment (${err instanceof Error ? err.message : String(err)})\n`,
-    );
-    return null;
-  });
-  if (!sticky) return { stickyId: undefined, prior: null, priorMarker: null };
+  let sticky: StickyComment | null;
+  try {
+    sticky = await findSticky(octokit, target);
+  } catch (err) {
+    throw new Error(`could not read PR comments to locate the prior review: ${errorMessage(err)}`);
+  }
+  if (sticky === null) return { stickyId: undefined, prior: null, priorMarker: null };
   const prior = reviewMemory ? asReviewState(decodeMarker(sticky.body)) : null;
   return { stickyId: sticky.id, prior, priorMarker: extractMarker(sticky.body) };
 }

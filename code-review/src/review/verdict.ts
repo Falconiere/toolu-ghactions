@@ -23,8 +23,10 @@ import {
   type ReviewBody,
 } from "./render.js";
 
-/** GitHub rejects comment bodies over 65536 chars; we rebuild below this ceiling. */
-const BODY_SIZE_LIMIT = 65000;
+/** GitHub rejects comment bodies over 65536 chars; we rebuild below this ceiling.
+ *  Exported so the other size guards (evals/scorecard.ts, verdict-fit.test.ts) read
+ *  the one value instead of mirroring it and drifting. */
+export const BODY_SIZE_LIMIT = 65000;
 
 const DEFAULT_BOT_NAME = "Toolu — Code Review";
 const DEFAULT_BOT_LOGO_URL =
@@ -157,17 +159,21 @@ export function formatVerdict(
 }
 
 /**
- * True when the model authored ANY of the content this body renders — a review plan,
- * an other-checks blurb, or a surviving finding — or returned findings the
- * source-evidence gate rejected. An abstention (provider down, response unparseable)
- * carries none of these, so this is what separates "the LLM never answered" from "the
- * LLM answered and a downstream gate rejected its findings"; the resolved verdict is
- * "error" in both cases and cannot tell them apart.
+ * True when the model authored ANY of the judgment this body renders — a review plan
+ * or a surviving finding — or returned findings the source-evidence gate rejected. An
+ * abstention (provider down, response unparseable) carries none of these, so this is
+ * what separates "the LLM never answered" from "the LLM answered and a downstream gate
+ * rejected its findings"; the resolved verdict is "error" in both cases and cannot tell
+ * them apart.
+ *
+ * `other_checks` is NOT consulted: pipeline/settle.ts clears it on every validated
+ * review result, so no review body carries one. If that clearing is ever removed the
+ * clause must come back with it, or a result whose only model content is an
+ * other-checks blurb renders "LLM judgment unavailable" above that very blurb.
  */
 function deliveredJudgment(result: ProviderResult, findings: Finding[]): boolean {
   return (
     (result.review_plan ?? "") !== "" ||
-    (result.other_checks ?? "") !== "" ||
     findings.length > 0 ||
     result.failure === "evidence" ||
     (result.unverifiedEvidence ?? 0) > 0

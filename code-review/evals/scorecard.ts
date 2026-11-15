@@ -9,9 +9,9 @@
 import type { Stratum, PatternGroup } from "@/git/distill.js";
 import type { ReviewState, Finding } from "@/state.js";
 
-/** Mirrors the PRIVATE `BODY_SIZE_LIMIT` in src/review/verdict.ts (not
- *  exported) — keep this in sync if that constant ever changes. */
-export const BODY_SIZE_LIMIT = 65000;
+/** The verdict-comment size ceiling, re-exported from its single source of truth
+ *  in src/review/verdict.ts (it used to be mirrored here by hand). */
+export { BODY_SIZE_LIMIT } from "@/review/verdict.js";
 
 /** Every Layer-0 stratum, zero-filled so the table always shows every row. */
 export type StrataCounts = Record<Stratum, number>;

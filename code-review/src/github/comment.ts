@@ -7,6 +7,21 @@
 // a legacy-header fallback used only when no marker comment exists anywhere.
 // findSticky pages through ALL comments, preferring a marker match globally so a
 // stale comment on a later page can never win over a real marker.
+//
+// GUARANTEE: only a BOT-authored comment is ever returned. The marker is the
+// review's cross-run memory, and ANY account that can comment on the PR can post
+// one — so an author-typed match would let a PR author forge the reviewed tree
+// (an empty scope ⇒ "approved", every real thread resolved, the verdict written
+// INTO the attacker's comment). A missing user, a missing type, or an empty type
+// never match: the check fails closed, matching the `not-bot-sticky` guard
+// pipeline/settleEvaluation.ts keeps as a second layer.
+//
+// CONSEQUENCE: the identity this action posts under must be Bot-typed, which both
+// supported ones are — the default `github.token` (github-actions[bot]) and a
+// GitHub App (APP_ID + APP_PRIVATE_KEY). A TOKEN from an ordinary user account
+// (a machine user's PAT) authors `type: "User"` comments, which are no longer
+// recognised as the sticky: memory would reset and a fresh comment would be
+// created each run. Use the App identity for a custom-branded bot instead.
 
 /** Marker prefix the state module writes; matched as a substring (mirrors state.ts). */
 const MARKER_PREFIX = "<!-- toolu-review-state:v1";
@@ -14,7 +29,8 @@ const MARKER_PREFIX = "<!-- toolu-review-state:v1";
 const LEGACY_HEADER_RE = /### Code Review|### PR Review in Progress/;
 /** Hard page cap, guarding a misbehaving API (matches the bash). */
 const MAX_PAGES = 20;
-const PER_PAGE = 100;
+/** Comments requested per page — exported so tests can build real page boundaries. */
+export const PER_PAGE = 100;
 
 /** One issue comment, with only the fields this module reads. `body` is optional to
  * match the Octokit REST response (a comment can have an empty/absent body). */
@@ -66,8 +82,9 @@ export interface StickyComment {
   id: number;
   body: string;
   url: string;
-  /** Who posted it — the settle pass trusts only a Bot-authored sticky, since the
-   *  lookup itself is login-agnostic (pipeline/dismissRecompute.ts). */
+  /** Who posted it — always a `"Bot"`-typed author, because {@link findSticky}
+   *  refuses every other comment (see this module's GUARANTEE). Callers still
+   *  re-check the type before trusting the decoded state, fail-closed. */
   author?: { login: string; type: string };
 }
 
@@ -76,10 +93,18 @@ function hasMarker(body: string): boolean {
   return body.includes(MARKER_PREFIX);
 }
 
+/** True only when GitHub identifies the comment's author as a Bot (an App or the
+ *  github-actions identity). Fail closed: no user, no type, or an empty type is
+ *  NOT the bot — that comment can never be the sticky. */
+function isBotAuthored(comment: IssueComment): boolean {
+  return comment.user?.type === "Bot";
+}
+
 /**
  * Locate the latest sticky review comment on a PR, login-agnostic.
  *
- * Pages through every comment (capped at {@link MAX_PAGES}), preferring a state
+ * Pages through every comment (capped at {@link MAX_PAGES}), considering ONLY
+ * Bot-authored comments (see this module's GUARANTEE) and preferring a state
  * marker globally; only when no marker comment exists anywhere does it fall back
  * to the latest legacy-header comment. Returns the latest match by `created_at`,
  * or null when none is found. Never throws on an empty/short page.
@@ -100,6 +125,8 @@ export async function findSticky(
       page,
     });
     for (const c of data) {
+      // SECURITY: a hand-posted marker from any other author is not our state.
+      if (!isBotAuthored(c)) continue;
       if (hasMarker(c.body ?? "")) markerMatches.push(c);
       else if (LEGACY_HEADER_RE.test(c.body ?? "")) legacyMatches.push(c);
     }

@@ -6,8 +6,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { runSettleCheckCli } from "@/gate/settleCheckCli.js";
 import type { SettleCheckClient } from "@/gate/settleCheckCli.js";
+import { DEFAULT_TRIGGER_PHRASE, parseMinTriggerPermission, parseTriggerPhrase } from "@/inputs.js";
 import { cleanupRepos } from "@/__tests__/integration/harness.js";
 import { dismiss, reviewedRound } from "@/__tests__/integration/settleRound.js";
 import type { Round } from "@/__tests__/integration/settleRound.js";
@@ -109,5 +111,79 @@ describe("merge-gate recompute CLI (#123)", () => {
       () => client(round, async () => round.headSha),
     );
     expect(result).toMatchObject({ outcome: "unchanged", reason: "nothing-settled" });
+  });
+});
+
+// This CLI used to hand-duplicate three input defaults that inputs.ts already parses
+// (TRIGGER_PHRASE, MIN_TRIGGER_PERMISSION, APPROVE_BELOW). Nothing kept them in sync,
+// and a drift means the merge-gate and the review run disagree about WHICH comment
+// settles a finding — the gate would approve a PR the reviewer is still blocking, or
+// the reverse. Both entry points now call the same pure parsers; these pin that the
+// CLI really resolves through them, behaviourally, against the real round fixture.
+describe("merge-gate recompute CLI — inputs resolve through inputs.ts's parsers", () => {
+  it("an UNRECOGNIZED MIN_TRIGGER_PERMISSION falls back to write and accepts the dismisser", async () => {
+    const round = await reviewedRound(["medium"]);
+    dismiss(round.threads[0]);
+    const out = outputFile();
+    const result = await runSettleCheckCli(
+      env(out, { INPUT_MIN_TRIGGER_PERMISSION: "maintain" }),
+      () => client(round, async () => round.headSha),
+    );
+    // `maintain` is a typo, not a permission level: parseMinTriggerPermission warns and
+    // falls back to "write", so the write-level dismisser IS honoured — the opposite of
+    // the ADMIN case above, which refuses it. Same parser, same answer, both entry points.
+    expect(parseMinTriggerPermission("maintain")).toBe("write");
+    expect(result).toMatchObject({
+      outcome: "approve",
+      verdict: "approved",
+      settled: 1,
+      total: 1,
+    });
+  });
+
+  it("TRIGGER_PHRASE really reaches the dismissal classifier", async () => {
+    // The seeded reply says `@toolu dismiss`. Point the CLI at a different phrase and
+    // the same reply stops being a dismissal — proving INPUT_TRIGGER_PHRASE is resolved
+    // and passed on rather than silently defaulting.
+    const round = await reviewedRound(["medium"]);
+    dismiss(round.threads[0]);
+    const out = outputFile();
+    const result = await runSettleCheckCli(env(out, { INPUT_TRIGGER_PHRASE: "@other-bot" }), () =>
+      client(round, async () => round.headSha),
+    );
+    expect(parseTriggerPhrase("@other-bot")).toBe("@other-bot");
+    expect(result).toMatchObject({ outcome: "unchanged", reason: "nothing-settled" });
+  });
+
+  it("an unset TRIGGER_PHRASE keeps the default phrase working", async () => {
+    const round = await reviewedRound(["medium"]);
+    dismiss(round.threads[0]);
+    const out = outputFile();
+    const result = await runSettleCheckCli(env(out), () =>
+      client(round, async () => round.headSha),
+    );
+    expect(parseTriggerPhrase("")).toBe(DEFAULT_TRIGGER_PHRASE);
+    expect(result).toMatchObject({ outcome: "approve", settled: 1, total: 1 });
+  });
+
+  it("settleCheckCli.ts hand-rolls none of the three defaults (structural guard)", () => {
+    // The behavioural cases above pass with EITHER implementation — a hand-rolled
+    // ternary and the shared parser currently agree, which is precisely the problem:
+    // nothing kept them that way. So pin the claim structurally, the same technique
+    // state.compat.test.ts uses for its import guard: read the source and look for the
+    // duplicated literals instead of trusting a runtime probe.
+    const source = readFileSync(
+      fileURLToPath(new URL("../settleCheckCli.ts", import.meta.url)),
+      "utf8",
+    );
+    // All three resolved through inputs.ts / review/gate.ts, never re-spelled here.
+    expect(source).toContain('from "@/inputs.js"');
+    expect(source).toContain("parseTriggerPhrase(");
+    expect(source).toContain("parseMinTriggerPermission(");
+    expect(source).toContain("parseApproveBelow(");
+    // The three defaults as they were duplicated before, and must not come back.
+    expect(source).not.toContain('"@toolu"'); // TRIGGER_PHRASE fallback
+    expect(source).not.toMatch(/===\s*"admin"/); // MIN_TRIGGER_PERMISSION ternary
+    expect(source).not.toMatch(/\?\s*"admin"\s*:/); // …its other half
   });
 });

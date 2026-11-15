@@ -4,7 +4,12 @@ import * as core from "@actions/core";
 // below needs this spy-mode mock: every export stays the real implementation, wrapped
 // in a spy that vi.spyOn can then redirect. Nothing about the logger is faked.
 vi.mock(import("@actions/core"), { spy: true });
-import { readInputs } from "@/inputs.js";
+import {
+  readInputs,
+  parseMinTriggerPermission,
+  parseTriggerPhrase,
+  DEFAULT_TRIGGER_PHRASE,
+} from "@/inputs.js";
 import { DEFAULT_MODEL } from "@/llm/providers.js";
 
 /** Set an action input as @actions/core reads it (process.env.INPUT_<NAME>). */
@@ -204,6 +209,80 @@ describe("RULES_REF", () => {
     const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
     expect(readInputs().rulesRef).toBe("base");
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('is not "base" or "merge"'));
+  });
+});
+
+describe("MIN_TRIGGER_PERMISSION", () => {
+  it("defaults to write when unset, and stays silent about it", () => {
+    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+    expect(readInputs().minTriggerPermission).toBe("write");
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("honors an explicit admin, case-insensitively and trimmed", () => {
+    setInput("MIN_TRIGGER_PERMISSION", "  Admin  ");
+    expect(readInputs().minTriggerPermission).toBe("admin");
+  });
+
+  it("honors an explicit write without warning", () => {
+    setInput("MIN_TRIGGER_PERMISSION", "WRITE");
+    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+    expect(readInputs().minTriggerPermission).toBe("write");
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("falls back to write on an unrecognized value, WITH a warning", () => {
+    // It used to fall back SILENTLY, so a `maintain`/`triage`/`admin ` typo quietly
+    // loosened the gate to anyone with write access — and nothing in the run log said
+    // so. VERBOSITY and RULES_REF already warn on exactly this class of typo.
+    setInput("MIN_TRIGGER_PERMISSION", "maintain");
+    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+    expect(readInputs().minTriggerPermission).toBe("write");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('is not "write" or "admin"'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("MIN_TRIGGER_PERMISSION"));
+  });
+});
+
+describe("TRIGGER_PHRASE", () => {
+  it("defaults to @toolu when unset", () => {
+    expect(readInputs().triggerPhrase).toBe(DEFAULT_TRIGGER_PHRASE);
+    expect(DEFAULT_TRIGGER_PHRASE).toBe("@toolu");
+  });
+
+  it("honors and trims an override", () => {
+    setInput("TRIGGER_PHRASE", "  @review-bot  ");
+    expect(readInputs().triggerPhrase).toBe("@review-bot");
+  });
+
+  it("falls back to the default on a whitespace-only value", () => {
+    setInput("TRIGGER_PHRASE", "   ");
+    expect(readInputs().triggerPhrase).toBe(DEFAULT_TRIGGER_PHRASE);
+  });
+});
+
+// gate/settleCheckCli.ts is a node-type action: it gets no argv, so it reads raw
+// `INPUT_*` strings off process.env and cannot go through readInputs(). It used to
+// hand-duplicate all three of these defaults, and nothing kept them in sync — if they
+// drifted, the merge-gate recompute and the review run would disagree about which
+// comment settles a finding. Both now call the same pure parsers.
+describe("the merge-gate CLI's raw-env path resolves identically to readInputs()", () => {
+  it("agrees on TRIGGER_PHRASE for the raw, untrimmed string the runner hands it", () => {
+    const raw = "  @review-bot  ";
+    setInput("TRIGGER_PHRASE", raw);
+    // readInputs() goes through core.getInput (which trims); the CLI passes `raw`
+    // straight in. Both must land on the same phrase.
+    expect(parseTriggerPhrase(raw)).toBe(readInputs().triggerPhrase);
+    expect(parseTriggerPhrase("")).toBe(DEFAULT_TRIGGER_PHRASE);
+  });
+
+  it("agrees on MIN_TRIGGER_PERMISSION, including the warned fallback", () => {
+    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+    for (const raw of ["admin", "  ADMIN ", "write", "maintain", ""]) {
+      setInput("MIN_TRIGGER_PERMISSION", raw);
+      expect(parseMinTriggerPermission(raw)).toBe(readInputs().minTriggerPermission);
+    }
+    // The typo warns through BOTH paths, so the CLI surfaces it too.
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('is not "write" or "admin"'));
   });
 });
 

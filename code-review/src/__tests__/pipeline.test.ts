@@ -91,6 +91,7 @@ interface SeedThread {
 function fakeOctokit(
   existing: { id: number; body: string }[] = [],
   seedThreads: SeedThread[] = [],
+  listCommentsError?: Error,
 ): {
   octokit: PipelineOctokit;
   rec: Recorded;
@@ -107,11 +108,14 @@ function fakeOctokit(
     resolved: [],
   };
   // A mutable comment store so a created comment is found on the next list.
+  // Every entry is Bot-authored: findSticky fails closed on any comment it cannot
+  // identify as the bot, so an authorless fake would never be located as sticky.
   const store = existing.map((c, i) => ({
     id: c.id,
     body: c.body,
     created_at: `2026-01-01T00:0${i}:00Z`,
     html_url: `https://github.com/o/r/issues/comments/${c.id}`,
+    user: { login: "toolu-bot[bot]", type: "Bot" },
   }));
   let nextId = 9000;
 
@@ -120,6 +124,7 @@ function fakeOctokit(
       issues: {
         listComments: async (p) => {
           rec.listComments++;
+          if (listCommentsError !== undefined) throw listCommentsError;
           return { data: p.page === 1 ? store : [] };
         },
         createComment: async (p) => {
@@ -131,6 +136,7 @@ function fakeOctokit(
             body: p.body,
             created_at: `2026-06-01T00:00:0${store.length}Z`,
             html_url,
+            user: { login: "toolu-bot[bot]", type: "Bot" },
           });
           return { data: { html_url } };
         },
@@ -349,6 +355,31 @@ describe("runReview — end to end", () => {
     expect(rec.created).toEqual([]);
     expect(rec.updated.every((u) => u.comment_id === 555)).toBe(true);
     expect(rec.updated.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("a FAILED comment lookup is an infra error, not a memoryless first run", async () => {
+    // locatePrior must not swallow this and report "no sticky yet": with no sticky id
+    // postInProgress would CREATE a second comment (both then carry markers, so later
+    // runs pick between them by created_at) and `prior: null` would reset history,
+    // recap and the MAX_ROUNDS counter — a silent memory wipe that reports a fresh
+    // verdict as though it were round one.
+    const { dir, headSha } = track(featureRepoWithChange());
+    const { octokit, rec } = fakeOctokit([], [], new Error("403 secondary rate limit"));
+
+    await expect(
+      runReview({
+        inputs: baseInputs(),
+        octokit,
+        context: prContext(headSha),
+        fetch: replayFetch("success"),
+        cwd: dir,
+        now: () => 1_700_000_000_000,
+      }),
+    ).rejects.toThrow(/could not read PR comments/);
+
+    // Nothing was posted, so there is no duplicate sticky and no half-written verdict.
+    expect(rec.created).toEqual([]);
+    expect(rec.updated).toEqual([]);
   });
 
   it("non-trigger event → verdict skip, NO review (no comment, no label, no LLM)", async () => {

@@ -7,7 +7,7 @@
 // The ledger sections are rendered by review/ledger.ts from a real
 // `buildRoundLedger` ledger — the exact strings pipeline/publish.ts passes in.
 import { describe, expect, it } from "vitest";
-import { formatVerdict, VerdictIntegrityError } from "@/review/verdict.js";
+import { formatVerdict, VerdictIntegrityError, BODY_SIZE_LIMIT } from "@/review/verdict.js";
 import {
   buildRoundLedger,
   renderLedger,
@@ -18,9 +18,6 @@ import {
 import type { ProviderResult } from "@/llm/reviewWithModel.js";
 import type { Finding } from "@/llm/schema.js";
 import { encodeMarker } from "@/state.js";
-
-/** GitHub's ceiling, restated: verdict.ts keeps this private on purpose. */
-const BODY_SIZE_LIMIT = 65000;
 
 const MARKER = encodeMarker({
   schema: "toolu-review-state",

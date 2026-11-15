@@ -363,6 +363,48 @@ describe("validateFindings", () => {
     expect(findings).toHaveLength(1);
     expect(findings[0]?.suggestion).toBeUndefined();
   });
+
+  // ── Inverted spans (`end_line < line`) ────────────────────────────────────────
+  // The Verdict schema does not relate `end_line` to `line`, so a model can invert
+  // them. `spanIsInDiff` and `sourceSpan` both looped `line..end_line`, so the body
+  // never ran: the span was "in the diff" vacuously and its source joined to "",
+  // which defeated BOTH suggestion safety checks and rendered a one-click
+  // committable "Suggested change" GitHub would apply over a span nobody read.
+  describe("inverted line..end_line spans", () => {
+    const sourceLine = PR175_EVIDENCE.source.lines["142"];
+    if (sourceLine === undefined) throw new Error("missing recorded PR 175 source line 142");
+    const path = PR175_EVIDENCE.source.path;
+    const lineText = new Map([[path, new Map([[142, sourceLine]])]]);
+    const changedLines = new Map([[path, [142]]]);
+    /** A high-confidence anchored finding carrying `suggestion`, span as given. */
+    const on = (end_line: number | undefined, suggestion: string): Finding => ({
+      path,
+      line: 142,
+      ...(end_line === undefined ? {} : { end_line }),
+      severity: "high",
+      confidence: "high",
+      text: "The prefix edit is discarded on the next name change.",
+      suggestion,
+    });
+    const stripOf = (finding: Finding) =>
+      validateFindings([finding], changedLines, "high", lineText).findings[0]?.suggestion;
+
+    it("is not treated as in-diff, so a genuine patch is stripped", () => {
+      const patch = "onKeyPrefixEdited(); // flipped before the name derives the prefix";
+      expect(stripOf(on(141, patch))).toBeUndefined();
+      // The control: the identical suggestion over a well-formed single-line span
+      // survives, so the strip above is the inverted span's fault, not the text's.
+      expect(stripOf(on(undefined, patch))).toBe(patch);
+    });
+
+    it("does not mark an exact no-op suggestion safe", () => {
+      // `suggestion` IS line 142's real source: applying it changes nothing. Before
+      // the fix `sourceSpan` joined zero lines to "" and the no-op check compared
+      // against that instead of the source, so the empty patch was rendered.
+      expect(stripOf(on(141, sourceLine))).toBeUndefined();
+      expect(stripOf(on(undefined, sourceLine))).toBeUndefined();
+    });
+  });
 });
 
 // Falconiere/toolu-ghrunner PR #210 re-wrapped AGENTS.md. Every finding cited a line
@@ -437,6 +479,33 @@ describe("validateFindings — quotes across hard-wrapped lines (PR #210)", () =
     // Lines 48 and 297 sit in different hunks: their texts are never adjacent.
     const result = check(quoting(48, "live in top-level (two-phase names)"));
     expect(result.findings).toHaveLength(0);
+  });
+
+  it("never joins across a gap INSIDE a wide line..end_line span", () => {
+    // The same stitched quote, but the finding now cites a span wide enough to cover
+    // both hunks. Only `line` is anchored by the diff check, so `end_line: 299` used
+    // to turn the two hunks into one contiguous string and satisfy the gate with a
+    // quote that occurs nowhere in the post-change source.
+    const stitched: Finding = {
+      ...quoting(46, "live in top-level (two-phase names)"),
+      end_line: 299,
+    };
+    const result = check(stitched);
+    expect(result.findings).toHaveLength(0);
+    expect(result.unverifiedQuote).toBe(1);
+    expect(result.missingQuotePaths).toEqual([]);
+  });
+
+  it("still keeps a real quote lying wholly inside one hunk of a wide span", () => {
+    // The control for the case above: a wide span is not rejected as such, only a
+    // quote that bridges the gap inside it. This one crosses 298→299, both present.
+    const wide: Finding = {
+      ...quoting(297, "Step summaries (#83, below) and job outputs (#88, below) included."),
+      end_line: 299,
+    };
+    const result = check(wide);
+    expect(result.findings).toHaveLength(1);
+    expect(result.unverifiedQuote).toBe(0);
   });
 });
 

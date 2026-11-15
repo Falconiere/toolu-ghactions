@@ -3,10 +3,20 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fetchDiff } from "@/git/diff.js";
+import { fetchDiff, DiffResolutionError } from "@/git/diff.js";
 import { splitDiffByFile } from "@/git/chunk.js";
 import { readFileAt } from "@/pipeline/git.js";
-import { git, setupGitRepo, writeFile, removeRepo, makeTmpDir, canCreateFile } from "./helpers.js";
+import {
+  git,
+  setupGitRepo,
+  writeFile,
+  removeRepo,
+  makeTmpDir,
+  canCreateFile,
+  installGitShim,
+  readSpawnLog,
+  resetSpawnLog,
+} from "./helpers.js";
 
 // REAL temp git repos (no mocks), mirroring the cases in __tests__/fetch-diff.bats.
 // No `origin` remote in the fixtures, so the base resolves to the local `main`
@@ -556,4 +566,261 @@ describe("fetchDiff — C-quoted paths decode to real paths", () => {
       expect(r.renames).toEqual([{ from: "src/original.ts", to: 'renamed"target.ts' }]);
     },
   );
+});
+
+// The reviewed paths are handed back to git as a PATHSPEC list, and a pathspec is
+// a PATTERN in git's own glob language — the `--` only stops git reading the
+// arguments as OPTIONS. Verified against git 2.54 that this is exploitable:
+// `git diff <base> <head> -- src/inputs.ts ':(exclude)*'` prints NOTHING and
+// exits 0, so one hostile filename disabled the entire review while the job
+// stayed green; `:(nosuchmagic)foo` exits 128; and `a?.ts` OVER-matches, so a
+// wildcard-shaped name drags unrelated files back in.
+describe("fetchDiff — pathspec safety for glob-shaped filenames", () => {
+  const EXPECTED = [":(exclude)*", "a[1].ts", "src/app.ts"];
+
+  it.skipIf(!canCreateFile(":(exclude)*"))(
+    "diffs a file named `:(exclude)*` instead of letting it wipe the whole review",
+    () => {
+      const dir = featureRepo();
+      writeFile(dir, ":(exclude)*", "hostile\n");
+      writeFile(dir, "a[1].ts", "export const bracket = 1\n");
+      writeFile(dir, "src/app.ts", "export const x = 1\n");
+      git(dir, "add", "-A");
+      git(dir, "commit", "-m", "glob-shaped names", "--quiet");
+
+      const r = fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 8000 });
+
+      // Classification always listed these (--numstat takes no pathspec) — it was
+      // the review-diff pathspec argv that silently emptied the diff.
+      expect(r.changed_files.slice().sort()).toEqual(EXPECTED.slice().sort());
+      // Every one of them really has a diff segment, primed at the right line.
+      expect(
+        splitDiffByFile(r.diff)
+          .map((s) => s.path)
+          .sort(),
+      ).toEqual(EXPECTED.slice().sort());
+      expect(r.files.map((f) => f.path).sort()).toEqual(EXPECTED.slice().sort());
+      expect(r.diff).toContain("L1: +hostile");
+      expect(r.diff).toContain("L1: +export const bracket = 1");
+      expect(r.diff).toContain("L1: +export const x = 1");
+    },
+  );
+
+  it.skipIf(!canCreateFile("go.su?"))(
+    "a wildcard-shaped name cannot drag an already-dropped file back into the diff",
+    () => {
+      const dir = featureRepo();
+      writeFile(dir, "go.su?", "export const q = 1\n");
+      // Dropped as a lockfile, so it must never reach the model — but the
+      // pathspec `go.su?` also glob-matches `go.sum` and pre-fix pulled it in.
+      writeFile(dir, "go.sum", "h1:secret-sum=\n");
+      git(dir, "add", "-A");
+      git(dir, "commit", "-m", "wildcard over-match", "--quiet");
+
+      const r = fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 8000 });
+      expect(r.changed_files).toEqual(["go.su?"]);
+      expect(r.dropped_files.find((d) => d.path === "go.sum")?.reason).toBe("lockfile");
+      expect(splitDiffByFile(r.diff).map((s) => s.path)).toEqual(["go.su?"]);
+      expect(r.diff).not.toContain("secret-sum");
+    },
+  );
+
+  it.skipIf(!canCreateFile(":(exclude)*"))(
+    "EXCLUDE_GLOBS still excludes, and a filename can no longer widen or disable it",
+    () => {
+      // EXCLUDE_GLOBS is matched in TypeScript (git/globs.ts), never built into
+      // a `:(exclude)` pathspec, so `--literal-pathspecs` cannot weaken it.
+      const dir = featureRepo();
+      writeFile(dir, ":(exclude)*", "hostile\n");
+      writeFile(dir, "migrations/001.sql", "CREATE TABLE t (id int);\n");
+      writeFile(dir, "src/app.ts", "export const x = 1\n");
+      git(dir, "add", "-A");
+      git(dir, "commit", "-m", "exclude globs + hostile name", "--quiet");
+
+      const r = fetchDiff({
+        ...BASE,
+        cwd: dir,
+        maxFiles: 0,
+        maxDiffLines: 8000,
+        excludeGlobs: ["migrations/**"],
+      });
+
+      expect(r.dropped_files.find((d) => d.path === "migrations/001.sql")?.reason).toBe("excluded");
+      expect(r.changed_files).not.toContain("migrations/001.sql");
+      expect(r.diff).not.toContain("CREATE TABLE");
+      // ...while the hostile name no longer excludes everything else.
+      expect(r.changed_files.slice().sort()).toEqual([":(exclude)*", "src/app.ts"]);
+      expect(
+        splitDiffByFile(r.diff)
+          .map((s) => s.path)
+          .sort(),
+      ).toEqual([":(exclude)*", "src/app.ts"]);
+    },
+  );
+});
+
+// `gitOrNull`'s `|| true` idiom is right for probes (`rev-parse --verify` answers
+// "no" with an exit code) and wrong for the ONE call whose stdout IS the review.
+describe("fetchDiff — a FAILED review diff is never reported as an empty one", () => {
+  it("throws DiffResolutionError when the review-diff call itself fails", () => {
+    const dir = featureRepo();
+    writeFile(dir, "victim.ts", "export const v = 1\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "add victim", "--quiet");
+    // A REAL git failure of exactly the review-diff call: git only honours
+    // `diff.external` when it renders patch text, so the classification passes
+    // (--numstat / --name-status) still exit 0 while `git diff -M … -- <path>`
+    // dies 128. Same observable shape as the ENOBUFS (1 GiB maxBuffer) and E2BIG
+    // (oversized pathspec argv) failures production hits.
+    git(dir, "config", "diff.external", "/nonexistent/diff-driver");
+    expect(git(dir, "diff", "--no-renames", "--numstat", "main", "HEAD").trim()).toContain(
+      "victim.ts",
+    );
+
+    expect(() => fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 8000 })).toThrow(
+      DiffResolutionError,
+    );
+    // The message must say it was a FAILURE, not an empty diff, or the red job
+    // still reads like "nothing to review".
+    expect(() => fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 8000 })).toThrow(
+      /Cannot read the review diff/,
+    );
+  });
+
+  it("still reports a repo with no changes as an empty review, without throwing", () => {
+    // The other half of the distinction: an empty diff must stay a clean no-op.
+    const dir = setupGitRepo();
+    repos.push(dir);
+    const r = fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 8000 });
+    expect(r.total_files).toBe(0);
+    expect(r.diff).toBe("");
+    expect(r.error).toBeUndefined();
+  });
+});
+
+describe("fetchDiff — base resolution for an already-local commit SHA", () => {
+  /** A FULL (non-shallow) clone with an `origin` remote, on a feature branch. */
+  function fullCloneWithFeature(): { clone: string; baseSha: string } {
+    const origin = makeTmpDir();
+    repos.push(origin);
+    git(origin, "init", "--initial-branch=main", "--quiet");
+    git(origin, "config", "user.email", "test@test.com");
+    git(origin, "config", "user.name", "Test");
+    writeFile(origin, "f.txt", "a\n");
+    git(origin, "add", "f.txt");
+    git(origin, "commit", "-m", "A", "--quiet");
+
+    const clone = makeTmpDir();
+    repos.push(clone);
+    git(clone, "clone", `file://${origin}`, ".");
+    git(clone, "config", "user.email", "test@test.com");
+    git(clone, "config", "user.name", "Test");
+    git(clone, "checkout", "-b", "feature", "--quiet");
+    writeFile(clone, "feat.ts", "export const x = 1\n");
+    git(clone, "add", "feat.ts");
+    git(clone, "commit", "-m", "feature", "--quiet");
+
+    return { clone, baseSha: git(clone, "rev-parse", "origin/main").trim() };
+  }
+
+  it("does not fetch when the base is a commit SHA that already exists locally", () => {
+    // This is what an incremental run does: `sinceChangedLines` proves the last
+    // reviewed sha resolves, then hands that same sha to fetchDiff as the base.
+    const { clone, baseSha } = fullCloneWithFeature();
+    expect(baseSha).toMatch(/^[0-9a-f]{40}$/);
+    expect(git(clone, "rev-parse", "--is-shallow-repository").trim()).toBe("false");
+
+    const shim = installGitShim();
+    let r: ReturnType<typeof fetchDiff>;
+    let argvs: string[][];
+    try {
+      resetSpawnLog(shim);
+      r = fetchDiff({
+        baseBranch: baseSha,
+        githubBaseRef: baseSha,
+        cwd: clone,
+        maxFiles: 0,
+        maxDiffLines: 0,
+      });
+      argvs = readSpawnLog(shim);
+    } finally {
+      shim.uninstall();
+    }
+
+    expect(argvs.length).toBeGreaterThan(0); // the shim really intercepted git
+    // `origin/<40-hex>` can never resolve, so pre-fix every incremental run paid
+    // an unbounded `git fetch origin <sha> --depth=1` that could only be wasted.
+    expect(argvs.filter((argv) => argv.includes("fetch"))).toEqual([]);
+    expect(r.base_sha).toBe(baseSha);
+    expect(r.changed_files).toEqual(["feat.ts"]);
+    // ...and it no longer grafts a shallow boundary into a full clone mid-run.
+    expect(git(clone, "rev-parse", "--is-shallow-repository").trim()).toBe("false");
+  });
+
+  it("still attempts the fetch for a branch NAME origin has not provided", () => {
+    // Guards the short-circuit from over-reaching: only an exact object-id form
+    // skips the fetch, so the named-branch fetch-then-local-fallback is intact.
+    const { clone } = fullCloneWithFeature();
+
+    const shim = installGitShim();
+    let argvs: string[][];
+    try {
+      resetSpawnLog(shim);
+      expect(() =>
+        fetchDiff({
+          baseBranch: "no-such-branch",
+          githubBaseRef: "no-such-branch",
+          cwd: clone,
+          maxFiles: 0,
+          maxDiffLines: 0,
+        }),
+      ).toThrow(DiffResolutionError);
+      argvs = readSpawnLog(shim);
+    } finally {
+      shim.uninstall();
+    }
+
+    expect(argvs.filter((argv) => argv.includes("fetch"))).toHaveLength(1);
+  });
+});
+
+describe("fetchDiff — one --numstat pass feeds the changed-path list", () => {
+  it("never runs `--name-only`, yet reports the same paths in the same order", () => {
+    const dir = featureRepo();
+    writeFile(dir, "plain.ts", "text\n");
+    // A NUL byte forces git to treat the file as binary: numstat prints `-\t-`
+    // for it, `--name-only` still lists the path.
+    execFileSync("bash", ["-c", `printf 'bin\\x00ary\\n' > '${join(dir, "bin.dat")}'`]);
+    writeFile(dir, "with space.ts", "sp\n");
+    writeFile(dir, "café日本語.ts", "u\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "mixed paths", "--quiet");
+
+    const shim = installGitShim();
+    let r: ReturnType<typeof fetchDiff>;
+    let argvs: string[][];
+    try {
+      resetSpawnLog(shim);
+      r = fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 8000 });
+      argvs = readSpawnLog(shim);
+    } finally {
+      shim.uninstall();
+    }
+
+    // The redundant full-range walk is gone; numstat is the single source.
+    expect(argvs.length).toBeGreaterThan(0);
+    expect(argvs.filter((argv) => argv.includes("--name-only"))).toEqual([]);
+    expect(argvs.filter((argv) => argv.includes("--numstat"))).toHaveLength(1);
+
+    // And it yields exactly what `--name-only` did — byte-for-byte, in git's own
+    // order, binaries split out, spaces and non-ASCII intact.
+    expect(r.total_files).toBe(4);
+    expect(r.binary_files).toEqual(["bin.dat"]);
+    expect(r.changed_files).toEqual(["café日本語.ts", "plain.ts", "with space.ts"]);
+    expect(splitDiffByFile(r.diff).map((s) => s.path)).toEqual([
+      "café日本語.ts",
+      "plain.ts",
+      "with space.ts",
+    ]);
+  });
 });

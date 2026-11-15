@@ -68,6 +68,47 @@ describe("renderLedger — row cap", () => {
     expect(fullRowLines.length).toBe(LEDGER_MAX_ROWS);
     expect(full).toContain(`… ${80 - LEDGER_MAX_ROWS} more`);
   });
+
+  it("never lets a wide excluded set crowd every unreviewed path out of the cap", () => {
+    // 60 `assets/*` binaries dropped as large-file, plus 3 unreviewed and 2 pending
+    // `src/*` paths. `assets/` sorts before `src/`, so under one shared alphabetical
+    // order the first 50 slots all went to the excluded binaries and EVERY exception
+    // vanished into the overflow line — under `VERBOSITY=full`, i.e. exactly when the
+    // reader asked for more detail and `degradeOnCoverage` says "see Coverage below".
+    const entries: Array<[string, CoverageEntry]> = [];
+    for (let i = 0; i < 60; i++) {
+      entries.push([
+        `assets/img${String(i).padStart(3, "0")}.png`,
+        { status: "excluded", reason: "large-file" },
+      ]);
+    }
+    const unreviewed = ["src/mod0.ts", "src/mod1.ts", "src/mod2.ts"];
+    const pending = ["src/wait0.ts", "src/wait1.ts"];
+    for (const path of unreviewed) {
+      entries.push([path, { status: "unreviewed", reason: "not-attempted" }]);
+    }
+    for (const path of pending) entries.push([path, { status: "pending" }]);
+    const ledger = buildLedger(entries);
+
+    const full = renderLedger(ledger, "full");
+    const rowLines = full.split("\n").filter((l) => l.startsWith("- `"));
+    expect(rowLines.length).toBe(LEDGER_MAX_ROWS);
+
+    // Every exception survives the cap; the counts are unaffected by the ordering.
+    for (const path of unreviewed) {
+      expect(full).toContain(`\`${path}\`: unreviewed (not-attempted)`);
+    }
+    for (const path of pending) expect(full).toContain(`\`${path}\`: pending`);
+    expect(full).toContain("excluded: 60");
+    expect(full).toContain("unreviewed: 3");
+    expect(full).toContain("pending: 2");
+
+    // The cap still bites — it is the excluded rows that give way, alphabetically.
+    const total = 60 + unreviewed.length + pending.length;
+    expect(full).toContain(`… ${total - LEDGER_MAX_ROWS} more`);
+    expect(full).toContain("`assets/img000.png`: excluded (large-file)");
+    expect(full).not.toContain("`assets/img059.png`");
+  });
 });
 
 describe("renderLedger — every status renders in the summary", () => {

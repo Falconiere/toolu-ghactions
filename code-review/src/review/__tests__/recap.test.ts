@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { renderRecap, renderHistorySection } from "@/review/recap.js";
-import { diffState, attachFps, type ReviewState } from "@/state.js";
+import { diffState, attachFps, type ReviewState, type HistoryEntry } from "@/state.js";
 
 // A real prior state with one finding (A) and one history pass.
 const prior: ReviewState = {
@@ -103,5 +103,39 @@ describe("renderRecap", () => {
 
   it("renders nothing for history when there are no passes", () => {
     expect(renderHistorySection([])).toBe("");
+  });
+
+  it("numbers rows from firstPass, not the array index, once past the history cap", () => {
+    // state.ts caps `history` at its last 10 entries, so from round 11 the row index
+    // no longer equals the pass number and the column would silently restart at 1.
+    // renderMemory passes the true offset off the monotonic round counter.
+    const rows: HistoryEntry[] = [
+      {
+        sha: "aaaaaaa",
+        ts: 1700000000,
+        verdict: "changes",
+        counts: { new: 1, open: 0, resolved: 0, total: 1 },
+      },
+      {
+        sha: "bbbbbbb",
+        ts: 1700000060,
+        verdict: "approved",
+        counts: { new: 0, open: 0, resolved: 1, total: 0 },
+      },
+    ];
+
+    const md = renderHistorySection(rows, 11);
+
+    expect(md).toContain("📜 Review history (12 passes)");
+    expect(md).toContain("| 11 | `aaaaaaa` |");
+    expect(md).toContain("| 12 | `bbbbbbb` |");
+    expect(md).not.toContain("| 1 | `aaaaaaa` |");
+  });
+
+  it("defaults to 1-based numbering, so a capped-out marker and an old one both render", () => {
+    const md = renderHistorySection(prior.history);
+
+    expect(md).toContain("📜 Review history (1 passes)");
+    expect(md).toContain("| 1 | `aaaaaaa` |");
   });
 });

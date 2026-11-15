@@ -5,7 +5,14 @@
 // appends each one unconditionally, exactly like it did when they lived inline.
 //
 // TRUST BOUNDARIES (mirrors prompt.ts's own header):
-//  - renderMechanicalBlock: TRUSTED — deterministic secret/SAST scanner output.
+//  - renderMechanicalBlock: TRUSTED as a SIGNAL — the finding EXISTS because a
+//    deterministic secret/SAST tool reported it. Its TEXT is not trusted: the scanner's
+//    message embeds the PR author's file name (the recorded gitleaks fixture proves it:
+//    "gitlab-pat has detected secret for file leak.ts.") and the author chooses that name,
+//    so a file whose name contains a newline, a fence token or an instruction rides
+//    straight into a block the prompt labels TRUSTED. The free-text message is therefore
+//    run through sanitizeInstruction and the path has its whitespace collapsed, so one
+//    finding can never split into two bullets or inject prose.
 //  - renderPriorThreadsBlock: the bot's own earlier finding text is TRUSTED (it is this
 //    pipeline's prior output); the author's REPLIES are UNTRUSTED PR-comment text and are
 //    run through sanitizeInstruction (imported back from ../prompt.js) before rendering.
@@ -60,16 +67,43 @@ export interface PriorThreadContext {
 }
 
 /**
+ * Collapse a scanner-reported path onto one line and defang the prompt's own
+ * delimiter idiom. NOT {@link sanitizeInstruction}: that also strips the literal token
+ * `REQUEST` and clips at 500 chars, which would corrupt legitimate paths — a path is
+ * not free prose and must stay exact.
+ *
+ * Two things an author-chosen file name must not be able to do inside a block the
+ * prompt labels TRUSTED: split one finding into two bullets (so every whitespace run,
+ * newline included, becomes a space), and spoof a delimited region boundary — this
+ * prompt fences untrusted text with `<<<TOKEN … TOKEN>>>` and code with ```` ``` ````,
+ * so those three sequences are dropped. Ordinary words are left alone.
+ */
+function inlinePath(path: string): string {
+  return path
+    .split("<<<")
+    .join("")
+    .split(">>>")
+    .join("")
+    .split("```")
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
  * Render the deterministic-findings triage block: a TRUSTED list the model must
  * assess (confirm real ones into findings[] with `source` set, ignore false positives).
- * Empty list → "" (no block).
+ * The finding's EXISTENCE is trusted (a deterministic tool reported it); its TEXT is not —
+ * see the trust-boundary note above. Empty list → "" (no block).
  */
 export function renderMechanicalBlock(findings: MechanicalFinding[]): string {
   if (findings.length === 0) return "";
   const shown = findings.slice(0, MAX_MECHANICAL_FINDINGS);
   const omitted = findings.length - shown.length;
   const lines = shown.map(
-    (f) => `- [${f.tool}] ${f.ruleId} at ${f.path}:${f.line} (${f.severity}) — ${f.message}`,
+    (f) =>
+      `- [${f.tool}] ${f.ruleId} at ${inlinePath(f.path)}:${f.line} (${f.severity}) — ` +
+      sanitizeInstruction(f.message),
   );
   if (omitted > 0) {
     lines.push(`- (+${omitted} further finding(s) omitted for brevity — triage the listed ones.)`);

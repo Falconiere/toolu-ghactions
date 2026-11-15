@@ -342,24 +342,32 @@ describe("reviewChunked", () => {
     expect(result.error).toContain("NOT reviewed");
   });
 
-  it("notes files dropped by the chunk cap in other_checks", async () => {
+  it("surfaces files dropped by the chunk cap through the coverage ledger alone", async () => {
+    // The spill used to be appended to `merged.other_checks` as a prose footnote, but
+    // pipeline/settle.ts clears that field on every validated result (free-form model
+    // commentary cannot be reconciled with individual findings), so the notice was
+    // built and thrown away. The per-path `unreviewed (chunk-limit)` ledger rows are
+    // what actually reaches the comment's Coverage section — assert that, and that no
+    // dead footnote is written to a field nothing renders.
     const diff = diffWithFiles([
       { path: "a/big.ts", lines: 30 },
       { path: "b/big.ts", lines: 30 },
       { path: "c/big.ts", lines: 30 },
     ]);
+    const coverage = new Map<string, CoverageEntry>();
     const result = await reviewChunked({
       diff,
       maxChunkLines: 20,
       maxChunks: 2,
       mechanical: [],
       brief: null,
-      onCoverage: () => {},
+      onCoverage: (path, entry) => coverage.set(path, entry),
       buildEnvelope: () => STUB_ENVELOPE,
       review: async () => APPROVED,
     });
-    expect(result.other_checks).toContain("not reviewed");
-    expect(result.other_checks).toContain("c/big.ts");
+    expect(coverage.get("c/big.ts")).toEqual({ status: "unreviewed", reason: "chunk-limit" });
+    expect(result.other_checks ?? "").not.toContain("not reviewed");
+    expect(result.other_checks ?? "").not.toContain("chunk limit");
   });
 });
 
@@ -649,7 +657,7 @@ describe("reviewChunked bisection and coverage", () => {
     expect(events.slice(2, 4).sort()).toEqual(["start p2/a.ts", "start p3/a.ts"]);
   });
 
-  it("ledgers files spilled by the MAX_CHUNKS cap as unreviewed, not just a footnote", async () => {
+  it("ledgers files spilled by the MAX_CHUNKS cap as unreviewed", async () => {
     const { diff, maxChunkLines } = packedDiff(PKG_2, 4);
     const coverage = new Map<string, CoverageEntry>();
 

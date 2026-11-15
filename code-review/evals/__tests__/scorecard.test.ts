@@ -1,6 +1,6 @@
 // evals/__tests__/scorecard.test.ts — pure scorecard-derivation and rendering
-// tests, with synthetic data (no gh/git/network/key). Run directly with
-// `bun test evals/__tests__` — NOT part of `bun run check`.
+// tests, with synthetic data (no gh/git/network/key). Run with `bun run
+// test:evals`, which `bun run check` and CI both invoke.
 import { describe, it, expect } from "bun:test";
 import type { PatternGroup } from "@/git/distill.js";
 import type { ReviewState } from "@/state.js";

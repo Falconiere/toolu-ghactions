@@ -17,6 +17,6 @@
     "noEmit": true,
     "isolatedModules": true
   },
-  "include": ["src/**/*.ts", "build.mjs"],
+  "include": ["src/**/*.ts", "build.mjs", "evals/*.ts"],
   "exclude": ["node_modules", "run/index.cjs", "sanitize-sarif/index.cjs"]
 }

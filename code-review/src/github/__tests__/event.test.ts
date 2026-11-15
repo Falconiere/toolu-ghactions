@@ -19,6 +19,17 @@ function payload(name: string): EventPayload {
 /** A permission lookup that always returns a fixed permission string. */
 const perm = (p: string) => async () => p;
 
+/** The recorded `issue-comment-pr` delivery with its activity type replaced — or,
+ *  when `action` is omitted, with no `action` field at all (the resolver defaults a
+ *  missing action to "created"). */
+function issueComment(action?: string): EventPayload {
+  const base = payload("issue-comment-pr");
+  if (action === undefined) {
+    return { issue: base.issue, comment: base.comment, repository: base.repository };
+  }
+  return { ...base, action };
+}
+
 describe("resolveEvent — pull_request", () => {
   it("runs a FULL review of HEAD with the base ref from the payload", async () => {
     const r = await resolveEvent({ eventName: "pull_request", payload: payload("pull-request") });
@@ -56,8 +67,6 @@ describe("resolveEvent — issue_comment security gate", () => {
     // An instruction is present → scoped, not full.
     expect(r.instruction).toBe("focus on auth");
     expect(r.full_review).toBe(false);
-    expect(r.commenter).toBe("alice");
-    expect(r.comment_id).toBe(5551234);
     expect(r.base_ref).toBe("main");
   });
 
@@ -83,7 +92,6 @@ describe("resolveEvent — issue_comment security gate", () => {
     );
     expect(r.run).toBe(false);
     expect(r.reason).toBe("insufficient-permission");
-    expect(r.commenter).toBe("bob");
   });
 
   it("FAILS CLOSED when the permission lookup THROWS", async () => {
@@ -210,6 +218,49 @@ describe("resolveEvent — issue_comment `<phrase> resume` trigger", () => {
 });
 
 describe("resolveEvent — issue_comment cheap guards (no API call)", () => {
+  // GitHub delivers `issue_comment` for created, edited AND deleted, and a
+  // consumer's workflow usually omits a `types:` filter — so without this guard,
+  // editing the trigger comment to fix a typo starts a SECOND full (billable)
+  // review, which under the documented `cancel-in-progress` concurrency group can
+  // cancel the first run mid-publish. Mirrors reviewCommentEvent's own guard.
+  it.each(["edited", "deleted"])(
+    "ignores a comment whose activity type is '%s' — only a created one triggers",
+    async (action) => {
+      let looked = false;
+      const r = await resolveEvent(
+        { eventName: "issue_comment", payload: issueComment(action) },
+        {
+          lookupPermission: async () => {
+            looked = true;
+            return "admin";
+          },
+        },
+      );
+      expect(r.run).toBe(false);
+      expect(r.reason).toBe("unsupported-action");
+      // The activity type is checked before anything that costs an API call.
+      expect(looked).toBe(false);
+    },
+  );
+
+  it("still triggers on an explicit `created` action", async () => {
+    const r = await resolveEvent(
+      { eventName: "issue_comment", payload: issueComment("created") },
+      { lookupPermission: perm("write") },
+    );
+    expect(r.run).toBe(true);
+    expect(r.reason).toBe("mention");
+  });
+
+  it("still triggers when the payload carries NO action field", async () => {
+    const r = await resolveEvent(
+      { eventName: "issue_comment", payload: issueComment() },
+      { lookupPermission: perm("write") },
+    );
+    expect(r.run).toBe(true);
+    expect(r.reason).toBe("mention");
+  });
+
   it("ignores a bot-authored comment", async () => {
     let looked = false;
     const r = await resolveEvent(

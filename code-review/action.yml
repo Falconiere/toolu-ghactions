@@ -138,7 +138,7 @@ inputs:
     required: false
     default: 'true'
   MAX_ROUNDS:
-    description: 'Review-round surrender cap. A generative reviewer can produce a fresh findings batch on every push, so "zero findings" is not a reachable fixpoint on some PRs and a "changes" verdict would block forever. When set to N > 0 and this is review round N (or later; rounds counted from the REVIEW_MEMORY history), a "changes" verdict whose findings are ALL below blocker severity is downgraded to "approved" — the findings stay listed as advisory, the comment carries an explicit "Round cap" callout, and FAIL_ON stops failing the job. A single blocker finding disables the cap for that round. Requires REVIEW_MEMORY. 0 (default) = never surrender.'
+    description: 'Review-round surrender cap. A generative reviewer can produce a fresh findings batch on every push, so "zero findings" is not a reachable fixpoint on some PRs and a "changes" verdict would block forever. When set to N > 0 and this is review round N (or later; rounds are counted by a monotonic counter carried in the REVIEW_MEMORY marker, so any N works — the visible history table only keeps the last 10), a "changes" verdict whose findings are ALL below blocker severity is downgraded to "approved" — the findings stay listed as advisory, the comment carries an explicit "Round cap" callout, and FAIL_ON stops failing the job. A single blocker finding disables the cap for that round, counting every finding in a cluster, not just its representative. Requires REVIEW_MEMORY. 0 (default) = never surrender.'
     required: false
     default: '0'
   VERBOSITY:
@@ -311,6 +311,7 @@ runs:
         INPUT_BOT_LOGO_URL: ${{ inputs.BOT_LOGO_URL }}
         INPUT_REVIEW_MEMORY: ${{ inputs.REVIEW_MEMORY }}
         INPUT_MAX_ROUNDS: ${{ inputs.MAX_ROUNDS }}
+        INPUT_APPROVE_BELOW: ${{ inputs.APPROVE_BELOW }}
         INPUT_FAIL_ON: ${{ inputs.FAIL_ON }}
         INPUT_VERBOSITY: ${{ inputs.VERBOSITY }}
         INPUT_TOOLU_API_KEY: ${{ inputs.TOOLU_API_KEY }}

@@ -1,7 +1,7 @@
 // A challenged finding survives unless a complete generative response explicitly
 // dismisses its identity with an explanation and quotes present in package evidence.
 import { z } from "zod";
-import { Finding } from "@/llm/schema.js";
+import { Finding, normalizeFinding } from "@/llm/schema.js";
 import type { StampedFinding } from "@/pipeline/reviewCall.js";
 import type { ContextFile } from "@/git/diff.js";
 import { splitDiffByFile } from "@/git/chunk.js";
@@ -20,7 +20,30 @@ const Decision = z.object({
   explanation: z.string().trim().min(20),
   evidence: z.array(z.object({ path: z.string(), quote: z.string().trim().min(8) })),
 });
-const Recheck = z.object({ decisions: z.array(z.unknown()), findings: z.array(Finding) });
+/**
+ * The recheck reply. Both arrays are tolerant ON PURPOSE: the STRICT `Finding` schema used
+ * to sit here, so one proposed revision quoting a line as `"42"` failed the whole
+ * `safeParse` and threw away every valid, source-backed dismissal in the same reply —
+ * enhance.ts then counted them all unavailable and the false positive stayed posted. Each
+ * element is normalized and parsed individually below instead, exactly as
+ * llm/recover.ts does for the review response. `decisions` stays `z.unknown()` (it always
+ * was) because the per-decision `Identity`/`Decision` checks below are what make a
+ * dismissal safe.
+ */
+const Recheck = z.object({
+  decisions: z.array(z.unknown()),
+  findings: z.array(z.unknown()).catch([]),
+});
+
+/** The proposed revisions that survive normalization + the strict schema; the rest drop. */
+function parseAdditions(raw: unknown[]): Finding[] {
+  const additions: Finding[] = [];
+  for (const entry of raw) {
+    const parsed = Finding.safeParse(normalizeFinding(entry));
+    if (parsed.success) additions.push(parsed.data);
+  }
+  return additions;
+}
 
 /** Validate a dismissal against the exact evidence supplied, never the working tree. */
 export function applyRecheck(
@@ -64,7 +87,7 @@ export function applyRecheck(
     }
     rechecked.push(finding.fp);
   }
-  return { dismissed, additions: parsed.data.findings, rechecked };
+  return { dismissed, additions: parseAdditions(parsed.data.findings), rechecked };
 }
 
 /** Trusted instructions; repository evidence and claims belong only in the user message. */

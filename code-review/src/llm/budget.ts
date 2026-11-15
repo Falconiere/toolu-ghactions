@@ -9,6 +9,7 @@
 // twice is how PR #6 ended up advising "Raise MAX_TOKENS" on a budget already at its
 // ceiling, so they are single-sourced here and nowhere else.
 import { APICallError } from "ai";
+import { z } from "zod";
 
 /**
  * Hard ceiling for the output-token budget of one review call. A chunk whose structured
@@ -55,21 +56,59 @@ export function budgetExhausted(budget: number): boolean {
 }
 
 /**
- * True when the provider REFUSED the requested budget: an HTTP 400 whose message or body
- * names `max_tokens` (e.g. DeepSeek's "Invalid max_tokens value, the valid range of
- * max_tokens is [1, 8192]"). That is a hard per-request cap — retrying at a bigger budget
- * would fail identically, so the caller salvages instead of escalating.
+ * The provider's structured error envelope, as far as the cap check reads it. Both fields
+ * are nullish because real bodies vary (`"param": null` is common); unknown sibling keys
+ * are stripped, and anything not shaped like this is simply not read as a cap complaint.
+ */
+const ProviderErrorBody = z.object({
+  error: z.object({
+    message: z.string().nullish(),
+    param: z.string().nullish(),
+  }),
+});
+
+/**
+ * True when the provider's OWN complaint names `max_tokens` — read from the structured
+ * `error.message` / `error.param` fields, never from the raw body text.
+ *
+ * A raw substring match over `responseBody` is wrong by construction: this action ALWAYS
+ * sends `max_tokens`, so any gateway that echoes the request payload into a 400 body
+ * matches, and an unrelated 400 (bad model id, context length exceeded) gets reported to
+ * the reader as "the output budget is at its ceiling" — with the provider's real message
+ * thrown away. Non-JSON and differently-shaped bodies return false instead of throwing.
+ */
+function providerComplaintNamesMaxTokens(responseBody: string | undefined): boolean {
+  if (responseBody === undefined) return false;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(responseBody);
+  } catch {
+    return false; // not JSON → no structured complaint to read
+  }
+  const parsed = ProviderErrorBody.safeParse(raw);
+  if (!parsed.success) return false;
+  const { message, param } = parsed.data.error;
+  return (message ?? "").includes("max_tokens") || (param ?? "").includes("max_tokens");
+}
+
+/**
+ * True when the provider REFUSED the requested budget: an HTTP 400 whose own error
+ * message or `param` names `max_tokens` (e.g. DeepSeek's "Invalid max_tokens value, the
+ * valid range of max_tokens is [1, 8192]"). That is a hard per-request cap — retrying at
+ * a bigger budget would fail identically, so the caller salvages instead of escalating.
  *
  * The PARENTHESIZATION is load-bearing: the status check ANDs over both text checks, so a
  * 429 or 500 whose body happens to echo `max_tokens` (a rate-limit message quoting the
  * request, a gateway dumping the payload) is NOT a cap — those are transient transport
- * failures and must keep their normal classification.
+ * failures and must keep their normal classification. The body check reads only the
+ * provider's structured complaint for the same reason at status 400.
  */
 export function isProviderCap(err: unknown): boolean {
   if (!APICallError.isInstance(err)) return false;
   return (
     err.statusCode === 400 &&
-    ((err.message ?? "").includes("max_tokens") || (err.responseBody ?? "").includes("max_tokens"))
+    ((err.message ?? "").includes("max_tokens") ||
+      providerComplaintNamesMaxTokens(err.responseBody))
   );
 }
 

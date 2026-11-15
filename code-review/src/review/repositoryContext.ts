@@ -18,6 +18,30 @@ const CONTEXT_BYTES = 32768;
 const INVENTORY_BYTES = 16384;
 const MAX_CANDIDATES = 96;
 
+/** Conventional sibling-test markers: `x.test.ts`, `x.spec.ts` (any extension). */
+const TEST_FILE_PATTERN = /\.(?:test|spec)\./;
+
+/**
+ * Narrow a tree listing to the only paths a per-changed-file test lookup can match.
+ *
+ * Invariant: the three prefixes {@link createRepositoryContext} matches per changed
+ * path — `<dir>/__tests__/<stem>.`, `<dir>/<stem>.test.`, `<dir>/<stem>.spec.` —
+ * each force a literal `"/__tests__/"`, `".test."` or `".spec."` into any path they
+ * match (`posix.dirname` never returns `""`, so the leading slash is always there).
+ * Filtering the tree through this first therefore selects the IDENTICAL set, at
+ * O(tree) once per review instead of O(tree × changed × packages): a 1 500-file PR
+ * against a 150 k-file monorepo is ~30 packages, re-scanned on every retry and every
+ * bisected half, which is minutes of CPU and gigabytes of garbage before any model
+ * call — wall clock that later packages then lose to a `pending` ledger entry.
+ */
+export function testLikePaths(paths: Iterable<string>): string[] {
+  const out: string[] = [];
+  for (const p of paths) {
+    if (p.includes("/__tests__/") || TEST_FILE_PATTERN.test(p)) out.push(p);
+  }
+  return out;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -138,6 +162,9 @@ export function createRepositoryContext(
     }
   };
   const packagePaths = [...paths].filter((p) => posix.basename(p) === "package.json").slice(0, 256);
+  // Built ONCE per review, next to the manifest scan — see `testLikePaths` for the
+  // invariant that makes narrowing the per-changed-file scan to this list exact.
+  const testLike = testLikePaths(paths);
   read(packagePaths);
   const manifests: Manifest[] = packagePaths.map((path) => {
     let value: Record<string, unknown> = {};
@@ -163,7 +190,7 @@ export function createRepositoryContext(
       const dir = posix.dirname(path);
       const stem = posix.basename(path).replace(/\.[^.]+$/, "");
       supporting.push(
-        ...[...paths].filter(
+        ...testLike.filter(
           (p) =>
             p.startsWith(`${dir}/__tests__/${stem}.`) ||
             p.startsWith(`${dir}/${stem}.test.`) ||

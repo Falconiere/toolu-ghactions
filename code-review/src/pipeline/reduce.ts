@@ -49,6 +49,20 @@ export interface Reduction {
   clustered: FindingCluster[];
 }
 
+/**
+ * True when these cluster members span MORE THAN ONE file — the only shape the
+ * cluster machinery speaks about. `clusterFindings` guarantees one cluster per
+ * fingerprint, and a fingerprint excludes `line`, so two findings for one defect
+ * at two lines of the SAME file now share one cluster without being a cross-file
+ * repeat: they must not enter the marker's `clusters` identity map (a fp→itself
+ * entry is noise that would make reconcile's prior-cluster link match on it) and
+ * must not be rendered with the "Same finding in N files" note, which would name
+ * one file twice and claim a repeat across files that did not happen.
+ */
+export function spansFiles(members: ReadonlyArray<{ path: string }>): boolean {
+  return new Set(members.map((m) => m.path)).size > 1;
+}
+
 /** Carry forward, then cluster. Pure (no I/O); every input is already validated. */
 export function reduceFindings(input: {
   /** This round's validated + stamped model findings. */
@@ -70,8 +84,9 @@ export function reduceFindings(input: {
   for (const cluster of clustered) {
     // Singletons stay out of the map: `clusters` is cluster IDENTITY across rounds,
     // and a one-member "cluster" carries none — persisting them would bloat the
-    // marker and make `linkedByPriorCluster` (reconcile.ts) match on noise.
-    if (cluster.members.length < 2) continue;
+    // marker and make `linkedByPriorCluster` (reconcile.ts) match on noise. Neither
+    // does a same-fingerprint group, which spans no files (see `spansFiles`).
+    if (cluster.members.length < 2 || !spansFiles(cluster.members)) continue;
     for (const member of cluster.members) clusters[member.fp] = cluster.exemplar.fp;
   }
 
@@ -89,6 +104,27 @@ export function reduceFindings(input: {
     carriedWithoutFinding: carried.carriedWithoutFinding,
     clustered,
   };
+}
+
+/**
+ * Expand cluster representatives to their FULL member lists for a SEVERITY
+ * decision — `applyRoundCap`'s blocker check and `resolveLabelVerdict`'s
+ * APPROVE_BELOW ranking (review/gate.ts). Severity is deliberately NOT part of
+ * the cluster key, so an exemplar picked by lowest fingerprint can be `low`
+ * while a member is `blocker`; feeding the gate representatives alone let that
+ * blocker be hidden by its own cluster and downgraded a "changes" to
+ * "approved". This is the same expansion review/recompute.ts performs before its
+ * own `resolveLabelVerdict`, so the review path and the merge-gate recompute
+ * answer identically for the same commit state.
+ *
+ * Rendering is NOT affected: the comment body and the inline threads still speak
+ * in representatives (pipeline/publish.ts).
+ */
+export function expandForSeverityGate(
+  findings: StampedFinding[],
+  reduction: Reduction,
+): StampedFinding[] {
+  return findings.flatMap((f) => reduction.ctx.members.get(f.fp) ?? [f]);
 }
 
 /** Expand cluster representatives back to representative + members, in place of
@@ -126,7 +162,10 @@ export function withCarriedWithoutFinding(ledger: CoverageLedger, paths: string[
  *
  * Applied to the copy handed to `postInlineReview` ONLY; `fp` is carried through
  * untouched and github/review.ts stamps the marker from it, so a decorated body
- * can never rotate the thread's identity. Singletons are returned as-is.
+ * can never rotate the thread's identity. A cluster that spans only ONE file is
+ * returned as-is — a singleton, or two findings sharing a fingerprint because the
+ * same defect sits at two lines of one file: the note names FILES, so there is
+ * nothing for it to say (see `spansFiles`).
  */
 export function decorateExemplars(
   findings: StampedFinding[],
@@ -134,7 +173,7 @@ export function decorateExemplars(
 ): StampedFinding[] {
   return findings.map((f) => {
     const members = reduction.ctx.members.get(f.fp);
-    if (members === undefined || members.length < 2) return f;
+    if (members === undefined || !spansFiles(members)) return f;
     return { ...f, text: `${f.text}\n\n${clusterMemberNote(members)}` };
   });
 }

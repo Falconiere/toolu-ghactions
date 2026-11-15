@@ -12,12 +12,49 @@ function reviewThreadsFixture(): unknown {
   return JSON.parse(readFileSync(join(FIXTURES, "review-threads.json"), "utf8"));
 }
 
+/** A `reviewThreads` page carrying one bot thread (fingerprint marker + databaseId).
+ *  A non-null `endCursor` marks the page as having a next one. */
+function threadPage(
+  thread: { id: string; databaseId: number; path: string; fp: string },
+  endCursor: string | null,
+): unknown {
+  return {
+    repository: {
+      pullRequest: {
+        reviewThreads: {
+          pageInfo: { hasNextPage: endCursor !== null, endCursor },
+          nodes: [
+            {
+              id: thread.id,
+              isResolved: false,
+              isOutdated: false,
+              path: thread.path,
+              line: 1,
+              comments: {
+                nodes: [
+                  {
+                    databaseId: thread.databaseId,
+                    body: `**finding** at ${thread.path}\n<!-- toolu-fp:${thread.fp} -->`,
+                    author: { login: "bot" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    },
+  };
+}
+
 const TARGET: ThreadTarget = { owner: "o", repo: "r", prNumber: 7 };
 
 /** A fake ThreadClient that records calls and replays a configured graphql response. */
 function fakeClient(opts: {
   graphqlResponses?: unknown[];
   graphqlThrows?: boolean;
+  /** 1-based call number that throws — models a rate limit hitting a LATER page. */
+  throwOnCall?: number;
   replyThrows?: boolean;
 }): {
   client: ThreadClient;
@@ -32,9 +69,12 @@ function fakeClient(opts: {
   const client: ThreadClient = {
     graphql: async (query: string, variables?: Record<string, unknown>) => {
       calls.graphql.push({ query, variables });
+      i += 1;
       if (opts.graphqlThrows) throw new Error("GraphQL boom");
-      const r = responses[Math.min(i, responses.length - 1)];
-      i++;
+      if (opts.throwOnCall === i) {
+        throw new Error("HTTP 403: You have exceeded a secondary rate limit");
+      }
+      const r = responses[Math.min(i - 1, responses.length - 1)];
       return r ?? {};
     },
     rest: {
@@ -136,6 +176,25 @@ describe("fetchReviewThreads", () => {
     expect(threads.map((t) => t.threadId)).toEqual(["T_page1", "T_page2"]);
     // Second call carried the endCursor from page 1.
     expect(calls.graphql[1]?.variables?.["cursor"]).toBe("CURSOR_1");
+  });
+
+  it("keeps the pages already fetched when a LATER page throws (rate limit)", async () => {
+    const page1 = threadPage(
+      { id: "T_page1", databaseId: 11, path: "a.ts", fp: "aaaa11" },
+      "CURSOR_1",
+    );
+    const { client, calls } = fakeClient({ graphqlResponses: [page1], throwOnCall: 2 });
+    const threads = await fetchReviewThreads(client, TARGET);
+    // A 403 on page 2 must NOT discard page 1: an empty list makes the caller
+    // treat every already-reported finding as brand new — re-posting duplicates,
+    // resolving nothing, and losing every settlement the author had argued out.
+    expect(threads.map((t) => t.threadId)).toEqual(["T_page1"]);
+    expect(calls.graphql).toHaveLength(2);
+  });
+
+  it("returns [] when the FIRST page throws (nothing was fetched to keep)", async () => {
+    const { client } = fakeClient({ throwOnCall: 1 });
+    await expect(fetchReviewThreads(client, TARGET)).resolves.toEqual([]);
   });
 
   it("returns [] (never throws) when graphql fails", async () => {

@@ -1,8 +1,7 @@
 // evals/__tests__/scratch.test.ts — evals/scratch.ts's own tests: replaying a
 // PrFile's patch into a REAL scratch git repo and reading the result back off
-// disk / git itself (no mocks of scratch.ts's own logic). Run directly with
-// `bun test evals/__tests__` — NOT part of `bun run check` (see scratch.ts's
-// module doc).
+// disk / git itself (no mocks of scratch.ts's own logic). Run with `bun run
+// test:evals`, which `bun run check` and CI both invoke.
 import { describe, it, expect, afterEach } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

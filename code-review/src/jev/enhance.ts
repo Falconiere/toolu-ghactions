@@ -46,9 +46,21 @@ export interface EnhancementInput {
 export function selectRiskPackages(
   risks: { index: number; choice: string; confidence: number; probability: number }[],
 ): number[] {
+  // The risk question rides in EVERY batch of a package's questions, and splitQuestions
+  // genuinely produces several batches once a package exceeds the request-byte budget — so
+  // one package answers "high" once per batch, all with the SAME index. Dedupe by index
+  // BEFORE the two-slot cap: otherwise a package split into two batches that both answer
+  // high takes both slots, spending two full paid model calls on the identical envelope
+  // while the genuinely second-riskiest package is never reviewed.
+  const seen = new Set<number>();
   return risks
     .filter((r) => r.choice === "high" && r.confidence >= 0.8)
     .sort((a, b) => b.probability - a.probability || a.index - b.index)
+    .filter((r) => {
+      if (seen.has(r.index)) return false;
+      seen.add(r.index);
+      return true;
+    })
     .slice(0, 2)
     .map((r) => r.index);
 }

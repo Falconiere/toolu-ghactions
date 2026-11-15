@@ -3,6 +3,7 @@
 // truncate at a hunk boundary. Port of fetch-diff.sh, driving `git` via
 // execFileSync (not simple-git) so argv and exit-code handling match the bash.
 import { execFileSync } from "node:child_process";
+import { errorMessage } from "../errors.js";
 import { unquoteGitPath } from "./path.js";
 import { shapeDiff, type ShapedFile } from "./shape.js";
 import { noiseReason, LARGE_FILE_BYTES } from "./noise.js";
@@ -97,16 +98,76 @@ export class DiffResolutionError extends Error {
  */
 const QUOTEPATH_OFF = ["-c", "core.quotepath=false"];
 
+/**
+ * Turn OFF git's pathspec pattern language. Changed paths are handed back to
+ * `git diff … -- <path1> <path2> …`, and `--` only stops git reading them as
+ * OPTIONS — it still reads them as PATHSPECS, i.e. git's own glob language, so
+ * a path was matched as a PATTERN, not literally. Verified on git 2.54:
+ *   - a file named `:(exclude)*` excludes the whole tree and git exits **0**
+ *     with an EMPTY diff — one hostile filename silently disables the review
+ *     and the job still goes green; `:(nosuchmagic)foo` exits 128;
+ *   - `a?.ts` OVER-matches, dragging files back in (a `go.sum` already dropped
+ *     as a lockfile reappeared in the patch); `:foo` UNDER-matches to nothing.
+ * It is a git MAIN option, so it precedes the subcommand; every subcommand here
+ * accepts it (rev-parse, merge-base, remote get-url, diff).
+ *
+ * EXCLUDE_GLOBS is NOT affected: it is matched in TypeScript by `anyGlobMatches`
+ * (git/globs.ts) before any pathspec is built, never as an `:(exclude)` pathspec,
+ * so intentional glob exclusion keeps full pattern semantics. Nor is
+ * `check-attr --stdin`, whose input git does not treat as a pathspec at all.
+ */
+const LITERAL_PATHSPECS = ["--literal-pathspecs"];
+
+/** Global options prepended to EVERY git invocation in this module. */
+const GIT_GLOBAL_OPTIONS = [...LITERAL_PATHSPECS, ...QUOTEPATH_OFF];
+
 /** Run `git` and return stdout, or null when git exits non-zero (the `|| true` idiom). */
 function gitOrNull(args: string[], cwd: string): string | null {
   try {
-    return execFileSync("git", [...QUOTEPATH_OFF, ...args], {
+    return execFileSync("git", [...GIT_GLOBAL_OPTIONS, ...args], {
       cwd,
       encoding: "utf8",
       maxBuffer: 1024 * 1024 * 1024,
     });
   } catch {
     return null;
+  }
+}
+
+/**
+ * Run `git` and return stdout, THROWING DiffResolutionError when git fails.
+ *
+ * For the ONE call whose stdout IS the review. `gitOrNull`'s `|| true` idiom is
+ * right for probes (`rev-parse --verify` answers "no" via exit code) and wrong
+ * here, where a failure flattened to `""` is indistinguishable from "this PR
+ * changed nothing": the pipeline short-circuits on `total_files === 0` and
+ * APPROVES, the ledger marks every file `unreviewed (not-attempted)`, and with
+ * the default `FAIL_ON: changes` the job still exits green having reviewed
+ * nothing. Real failures that reach this call are the 1 GiB `maxBuffer`
+ * (ENOBUFS on a huge PR) and E2BIG once the pathspec argv exceeds the kernel
+ * limit. main.ts's top-level guard turns the throw into verdict=error, a posted
+ * error comment and a red job.
+ */
+function gitOrThrow(args: string[], cwd: string, baseBranch: string): string {
+  try {
+    return execFileSync("git", [...GIT_GLOBAL_OPTIONS, ...args], {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024 * 1024,
+    });
+  } catch (err) {
+    // execFileSync folds git's stderr into the message; keep its last line, the
+    // actual `fatal:`/`error:` cause, rather than the echoed command line.
+    const detail =
+      errorMessage(err)
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line !== "")
+        .pop() ?? "git exited non-zero";
+    throw new DiffResolutionError(
+      `Cannot read the review diff: ${detail}. This is a git FAILURE, not an empty diff — the review was not performed.`,
+      baseBranch,
+    );
   }
 }
 
@@ -142,11 +203,35 @@ function emptyResult(baseSha: string): DiffData {
 }
 
 /**
+ * A full git object id used as a ref: 40 hex (sha1) or 64 hex (sha256 repos,
+ * which git supports and this action can be checked out into). Same shape
+ * pipeline/git.ts's `recoverReviewedCommit` guards on, so the two modules agree
+ * on what counts as a bare commit SHA rather than a branch name.
+ */
+const LOCAL_OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
+
+/**
  * Resolve the base branch to a verifiable ref (`origin/<base>`, fetched if
  * missing, then falling back to a local `<base>`), returning that ref. Throws
  * DiffResolutionError when neither resolves — the bash `exit 1` path.
+ *
+ * A base that is already a locally-present commit SHA short-circuits: see
+ * {@link LOCAL_OBJECT_ID}.
  */
 function resolveRemoteBase(baseBranch: string, cwd: string): string {
+  // An INCREMENTAL scope passes the previously reviewed commit SHA as the base
+  // (pipeline/git.ts's `sinceChangedLines`), one line after proving it resolves
+  // locally. `origin/<40-hex-sha>` can never exist, so without this the code
+  // always fell through to `git fetch origin <sha> --depth=1` on EVERY
+  // pull_request push with review memory on — a round trip that can only be
+  // wasted, with no timeout (unlike `recoverReviewedCommit`'s 10 s), and
+  // `--depth=1` grafts a shallow boundary into a previously full clone mid-run.
+  // Matching only an exact object-id form keeps the "prefer a fresh
+  // `origin/<branch>` over a stale local `<branch>`" behaviour for real names.
+  if (LOCAL_OBJECT_ID.test(baseBranch) && refExists(`${baseBranch}^{commit}`, cwd)) {
+    return baseBranch;
+  }
+
   let remoteBase = `origin/${baseBranch}`;
   if (refExists(remoteBase, cwd)) return remoteBase;
 
@@ -225,20 +310,21 @@ function parseNumstat(numstat: string): NumstatRow[] {
 }
 
 /**
- * Classify each changed file from `git diff --numstat`: binary files show the
- * sentinel "-\t-\t<path>"; non-binary files run through noiseReason() and are
- * either dropped (with a reason) or kept as text files. Returns the three
- * buckets in numstat (encounter) order, matching the bash while-loop.
+ * Classify each changed file from its parsed `git diff --numstat` rows: binary
+ * files show the sentinel "-\t-\t<path>"; non-binary files run through
+ * noiseReason() and are either dropped (with a reason) or kept as text files.
+ * Returns the three buckets in numstat (encounter) order, matching the bash
+ * while-loop.
  *
  * Blob reads for noiseReason's content rules are batched: one pre-pass collects
  * every candidate path (non-binary, not already dropped by EXCLUDE_GLOBS or
  * .gitattributes) and reads all of them via `batchRead` — one `cat-file
- * --batch-check` spawn for sizes, one `cat-file --batch` spawn (bounded to
- * MAX_BLOB_READ_BYTES per blob) for content — instead of a `git show`/
- * `cat-file -s` PER FILE.
+ * --batch-check` spawn for sizes, plus one `cat-file --batch` spawn per
+ * byte-budget group (each bounded to MAX_BLOB_READ_BYTES per blob) for content —
+ * instead of a `git show`/`cat-file -s` PER FILE.
  */
 function classifyFiles(
-  numstat: string,
+  rows: readonly NumstatRow[],
   reviewHead: string,
   cwd: string,
   excludeGlobs: readonly string[],
@@ -249,7 +335,6 @@ function classifyFiles(
   const binary: string[] = [];
   const text: string[] = [];
   const dropped: DroppedFile[] = [];
-  const rows = parseNumstat(numstat);
 
   // A deleted path has no blob at the review head — `git show HEAD:<path>` dies
   // with `fatal: path … does not exist in 'HEAD'` (once per deleted file, straight
@@ -311,6 +396,10 @@ export function countLines(diff: string): number {
  * the budget, drop everything from the NEXT `diff --git`/`@@ ` boundary onward,
  * so a hunk is never cut mid-line. The caller re-strips trailing newlines, so
  * this returns the kept lines joined with no trailing newline.
+ *
+ * Can return MORE than `max` lines: when the budget runs out inside the final
+ * hunk there is no next boundary to cut at, so the input comes back intact. The
+ * caller then applies {@link hardCutLines}.
  */
 function truncateAtHunkBoundary(diff: string, max: number): string {
   const kept: string[] = [];
@@ -327,11 +416,23 @@ function truncateAtHunkBoundary(diff: string, max: number): string {
 }
 
 /**
+ * Keep exactly the first `max` lines. The fallback when
+ * {@link truncateAtHunkBoundary} could not honour MAX_DIFF_LINES because the
+ * budget ran out inside a single (or the last) hunk — mid-hunk cutting is
+ * better than no cap at all, and it is what makes `truncated: true` and
+ * `total_lines` tell the truth.
+ */
+function hardCutLines(diff: string, max: number): string {
+  return diff.split("\n").slice(0, max).join("\n");
+}
+
+/**
  * Resolve base/merge-base, build and classify the diff, line-prime the text
  * files, and optionally apply the MAX_FILES skip or MAX_DIFF_LINES truncation.
  * Returns a DiffData. On a MAX_FILES skip the result carries `error` (a signal,
- * NOT a throw); a genuinely unresolvable base/merge-base throws
- * DiffResolutionError, matching fetch-diff.sh's two exit paths.
+ * NOT a throw). Throws DiffResolutionError when the base/merge-base cannot be
+ * resolved (fetch-diff.sh's two `exit 1` paths) AND when the review diff itself
+ * fails to read — the latter must never be reported as an empty review.
  */
 export function fetchDiff(opts: DiffOptions): DiffData {
   const cwd = opts.cwd ?? process.cwd();
@@ -351,31 +452,35 @@ export function fetchDiff(opts: DiffOptions): DiffData {
   // base-branch TIP (not the merge-base): project-rules are read at the tip of
   // the branch we merge into, so rules added after this PR branched still apply.
   const baseSha = gitOrNull(["rev-parse", remoteBase], cwd)?.trim() ?? "";
-  // --no-renames on the CLASSIFICATION diffs (name-only/numstat/name-status):
-  // rename detection would emit an "old => new" arrow path that breaks path
-  // handling, while --no-renames lists BOTH real sides of a move. The final
-  // REVIEW diff below runs WITH -M so a move renders as a rename, not delete+add.
-  const changedFiles =
-    gitOrNull(["diff", "--no-renames", "--name-only", mergeBase, reviewHead], cwd) ?? "";
-  const changedPaths = changedFiles
-    .split("\n")
-    .filter((l) => l.trim() !== "")
-    .map(unquoteGitPath);
+  // --no-renames on the CLASSIFICATION diffs (numstat/name-status): rename
+  // detection would emit an "old => new" arrow path that breaks path handling,
+  // while --no-renames lists BOTH real sides of a move. The final REVIEW diff
+  // below runs WITH -M so a move renders as a rename, not delete+add.
+  //
+  // ONE `--numstat` pass is the single source of both the changed-path list and
+  // the classification input. Verified against git 2.54 that `--numstat` and
+  // `--name-only` list the same paths in the same order — over binaries
+  // (`-\t-`), gitlinks, mode-only changes, deletions, empty↔non-empty
+  // transitions, spaces, non-ASCII under core.quotepath=false, and C-quoted
+  // names holding a tab or a newline — so the separate full-range `--name-only`
+  // walk that ran here before was pure duplicate work.
+  const numstat =
+    gitOrNull(["diff", "--no-renames", "--numstat", mergeBase, reviewHead], cwd) ?? "";
+  const rows = parseNumstat(numstat);
+  const changedPaths = rows.map((row) => row.path);
   const totalFiles = changedPaths.length;
 
   if (totalFiles === 0) {
     return emptyResult(baseSha);
   }
 
-  const numstat =
-    gitOrNull(["diff", "--no-renames", "--numstat", mergeBase, reviewHead], cwd) ?? "";
   const deletedPaths = deletedInRange(mergeBase, reviewHead, cwd);
   // Exclusion (EXCLUDE_GLOBS → .gitattributes linguist-generated → static noise) runs
   // BEFORE the file-count gate, so a PR dominated by generated/vendored files is
   // reviewed on its few real files instead of being skipped wholesale.
   const generatedPaths = gitattributesGenerated(changedPaths, cwd);
   const { binary, text, dropped } = classifyFiles(
-    numstat,
+    rows,
     reviewHead,
     cwd,
     excludeGlobs,
@@ -406,7 +511,16 @@ export function fetchDiff(opts: DiffOptions): DiffData {
     // pathspec covers the pair and detection works. This also keeps our anchorable
     // lines aligned with GitHub's own rename-aware PR diff — a finding on a moved
     // file's unchanged line would otherwise 422 at inline-review time.
-    const rawDiff = gitOrNull(["diff", "-M", mergeBase, reviewHead, "--", ...text], cwd) ?? "";
+    //
+    // gitOrThrow, NOT gitOrNull: this is the one call whose stdout IS the
+    // review, so a git failure must never flatten to "" and read as "the PR
+    // changed nothing" (see gitOrThrow). A genuinely empty diff still returns ""
+    // here — `git diff` exits 0 with no output when nothing differs.
+    const rawDiff = gitOrThrow(
+      ["diff", "-M", mergeBase, reviewHead, "--", ...text],
+      cwd,
+      baseBranch,
+    );
     const shaped = shapeDiff(rawDiff);
     diff = stripTrailingNewlines(shaped.diff);
     files = shaped.files;
@@ -415,7 +529,15 @@ export function fetchDiff(opts: DiffOptions): DiffData {
   let diffLines = countLines(diff);
   let truncated = false;
   if (maxDiffLines > 0 && diffLines > maxDiffLines) {
-    diff = stripTrailingNewlines(truncateAtHunkBoundary(diff, maxDiffLines));
+    const atBoundary = stripTrailingNewlines(truncateAtHunkBoundary(diff, maxDiffLines));
+    // The hunk-boundary pass can only cut at the NEXT `diff --git `/`@@ ` line.
+    // When the budget runs out inside the last — or only — hunk, no such
+    // boundary ever arrives, `stop` stays false and the WHOLE diff comes back.
+    // Hard-cut in that case, or MAX_DIFF_LINES is not a limit at all and
+    // `truncated` (which prompt.ts turns into "[Diff truncated at N lines; some
+    // hunks omitted]") lies about work that was never done.
+    diff =
+      countLines(atBoundary) > maxDiffLines ? hardCutLines(atBoundary, maxDiffLines) : atBoundary;
     truncated = true;
     diffLines = countLines(diff);
   }

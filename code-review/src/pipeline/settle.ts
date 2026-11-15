@@ -10,13 +10,14 @@
 // what makes the marker resumable (`complete`, the exception lists, `reviewed_tree`).
 import { renderRecapSection, renderHistorySection } from "@/review/recap.js";
 import { resolveVerdict } from "@/review/verdict.js";
-import { diffState, encodeMarker } from "@/state.js";
+import { completedRounds, diffState, encodeMarker } from "@/state.js";
 import { dropSettled } from "@/review/reconcile.js";
 import { dropOutOfScope } from "@/review/incremental.js";
 import { applyRoundCap } from "@/review/gate.js";
 import { pathsWithStatus, type CoverageLedger } from "@/review/ledger.js";
 import type { ProviderResult } from "@/llm/reviewWithModel.js";
 import type { PublishInput } from "./publish.js";
+import { expandForSeverityGate } from "./reduce.js";
 import type { Reduction } from "./reduce.js";
 import type { StampedFinding } from "./reviewCall.js";
 
@@ -141,8 +142,15 @@ export function settleVerdict(
   // so a reviewer that generates fresh findings every push cannot block forever.
   const cap = applyRoundCap({
     verdict,
-    findings,
-    priorRounds: input.prior?.history?.length ?? 0,
+    // Members, not representatives: severity is not part of the cluster key, so an
+    // exemplar picked by lowest fingerprint can be `low` while one of its members
+    // is a `blocker` — and the blocker check below must SEE that blocker or the cap
+    // approves a PR a showstopper is still standing on. Same expansion
+    // review/recompute.ts does before its own label gate, so the two paths agree.
+    findings: expandForSeverityGate(findings, reduction),
+    // The monotonic counter, not `history.length`: history is display-capped to the
+    // last 10, so deriving the round from it made MAX_ROUNDS ≥ 12 unreachable.
+    priorRounds: completedRounds(input.prior),
     maxRounds: input.inputs.reviewMemory ? input.inputs.maxRounds : 0,
   });
   let capNote = "";
@@ -254,7 +262,13 @@ export function renderMemory(
     : "";
   return {
     recap,
-    history: renderHistorySection(state.next_state.history),
+    // `history` is capped at its last 10 entries, so number the rows from the true
+    // round counter instead of the array index — otherwise the Pass column silently
+    // restarts at 1 on round 11 (see recap.ts's `firstPass`).
+    history: renderHistorySection(
+      state.next_state.history,
+      completedRounds(state.next_state) - state.next_state.history.length + 1,
+    ),
     marker: encodeMarker(state.next_state),
   };
 }
