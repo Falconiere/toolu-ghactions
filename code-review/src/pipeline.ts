@@ -3,10 +3,11 @@
 // LLM fetch, the repo cwd, the clock) is injected through `deps` so the pipeline
 // runs end-to-end in tests with NO network and NO process.env reads.
 //
-// FLOW (main.sh order): resolve event → skip on non-trigger → fetch diff →
-// skip/empty handling → read prior sticky (review memory) → post in-progress →
-// gather rules → build prompt → review → validate → diff state → render recap →
-// format verdict → post comment + label + inline review → return outputs.
+// FLOW: resolve event → skip on non-trigger or a stale head → read prior sticky
+// (review memory) → fetch diff → skip/empty handling (in the sticky) → post
+// in-progress → read the bot's threads → gather rules → build prompt → review →
+// validate → stale-head check → diff state → render recap → format verdict →
+// post comment + label + inline review → return outputs.
 // The phases live in pipeline/ (sticky, reviewCall, publish); this file wires them.
 //
 // ERROR ABSTAIN: a verdict:"error" ProviderResult is NOT an infra failure — we
@@ -32,6 +33,7 @@ import type { IncrementalScope } from "./review/incremental.js";
 import { reviewAndValidate } from "./pipeline/reviewCall.js";
 import { publish } from "./pipeline/publish.js";
 import { runDismissRecompute } from "./pipeline/dismissRecompute.js";
+import { staleHead } from "./pipeline/settleEvaluation.js";
 import { skipBody, noopBody } from "./pipeline/bodies.js";
 import type { GithubContext, PipelineOctokit, ReviewDeps, ReviewResult } from "./pipeline/types.js";
 
@@ -45,8 +47,10 @@ type RunTarget = CommentTarget & ReviewTarget & LabelTarget;
  * Run the full review pipeline for one event, replaying main.sh end to end
  * against the injected boundaries. A non-trigger event or an empty/over-limit
  * diff returns a "skip" verdict (still posting the skip/approved comment, as the
- * bash does); a provider "error" verdict is posted and returned normally
- * (abstain). Only a genuine infra failure (diff resolution, comment-post) throws.
+ * bash does); a head that is no longer the PR's returns "skip" with no writes; a
+ * provider "error" verdict is posted and returned normally (abstain). Only a
+ * genuine infra failure (diff resolution, comment or thread reads, comment-post,
+ * failing to remove `merge-approved`) throws.
  */
 export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
   const { inputs, octokit, context } = deps;
@@ -72,20 +76,27 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
   };
   const reviewHead = event.review_head ?? "HEAD";
   const baseBranch = event.base_ref && event.base_ref !== "" ? event.base_ref : inputs.baseBranch;
+  // A re-run of an OLD commit's workflow replays its payload: never write over a newer head.
+  if (await staleHead({ target, lookupHeadSha: deps.lookupHeadSha }, event.head_sha)) return STALE;
 
-  const resolved = await resolveDiffOrSkip(deps, target, reviewHead, baseBranch, cwd);
+  // Prior sticky (memory carrier) FIRST: even a skip or no-op run updates it in place,
+  // carrying the marker, rather than posting a fresh comment that wipes the memory.
+  const found = await locatePrior(octokit, target, inputs.reviewMemory);
+  const resolved = await resolveDiffOrSkip(deps, target, reviewHead, baseBranch, cwd, found);
   if ("done" in resolved) return resolved.done;
   const diff = resolved.diff;
 
-  // Prior sticky (memory carrier) + in-progress post (marker rides along so a
-  // cancel-in-progress mid-review keeps memory intact) + the bot's prior threads.
-  const found = await locatePrior(octokit, target, inputs.reviewMemory);
-  const stickyId = await postInProgress(octokit, target, context, found);
-  // Threads carry the author's side of the conversation; classify which of them the
-  // author has SETTLED without resolving on GitHub (an authorized `<phrase> dismiss`
-  // reply, or a stalemate the bot already argued once) so those findings stop being
-  // re-raised. Fail-closed on the same permission floor as the @mention re-trigger.
-  const priorThreads = await classifyDismissals(await fetchReviewThreads(octokit, target), {
+  // In-progress post (marker rides along so a cancel-in-progress mid-review keeps
+  // memory intact), then the threads the sticky's own author rooted — anyone can post
+  // a comment carrying the fp marker, so the marker alone is no proof of ownership.
+  const sticky = await postInProgress(octokit, target, context, found);
+  const stickyId = sticky.stickyId;
+  // Threads carry the author's side of the conversation; classify which of them are
+  // SETTLED (an authorized resolution or `<phrase> dismiss` reply, or a stalemate the
+  // bot already argued once) so those findings stop being re-raised. Fail-closed on
+  // the same permission floor as the @mention re-trigger.
+  const ownThreads = await fetchReviewThreads(octokit, target, sticky.botLogin);
+  const priorThreads = await classifyDismissals(ownThreads, {
     triggerPhrase: inputs.triggerPhrase,
     minPermission: inputs.minTriggerPermission,
     lookupPermission: deps.lookupPermission,
@@ -114,7 +125,7 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     cwd,
   });
   // Tree scope may recover the previously reviewed commit from origin.
-  const scope = incrementalScope(deps, found, reviewHead, cwd);
+  const scope = incrementalScope(deps, found, reviewHead, diff.base_sha, cwd);
   const scoped =
     treeScope === null ? { diff, carried: [] } : filterDiffToScope(diff, treeScope.inScope);
   if (scoped.carried.length > 0) {
@@ -139,6 +150,8 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     ...prText(context),
   });
 
+  // A push during the review: the newer head's run owns the verdict, label and marker.
+  if (await staleHead({ target, lookupHeadSha: deps.lookupHeadSha }, reviewedSha)) return STALE;
   return publish({
     octokit,
     context,
@@ -214,6 +227,7 @@ function incrementalScope(
   deps: ReviewDeps,
   found: PriorSticky,
   reviewHead: string,
+  baseSha: string,
   cwd: string,
 ): IncrementalScope | null {
   if (!deps.inputs.reviewMemory || deps.context.eventName !== "pull_request") return null;
@@ -221,6 +235,7 @@ function incrementalScope(
     reviewedSha: found.prior?.reviewed_sha,
     reviewHead,
     excludeGlobs: deps.inputs.excludeGlobs,
+    baseSha,
     cwd,
   });
 }
@@ -248,11 +263,16 @@ async function resolveTrigger(deps: ReviewDeps): Promise<EventResolution | null>
   return event;
 }
 
+/** The result of a run that wrote nothing because a newer head owns the PR. */
+const STALE: ReviewResult = { verdict: "skip", findingsCount: 0, commentUrl: "" };
+
 /**
  * Fetch the diff (throws DiffResolutionError on an unresolvable base) and handle
- * the two non-review outcomes, posting the matching comment: a MAX_FILES/fetch
- * skip signal, or a diff with no file changes (approved no-op). Returns either
- * `{ done }` (a skip result to return as-is) or `{ diff }` (proceed to review).
+ * the two non-review outcomes, updating the located sticky in place (its marker
+ * carried as the last line): a MAX_FILES/fetch skip signal — which also takes any
+ * approval away, since nobody reviewed this head — or a diff with no file changes
+ * (approved no-op). Returns either `{ done }` (a skip result to return as-is) or
+ * `{ diff }` (proceed to review).
  */
 async function resolveDiffOrSkip(
   deps: ReviewDeps,
@@ -260,6 +280,7 @@ async function resolveDiffOrSkip(
   reviewHead: string,
   baseBranch: string,
   cwd: string,
+  found: PriorSticky,
 ): Promise<{ done: ReviewResult } | { diff: DiffData }> {
   const { inputs, octokit, context } = deps;
   const diff = fetchDiff({
@@ -271,15 +292,19 @@ async function resolveDiffOrSkip(
     githubBaseRef: baseBranch,
     cwd,
   });
+  const labels = { manageLabels: inputs.manageLabels };
   if (diff.error !== undefined) {
     process.stderr.write(`[SKIP] ${diff.error}\n`);
-    const url = await upsertComment(octokit, target, skipBody(context, diff.error), undefined);
+    const body = skipBody(context, diff.error, found.priorMarker);
+    const url = await upsertComment(octokit, target, body, found.stickyId);
+    await setVerdictLabel(octokit, "error", target, labels); // error → request-changes
     return { done: { verdict: "skip", findingsCount: 0, commentUrl: url } };
   }
   if (diff.total_files === 0) {
     process.stderr.write("[SKIP] No file changes to review\n");
-    const url = await upsertComment(octokit, target, noopBody(context), undefined);
-    await setVerdictLabel(octokit, "approved", target, { manageLabels: inputs.manageLabels });
+    const body = noopBody(context, found.priorMarker);
+    const url = await upsertComment(octokit, target, body, found.stickyId);
+    await setVerdictLabel(octokit, "approved", target, labels);
     return { done: { verdict: "skip", findingsCount: 0, commentUrl: url } };
   }
   return { diff };

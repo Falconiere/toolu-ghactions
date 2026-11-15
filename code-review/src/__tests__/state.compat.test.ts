@@ -139,7 +139,10 @@ describe("golden fingerprint hexes are unchanged by the s2 marker-fields diff (A
         category: "correctness",
         text: "Unicode PATH and 中文文本 mixed.",
       },
-      fp: "8fc230a23619b60b5c8cef3d4b2c8ab160d29999",
+      // The ONE intentional change: its finding TEXT carries CJK letters, which normText
+      // now keeps (they used to be deleted, so every non-Latin text collided). Previous
+      // value 8fc230a23619b60b5c8cef3d4b2c8ab160d29999; ASCII-text goldens are untouched.
+      fp: "aa7b30cf88ebd5a8533cb1ca43159f6482d38f11",
     },
   ];
 

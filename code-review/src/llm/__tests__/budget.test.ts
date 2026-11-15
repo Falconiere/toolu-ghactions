@@ -72,6 +72,17 @@ const ECHOED_PAYLOAD_400 = JSON.stringify({
   },
 });
 
+/** OpenRouter's real context-window refusal: `{message, code}` only, no type/param. */
+const CONTEXT_LENGTH_400 = JSON.stringify({
+  error: {
+    message:
+      "This endpoint's maximum context length is 20000 tokens. However, you requested about " +
+      "21000 tokens (4616 of text input, 16384 in the output). Please reduce the length of " +
+      'either one, or use the "middle-out" transform to compress your prompt automatically.',
+    code: 400,
+  },
+});
+
 /** A provider that names the offending parameter STRUCTURALLY instead of in prose. */
 const PARAM_ONLY_400 = JSON.stringify({
   error: {
@@ -196,10 +207,10 @@ describe("the provider's own max_tokens cap (AC-7)", () => {
     expect(result.failure).toBe("transport");
   }, 20_000);
 
-  it("does NOT treat a 429 echoing max_tokens as a cap", async () => {
-    // A rate limit that quotes the request body is still a rate limit. Treating it as a
-    // cap would end the review early with a partial when a retry was the right answer,
-    // so it stays a transport failure — the prefix is not laundered into a verdict.
+  it("does NOT treat a 429 echoing max_tokens as a cap, but keeps the retained prefix", async () => {
+    // A rate limit that quotes the request body is still a rate limit, never a cap: the
+    // result must not claim the budget is exhausted. The two findings the first call DID
+    // complete are kept, with the retry's failure appended.
     const { fetch: fetchImpl, bodies } = scripted((call, init) =>
       call === 0
         ? replayCompletion(fixture("truncated-findings"), init)
@@ -215,10 +226,38 @@ describe("the provider's own max_tokens cap (AC-7)", () => {
     });
 
     expect(bodies).toHaveLength(2);
-    expect(result.verdict).toBe("error");
-    expect(result.partial).toBeUndefined();
+    expect(result.verdict).toBe("changes");
+    expect(result.partial).toBe(true);
+    expect(result.findings).toHaveLength(2);
     expect(result.budgetExhausted).toBeUndefined();
-    expect(result.failure).toBe("transport");
+    expect(result.error ?? "").not.toContain("at its ceiling");
+    expect(result.error).toContain("The retry then failed");
+  }, 20_000);
+
+  it("keeps the retained prefix when the escalated call hits the context length", async () => {
+    // Attempt 1 truncates with two findings complete; the doubled budget no longer fits the
+    // context window and OpenRouter refuses it. Not a max_tokens cap (the complaint names
+    // the context length), but the findings already received must not be thrown away.
+    const { fetch: fetchImpl, bodies } = scripted((call, init) =>
+      call === 0
+        ? replayCompletion(fixture("truncated-findings"), init)
+        : new Response(CONTEXT_LENGTH_400, { status: 400, headers: JSON_HEADERS }),
+    );
+
+    const result = await reviewWithModel(ENVELOPE, {
+      model: "deepseek/deepseek-v4-flash",
+      apiKey: "sk-test",
+      fetch: fetchImpl,
+      maxRetries: 0,
+      maxAttempts: 1,
+    });
+
+    expect(bodies).toHaveLength(2);
+    expect(result.verdict).toBe("changes");
+    expect(result.partial).toBe(true);
+    expect(result.findings.map((f) => f.path)).toEqual(["src/auth.ts", "src/db.ts"]);
+    expect(result.budgetExhausted).toBeUndefined();
+    expect(result.error).toContain("The retry then failed: HTTP 400: This endpoint's maximum");
   }, 20_000);
 
   it("keys the predicate on status AND text, over real APICallError instances", async () => {
@@ -295,8 +334,8 @@ describe("isProviderCap reads the provider's OWN complaint, not the raw body", (
     // 2 gets an unrelated 400 from a payload-echoing gateway. reviewWithModel used to take
     // the `isProviderCap(err) && best !== undefined` branch and salvage as budget-exhausted,
     // so the PR comment claimed "the output budget is at its ceiling (131072)" while the real
-    // budget was 16384 and the provider's real message never reached the reader. It must
-    // stay the honest transport abstention, exactly like the 429 case above.
+    // budget was 16384 and the provider's real message never reached the reader. The prefix
+    // is kept as a plain truncation salvage, exactly like the 429 case above.
     const { fetch: fetchImpl, bodies } = scripted((callIndex, init) =>
       callIndex === 0
         ? replayCompletion(fixture("truncated-findings"), init)
@@ -312,10 +351,10 @@ describe("isProviderCap reads the provider's OWN complaint, not the raw body", (
     });
 
     expect(bodies).toHaveLength(2);
-    expect(result.verdict).toBe("error");
-    expect(result.partial).toBeUndefined();
+    expect(result.verdict).toBe("changes");
+    expect(result.partial).toBe(true);
+    expect(result.findings).toHaveLength(2);
     expect(result.budgetExhausted).toBeUndefined();
-    expect(result.failure).toBe("transport");
     expect(result.error ?? "").not.toContain("at its ceiling");
   }, 20_000);
 });

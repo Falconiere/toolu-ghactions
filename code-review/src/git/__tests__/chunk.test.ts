@@ -1,4 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
+import { chmodSync } from "node:fs";
+import { join } from "node:path";
 import { fetchDiff } from "@/git/diff.js";
 import { splitDiffByFile, packChunks } from "@/git/chunk.js";
 import type { FileSegment } from "@/git/chunk.js";
@@ -35,6 +37,40 @@ function diffOf(dir: string): string {
 }
 
 describe("splitDiffByFile", () => {
+  it("names segments with no ---/+++ headers: empty add/delete and mode-only", () => {
+    /** A PR that chmods a.sh and makes `change` to the base's empty gone.txt. */
+    function headerless(change: (dir: string) => void): string[] {
+      const dir = setupGitRepo();
+      repos.push(dir);
+      writeFile(dir, "gone.txt", "");
+      writeFile(dir, "a.sh", "echo hi\n");
+      git(dir, "add", "-A");
+      git(dir, "commit", "-m", "base", "--quiet");
+      git(dir, "checkout", "-b", "feature", "--quiet");
+      chmodSync(join(dir, "a.sh"), 0o755);
+      change(dir);
+      git(dir, "add", "-A");
+      git(dir, "commit", "-m", "headerless segments", "--quiet");
+      return splitDiffByFile(diffOf(dir)).map((s) => s.path);
+    }
+
+    expect(headerless((dir) => git(dir, "rm", "--quiet", "gone.txt"))).toEqual([
+      "a.sh",
+      "gone.txt",
+    ]);
+    expect(headerless((dir) => writeFile(dir, "pkg/__init__.py", ""))).toEqual([
+      "a.sh",
+      "pkg/__init__.py",
+    ]);
+    // Both at once: -M pairs the two empty blobs as an exact rename, keyed by `rename to`.
+    expect(
+      headerless((dir) => {
+        git(dir, "rm", "--quiet", "gone.txt");
+        writeFile(dir, "pkg/__init__.py", "");
+      }),
+    ).toEqual(["a.sh", "pkg/__init__.py"]);
+  });
+
   it("round-trips: joining segment diffs reproduces the input exactly", () => {
     const diff = diffOf(repoWithFiles(4, 5));
     const segments = splitDiffByFile(diff);

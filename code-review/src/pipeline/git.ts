@@ -102,15 +102,19 @@ export function resolveHeadSha(reviewHead: string, contextSha: string, cwd: stri
  * is missing, unresolvable, or not an ancestor of the review head (rebase /
  * force-push rewrote history). An EMPTY map is a real result: nothing changed
  * since the last review, so no genuinely new finding can exist.
+ *
+ * `baseSha` is the PR base (`DiffData.base_sha` of the full diff): the since-diff's
+ * own base is a PR commit, so `.gitattributes` must be read from this one instead.
  */
 export function sinceChangedLines(opts: {
   reviewedSha: string | undefined;
   reviewHead: string;
   excludeGlobs: string[];
+  baseSha: string;
   cwd: string;
 }): Map<string, Set<number>> | null {
-  const { reviewedSha, reviewHead, excludeGlobs, cwd } = opts;
-  if (reviewedSha === undefined || reviewedSha === "") return null;
+  const { reviewedSha, reviewHead, excludeGlobs, baseSha, cwd } = opts;
+  if (reviewedSha === undefined || reviewedSha === "" || baseSha === "") return null;
   if (gitOrNull(["rev-parse", "--verify", `${reviewedSha}^{commit}`], cwd) === null) return null;
   if (gitOrNull(["merge-base", "--is-ancestor", reviewedSha, reviewHead], cwd) === null) {
     process.stderr.write(
@@ -123,6 +127,7 @@ export function sinceChangedLines(opts: {
       baseBranch: reviewedSha,
       reviewHead,
       githubBaseRef: reviewedSha,
+      trustedBase: baseSha,
       excludeGlobs,
       maxFiles: 0,
       maxDiffLines: 0,

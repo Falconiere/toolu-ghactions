@@ -28,6 +28,10 @@ function stamped(over: Partial<StampedFinding> = {}): StampedFinding {
 const ledger = (entries: [string, CoverageLedger["entries"][string]][]): CoverageLedger =>
   buildLedger(entries);
 
+/** A ledger listing `paths` as carried — still in the PR, not reviewed this round. */
+const carried = (...paths: string[]): CoverageLedger =>
+  ledger(paths.map((p) => [p, { status: "carried" }]));
+
 describe("carryForward", () => {
   it("re-injects a well-formed prior finding on a path that was NOT reviewed", () => {
     const prior: StoredFinding[] = JSON.parse(
@@ -53,13 +57,16 @@ describe("carryForward", () => {
     expect(r.carriedWithoutFinding).toEqual([]);
   });
 
-  it("re-injects a prior finding whose path the ledger never mentions", () => {
-    // A path no stratum recorded is by definition a path nothing reviewed.
+  it("drops a prior finding whose path left the PR", () => {
+    // The ledger lists every base..head path (changed, carried, binary, dropped), so a
+    // path it never mentions no longer differs from base: reverted or renamed away.
     const prior: StoredFinding[] = JSON.parse(
-      '[{"path":"src/unknown.ts","line":1,"severity":"nit","text":"stray","fp":"fp-unknown"}]',
+      '[{"path":"src/unknown.ts","line":1,"severity":"nit","text":"stray","fp":"fp-unknown"},' +
+        '{"path":"src/gone.ts","severity":"BAD"}]',
     );
     const r = carryForward({ modelFindings: [], priorFindings: prior, ledger: ledger([]) });
-    expect(r.findings.map((f) => f.fp)).toEqual(["fp-unknown"]);
+    expect(r.findings).toEqual([]);
+    expect(r.carriedWithoutFinding).toEqual([]);
   });
 
   it("never re-injects a prior finding on a REVIEWED path", () => {
@@ -87,7 +94,12 @@ describe("carryForward", () => {
         {"path":"src/no-fp.ts","line":5,"severity":"low","text":"unstamped"},
         {"line":6,"severity":"low","text":"pathless","fp":"fp-6"}]`,
     );
-    const r = carryForward({ modelFindings: [], priorFindings: prior, ledger: ledger([]) });
+    const paths = ["src/no-line.ts", "src/bad-sev.ts", "src/empty.ts", "src/str-line.ts"];
+    const r = carryForward({
+      modelFindings: [],
+      priorFindings: prior,
+      ledger: carried(...paths, "src/no-fp.ts"),
+    });
     expect(r.findings).toEqual([]);
     expect(r.carriedWithoutFinding).toEqual([
       "src/bad-sev.ts",
@@ -102,7 +114,11 @@ describe("carryForward", () => {
     const prior: StoredFinding[] = JSON.parse(
       '[{"path":"src/x.ts","line":1,"severity":"low","text":"ok","fp":"fp-x","__proto_ish":"<img onerror>","suggestion":"const a = 1;"}]',
     );
-    const r = carryForward({ modelFindings: [], priorFindings: prior, ledger: ledger([]) });
+    const r = carryForward({
+      modelFindings: [],
+      priorFindings: prior,
+      ledger: carried("src/x.ts"),
+    });
     expect(r.findings).toEqual([
       {
         path: "src/x.ts",
@@ -130,7 +146,11 @@ describe("carryForward", () => {
         {"path":["src/a.ts"],"line":5,"severity":"low","text":"array path","fp":"fp-array"},
         {"path":"src/good.ts","line":6,"severity":"low","text":"keeps its path","fp":"fp-good"}]`,
     );
-    const r = carryForward({ modelFindings: [], priorFindings: prior, ledger: ledger([]) });
+    const r = carryForward({
+      modelFindings: [],
+      priorFindings: prior,
+      ledger: carried("src/good.ts"),
+    });
 
     // Only the one with a real path survives…
     expect(r.findings.map((f) => f.fp)).toEqual(["fp-good"]);
@@ -160,7 +180,7 @@ describe("carryForward", () => {
     const r = carryForward({
       modelFindings: [model],
       priorFindings: prior,
-      ledger: ledger([["src/dup.ts", { status: "carried" }]]),
+      ledger: carried("src/dup.ts", "src/junk.ts"),
     });
     expect(r.findings).toEqual([model]);
     expect(r.carriedWithoutFinding).toEqual(["src/junk.ts"]);

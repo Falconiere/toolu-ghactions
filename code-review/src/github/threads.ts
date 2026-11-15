@@ -8,10 +8,12 @@
 //   - replyToThread:      REST reply on the root comment — the bot's counter-reasoning
 //     posted IN the existing thread instead of opening a duplicate.
 //
-// All best-effort: the caller treats failures as non-fatal (the summary comment is
-// always the authority). Only threads carrying the bot's hidden fingerprint marker
-// (see fpmarker.ts) are returned — human review threads are not the bot's to manage.
+// The two mutations are best-effort (the summary comment is always the authority); the
+// read fails loudly on its first page (see fetchReviewThreads). Only threads the bot
+// rooted, carrying its hidden fingerprint marker (see fpmarker.ts), are returned —
+// human review threads are not the bot's to manage.
 import { z } from "zod";
+import { errorMessage } from "@/errors.js";
 import { extractFpMarker } from "@/review/fpmarker.js";
 
 /** A bot-authored review thread observed on the PR, normalised for reconciliation. */
@@ -28,16 +30,22 @@ export interface PriorThread {
   line: number | null;
   /** GitHub-side resolved flag (a resolved thread is not re-resolved or replied to). */
   isResolved: boolean;
+  /** Login that resolved the thread (GraphQL `resolvedBy`; an App reads `name[bot]`),
+   *  "" when unresolved or the API does not say. Whether that resolution SETTLES the
+   *  finding is decided by classifyDismissals (`dismissal: "resolved"`), never here. */
+  resolvedBy: string;
   /** GitHub-side outdated flag (the anchored hunk was superseded by a later push). */
   isOutdated: boolean;
   /**
-   * Author-side dismissal detected on an UNRESOLVED thread — set by
+   * How the thread was SETTLED — set by
    * {@link import("@/review/dismissal.js").classifyDismissals}, never by the
    * GraphQL read. `"explicit"` = an authorized `<TRIGGER_PHRASE> dismiss` reply;
+   * `"resolved"` = resolved on GitHub by a human who clears MIN_TRIGGER_PERMISSION;
    * `"exhausted"` = the bot already argued the point and the author answered
-   * again. Undefined on a thread with neither.
+   * again. Undefined when nothing settled it — including a thread resolved by the
+   * bot itself, by a login below the floor, or by an unknown resolver.
    */
-  dismissal?: "explicit" | "exhausted";
+  dismissal?: "explicit" | "resolved" | "exhausted";
   /** The root comment body (the bot's original finding, marker included). */
   rootBody: string;
   /** Comments after the root, in order — the conversation (author + bot replies). */
@@ -55,8 +63,9 @@ export interface ThreadComment {
 /**
  * The bot's durable acknowledgement that a finding no longer applies. Publishing
  * the reply and resolving its thread are separate best-effort API calls, so the
- * reply can land while the mutation fails. On a later run this exact bot-authored
- * note is treated as a pending resolution and the mutation is retried.
+ * reply can land while the mutation fails. On a later run the thread is still open:
+ * it resolves again if its finding is still gone (without repeating this note), and is
+ * the finding's open thread if the finding is back. The note itself never settles.
  */
 export const ACCEPTED_RESOLUTION_NOTE =
   "Re-reviewed — this no longer applies (addressed, or point taken). Resolving.";
@@ -71,6 +80,12 @@ export function hasAcceptedResolutionNote(thread: PriorThread): boolean {
   return thread.replies.some(
     (reply) => reply.author === thread.botLogin && reply.body.trim() === ACCEPTED_RESOLUTION_NOTE,
   );
+}
+
+/** A login without GitHub's `[bot]` suffix. REST and `resolvedBy` spell an App's
+ *  login `name[bot]`; GraphQL comment authors spell the same identity `name`. */
+export function bare(login: string): string {
+  return login.replace(/\[bot\]$/, "");
 }
 
 /** Repo + PR coordinates a thread operation targets. */
@@ -98,10 +113,11 @@ export interface ThreadClient {
 
 // --- GraphQL response shape for the reviewThreads query (only the fields we select).
 // A graphql() result is untrusted external data, so it is zod-validated rather than cast:
-// a malformed page is dropped (safeParse fail → break) instead of throwing or NPE'ing. ---
+// a malformed page is a read failure (see fetchReviewThreads), never an NPE. ---
 const GqlThreadSchema = z.object({
   id: z.string(),
   isResolved: z.boolean(),
+  resolvedBy: z.object({ login: z.string() }).nullable().optional(),
   isOutdated: z.boolean(),
   path: z.string(),
   line: z.number().nullable(),
@@ -130,6 +146,9 @@ const GqlResponseSchema = z.object({
     .nullable(),
 });
 type GqlThread = z.infer<typeof GqlThreadSchema>;
+type GqlConnection = NonNullable<
+  NonNullable<z.infer<typeof GqlResponseSchema>["repository"]>["pullRequest"]
+>["reviewThreads"];
 
 const THREADS_QUERY = `
   query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
@@ -140,6 +159,7 @@ const THREADS_QUERY = `
           nodes {
             id
             isResolved
+            resolvedBy { login }
             isOutdated
             path
             line
@@ -163,47 +183,64 @@ const RESOLVE_MUTATION = `
 
 /**
  * Fetch the bot's own inline review threads (paginated), normalised to {@link PriorThread}.
- * A thread is kept only when its FIRST comment carries the bot's fingerprint marker AND a
- * usable root databaseId — i.e. it is a bot finding we can later reply to or resolve. Human
- * threads and malformed nodes are dropped. Never throws: a failure on the FIRST call yields
- * `[]` so a re-review degrades to the old "post fresh" behaviour rather than failing the job,
- * and a failure MID-PAGINATION (e.g. a 403 secondary rate limit on page 2) degrades to the
- * pages already fetched — discarding them would make the caller treat every known finding as
- * brand new, re-posting duplicates and losing every settlement.
+ * A thread is kept only when its FIRST comment carries the fingerprint marker, a usable root
+ * databaseId, AND was posted by `botLogin` — the sticky comment's author (compared {@link
+ * bare}). Anyone can post an inline comment carrying the marker, so the marker alone proves
+ * nothing. An empty `botLogin` (no bot-authored sticky yet) reads nothing.
+ *
+ * A failure on the FIRST page (a throw, a malformed body, no pull request) THROWS: "no
+ * threads" would make the review re-post every finding as a duplicate and resurrect every
+ * settled one. A failure MID-PAGINATION (e.g. a 403 secondary rate limit on page 2) keeps
+ * the pages already fetched — strictly more information than starting over.
  */
 export async function fetchReviewThreads(
   client: ThreadClient,
   target: ThreadTarget,
+  botLogin: string,
 ): Promise<PriorThread[]> {
+  const bot = bare(botLogin);
+  if (bot === "") return [];
   const threads: PriorThread[] = [];
   let cursor: string | null = null;
-  try {
-    // Bound the pagination loop: 100 threads/page × 20 pages = 2000 threads, far beyond
-    // any real PR, so a malformed endCursor can't spin forever.
-    for (let page = 0; page < 20; page++) {
-      const raw: unknown = await client.graphql(THREADS_QUERY, {
-        owner: target.owner,
-        repo: target.repo,
-        number: target.prNumber,
-        cursor,
-      });
-      const parsed = GqlResponseSchema.safeParse(raw);
-      if (!parsed.success) break;
-      const conn = parsed.data.repository?.pullRequest?.reviewThreads;
-      if (!conn) break;
-      for (const node of conn.nodes) {
-        const parsed = normalizeThread(node);
-        if (parsed) threads.push(parsed);
+  // Bound the pagination loop: 100 threads/page × 20 pages = 2000 threads, far beyond
+  // any real PR, so a malformed endCursor can't spin forever.
+  for (let page = 0; page < 20; page++) {
+    let conn: GqlConnection;
+    try {
+      conn = await readPage(client, target, cursor);
+    } catch (err) {
+      if (page === 0) {
+        throw new Error(`could not read review threads: ${errorMessage(err)}`, { cause: err });
       }
-      if (!conn.pageInfo.hasNextPage) break;
-      cursor = conn.pageInfo.endCursor;
-      if (cursor === null) break;
+      return threads;
     }
-  } catch {
-    // Keep the pages that succeeded — strictly more information than starting over.
-    return threads;
+    for (const node of conn.nodes) {
+      const thread = normalizeThread(node);
+      if (thread && bare(thread.botLogin) === bot) threads.push(thread);
+    }
+    cursor = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
+    if (cursor === null) break;
   }
   return threads;
+}
+
+/** One validated reviewThreads page; throws on a malformed body or a missing PR. */
+async function readPage(
+  client: ThreadClient,
+  target: ThreadTarget,
+  cursor: string | null,
+): Promise<GqlConnection> {
+  const raw: unknown = await client.graphql(THREADS_QUERY, {
+    owner: target.owner,
+    repo: target.repo,
+    number: target.prNumber,
+    cursor,
+  });
+  const parsed = GqlResponseSchema.safeParse(raw);
+  if (!parsed.success) throw new Error("malformed reviewThreads response");
+  const conn = parsed.data.repository?.pullRequest?.reviewThreads;
+  if (!conn) throw new Error("pull request not found");
+  return conn;
 }
 
 /** Normalise one GraphQL thread node, or null when it is not a usable bot thread. */
@@ -220,6 +257,7 @@ function normalizeThread(node: GqlThread): PriorThread | null {
     path: node.path,
     line: node.line,
     isResolved: node.isResolved,
+    resolvedBy: node.resolvedBy?.login ?? "",
     isOutdated: node.isOutdated,
     rootBody: root.body,
     botLogin: root.author?.login ?? "",

@@ -57,8 +57,8 @@ function pr72Repo(): Scratch {
   for (let i = 0; i < PATTERN_FILES; i++) base[modPath(i)] = "pub mod a;\n";
   for (let i = 0; i < RENAMES; i++)
     base[`legacy/m${pad(i)}.ts`] = `export const l${pad(i)} = ${i};\n`;
-  // The two reformat fixtures need an INDENTED line to re-indent — see the
-  // reformat step in the builder below for why it must be indentation only.
+  // The two reformat fixtures — see the reformat step in the builder below for
+  // why it must be trailing whitespace only.
   for (let i = 0; i < 2; i++) base[`fmt/f${i}.ts`] = `export const f${i} = {\n  value: ${i},\n};\n`;
   for (let i = 0; i < SUBSTANTIVE; i++)
     base[substantivePath(i)] = `export const s${pad(i)} = ${i};\n`;
@@ -71,16 +71,16 @@ function pr72Repo(): Scratch {
     for (let i = 0; i < RENAMES; i++) {
       git(dir, "mv", `legacy/m${pad(i)}.ts`, `moved/m${pad(i)}.ts`);
     }
-    // 2 whitespace-only reformats: a 2-space → 4-space RE-INDENT, nothing else.
+    // 2 whitespace-only reformats: trailing whitespace added, nothing else.
     //
-    // These must stay LEADING-whitespace-only. Layer 0 classifies `formatting` by
-    // comparing each removed line to its added counterpart after trimming the ENDS
-    // only (git/patterns.ts `trimEnds`) — internal whitespace is real content, so a
-    // change like `export   const f0   =   0;` is correctly substantive and would
-    // put these two files back into the review diff, breaking the distill counts
-    // and the ledger's `formatting: 2` below.
+    // These must stay TRAILING-whitespace-only. Layer 0 classifies `formatting` by
+    // comparing each removed line to its added counterpart after `trimEnd()` only
+    // (git/distill.ts `isWhitespaceOnly`) — indentation and internal whitespace are
+    // real content, so a re-indent is correctly substantive and would put these two
+    // files back into the review diff, breaking the distill counts and the
+    // ledger's `formatting: 2` below.
     for (let i = 0; i < 2; i++)
-      writeFile(dir, `fmt/f${i}.ts`, `export const f${i} = {\n    value: ${i},\n};\n`);
+      writeFile(dir, `fmt/f${i}.ts`, `export const f${i} = {\n  value: ${i},  \n};\n`);
     // 10 real edits — distinct hunks, so none of them collapses.
     for (let i = 0; i < SUBSTANTIVE; i++) {
       writeFile(dir, substantivePath(i), `export const s${pad(i)} = ${i + 100};\n`);

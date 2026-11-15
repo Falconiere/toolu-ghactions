@@ -65,6 +65,7 @@ describe("reconcile — cluster coverage", () => {
       path: first.path,
       line: first.line + 1,
       isResolved: true,
+      dismissal: "resolved",
     });
     const reps = clusters.map((c) => c.exemplar);
     const context = contextOf(clusters);
@@ -216,7 +217,13 @@ describe("dropSettled — cluster settlement", () => {
     const blocker = members[3];
     if (!hit || !blocker) throw new Error("fixture: members missing");
     expect(blocker.severity).toBe("blocker");
-    const t = thread({ fp: hit.fp, path: hit.path, line: hit.line, isResolved: true });
+    const t = thread({
+      fp: hit.fp,
+      path: hit.path,
+      line: hit.line,
+      isResolved: true,
+      dismissal: "resolved",
+    });
 
     const clustered = dropSettled(
       clusters.map((c) => c.exemplar),
@@ -329,6 +336,7 @@ describe("dropSettled — cluster settlement", () => {
         path: nonBlocker.path,
         line: nonBlocker.line,
         isResolved: true,
+        dismissal: "resolved",
       });
 
       const { kept, suppressed } = dropSettled(
@@ -468,6 +476,7 @@ describe("reconcile — two findings sharing one fingerprint (same defect, two l
       path: second.path,
       line: second.line,
       isResolved: true,
+      dismissal: "resolved",
     });
 
     const { kept, suppressed } = dropSettled(

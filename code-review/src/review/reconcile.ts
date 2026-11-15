@@ -11,11 +11,11 @@
 // A finding maps to a thread by fingerprint (stable across line drift) OR by exact
 // path+line (catches a reworded argument posted at the same spot). A finding that maps to
 // an open thread or one whose settlement covers it is never re-posted, so a settled
-// thread is respected rather than reopened. "Settled" is a GitHub resolution, an author-side
-// dismissal detected in the replies (see review/dismissal.ts), OR the bot's durable
-// acceptance note left behind when an earlier resolve mutation failed. {@link
-// dropSettled} removes those findings BEFORE this plan is built, so a settled thread
-// normally has nothing left matching it and lands in toResolve.
+// thread is respected rather than reopened. "Settled" is whatever review/dismissal.ts
+// stamped in `dismissal`: a GitHub resolution by an authorized human, an authorized
+// dismissal in the replies, or an exhausted argument. The bot's own resolutions (and
+// its acceptance note) never settle. {@link dropSettled} removes settled findings BEFORE
+// this plan is built, so a settled thread normally has nothing left matching it.
 //
 // CLUSTERS (spec §Layer 3). When the caller collapsed this round's findings with
 // review/cluster.ts it passes the cluster REPRESENTATIVES as `findings` plus a
@@ -23,7 +23,7 @@
 // matching ANY member covers the whole cluster while open or legitimately settling it, and resolves only
 // once no member of the cluster it maps to survives. Without a context each
 // finding is its own single-member cluster: every decision stays byte-identical.
-import { hasAcceptedResolutionNote } from "@/github/threads.js";
+import { bare } from "@/github/threads.js";
 import type { PriorThread } from "@/github/threads.js";
 
 /** The finding fields reconciliation needs (validated finding + its attached fingerprint). */
@@ -86,13 +86,20 @@ function matchesNearby(f: ReconcileFinding, t: PriorThread): boolean {
   return category !== null && category === (f.category ?? "").trim().toLowerCase();
 }
 
-/** A settled thread: resolved on GitHub, dismissed by the author, or carrying
- *  the bot's accepted-resolution note after an earlier resolve mutation failed.
- *  In every case the finding is not the bot's to re-raise. Exported so a
+/** A settled thread: classifyDismissals (review/dismissal.ts) stamped a settlement —
+ *  an authorized human resolved it on GitHub or dismissed it, or the argument was
+ *  exhausted. A resolution by the bot itself, by a login below MIN_TRIGGER_PERMISSION
+ *  or by an unknown resolver settles NOTHING. Exported so a
  *  reporting consumer (report/partition.ts) can attribute WHICH thread settled
  *  a suppressed finding without re-deriving this logic. */
 export function isSettled(t: PriorThread): boolean {
-  return t.isResolved || t.dismissal !== undefined || hasAcceptedResolutionNote(t);
+  return t.dismissal !== undefined;
+}
+
+/** True when the bot resolved this thread itself (the "no longer applies" close, or a
+ *  duplicate cleanup) — that thread is closed and hidden, so it cannot host the finding. */
+function resolvedByBot(t: PriorThread): boolean {
+  return t.isResolved && t.resolvedBy !== "" && bare(t.resolvedBy) === bare(t.botLogin);
 }
 
 /**
@@ -215,9 +222,9 @@ function clusterSettled<F extends ReconcileFinding>(
 }
 
 /**
- * Split this run's findings on whether a SETTLED prior thread covers them — one
- * resolved on GitHub, dismissed in a reply (review/dismissal.ts), or carrying the
- * bot's accepted-resolution note after a failed mutation. Each is a decision, so
+ * Split this run's findings on whether a SETTLED prior thread covers them ({@link
+ * isSettled}: resolved by an authorized human, dismissed in a reply, or argued out —
+ * see review/dismissal.ts). Each is a decision, so
  * the finding must vanish everywhere (verdict count, verdict comment, inline
  * posting), not just from re-posting. Matching is {@link matchesSettled} —
  * reconcile()'s strict rules widened with a line radius and an outdated-thread
@@ -274,23 +281,20 @@ export function reconcile<F extends ReconcileFinding>(
     const idx = clusterFor(groups, thread, clusters?.priorClusters);
     const matched = idx >= 0 ? findings[idx] : undefined;
     const group = idx >= 0 ? (groups[idx] ?? []) : [];
-    // A resolved loose-only match cannot host a surviving blocker. Apply the same
+    // A resolved thread covers its match like an open one, unless the bot itself closed
+    // it (a re-raised finding then gets a fresh, visible thread) or a SETTLED resolution
+    // only loosely matches: that cannot host a surviving blocker, so apply the same
     // settlement rules as dropSettled before letting it prevent a fresh comment.
-    if (matched && (!thread.isResolved || clusterSettled(group, thread, clusters?.priorClusters))) {
-      covered.add(idx);
-    }
+    const hosts =
+      !thread.isResolved ||
+      (isSettled(thread)
+        ? clusterSettled(group, thread, clusters?.priorClusters)
+        : !resolvedByBot(thread));
+    if (matched && hosts) covered.add(idx);
     if (thread.isResolved) continue; // respect an existing resolution: never re-act
-    // A blocker that only NEARBY-matches (not exact) stays live even on a noted thread —
-    // the same strict-match-only rule matchesSettled applies to blocker suppression, so a
-    // reworded blocker is never swept into a retried resolve alongside a stale note.
-    const strict = group.some((m) => matches(m, thread));
-    const blockerStillOpen = !strict && group.some((m) => m.severity === "blocker");
-    if (hasAcceptedResolutionNote(thread) && !blockerStillOpen) {
-      // The acknowledgement landed on an earlier run but resolveReviewThread did
-      // not. Retry the mutation even if the model has re-raised the same finding.
-      toResolve.push(thread);
-      continue;
-    }
+    // A thread carrying the bot's accepted note (its resolve mutation failed) needs no
+    // branch of its own: with its finding gone it resolves below, and publish.ts does
+    // not repeat the note; with the finding live again it is that finding's open thread.
     if (!matched) {
       toResolve.push(thread); // finding dropped this run → close the thread (accepted)
       continue;

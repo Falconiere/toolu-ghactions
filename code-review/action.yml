@@ -196,7 +196,7 @@ runs:
     # thread recomputes the verdict from stored findings) — it reviews no code, so every
     # scanner / SARIF step below is skipped on that event.
     - name: Install scanners (pinned release binaries)
-      if: ${{ github.event_name != 'pull_request_review_comment' }}
+      if: ${{ (inputs.RUN_SECRET_SCAN == 'true' || inputs.RUN_SAST == 'true') && github.event_name != 'pull_request_review_comment' }}
       shell: bash
       continue-on-error: true
       run: |
@@ -252,14 +252,20 @@ runs:
     # directory to the mirror root, so mirror-action.sh rewrites `$/code-review/`
     # to `$/` when publishing.
     - name: Sanitize SARIF (clamp sub-1 regions)
-      if: ${{ always() && github.event_name != 'pull_request_review_comment' }}
+      id: sanitize
+      if: ${{ always() && (inputs.RUN_SECRET_SCAN == 'true' || inputs.RUN_SAST == 'true') && github.event_name != 'pull_request_review_comment' }}
       continue-on-error: true   # best-effort like the scanners — never break the review
       uses: $/code-review/sanitize-sarif
       with:
         SRC_DIR: ${{ runner.temp }}
         DEST_DIR: ${{ runner.temp }}/toolu-sarif-upload
+    # Only when the sanitize step copied at least one file: with both scanners off, or
+    # every enabled scanner's install failed, there is nothing to send and upload-sarif
+    # would log "No SARIF files found to upload". A skipped/failed sanitize leaves the
+    # output empty, which a numeric comparison coerces to 0. (The step is already
+    # skipped on `pull_request_review_comment`, because sanitize is.)
     - name: Upload SARIF to Code Scanning
-      if: ${{ always() && github.event_name != 'pull_request_review_comment' }}
+      if: ${{ always() && steps.sanitize.outputs.copied > 0 }}
       continue-on-error: true   # fork PRs / missing `security-events: write` → skip; the review still runs
       uses: github/codeql-action/upload-sarif@v4
       with:

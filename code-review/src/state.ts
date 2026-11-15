@@ -122,14 +122,16 @@ export function completedRounds(state: ReviewState | null | undefined): number {
 
 /**
  * Normalize finding text the way the fingerprint does: lowercase, strip anything
- * but `[a-z0-9 ]`, collapse whitespace, trim, cap at 200 chars. Pure extraction
+ * but Unicode letters/digits and spaces (ASCII-only text normalizes exactly as when
+ * this kept `[a-z0-9 ]`; non-Latin text used to normalize to "" and collide), collapse
+ * whitespace, trim, cap at 200 UTF-16 units (deterministic, even mid-pair). Pure extraction
  * from {@link canonString} (no behavior change — AC-7's golden hexes pin that),
  * exported so review/cluster.ts's near-identical-text check reuses this exact rule.
  */
 export function normText(text: string | undefined): string {
   return (text ?? "")
     .toLowerCase()
-    .replace(/[^a-z0-9 ]/g, "")
+    .replace(/[^\p{L}\p{N} ]/gu, "")
     .replace(/\s+/g, " ")
     .replace(/^ +/, "")
     .replace(/ +$/, "")
@@ -164,14 +166,17 @@ export function encodeMarker(state: ReviewState): string {
 }
 
 /**
- * Decode a comment body (or bare marker) back into state. FAIL-SAFE: a missing
+ * Decode a comment body (or bare marker) back into state. Only a marker that ENDS
+ * the body counts (the sticky always renders it last). FAIL-SAFE: a missing
  * marker, bad base64, bad gzip, invalid JSON, or a payload that inflates past
  * {@link MAX_DECODE_BYTES} (gzip-bomb guard) all yield `{}` — never throws, so a
  * corrupt or hostile marker just starts memory fresh (matches the bash decode).
  */
 export function decodeMarker(body: string): ReviewState | Record<string, never> {
+  // Anchored to the END: the real marker is always the body's last line, while text
+  // rendered above it (findings, paths) may echo a forged one.
   const re = new RegExp(
-    `${escapeRegExp(MARKER_PREFIX)}([A-Za-z0-9+/=]*)${escapeRegExp(MARKER_SUFFIX)}`,
+    `${escapeRegExp(MARKER_PREFIX)}([A-Za-z0-9+/=]*)${escapeRegExp(MARKER_SUFFIX)}\\s*$`,
   );
   const m = body.match(re);
   const payload = m?.[1];
@@ -211,10 +216,11 @@ function escapeRegExp(s: string): string {
  * a marker-less sticky and the next run starts memory-blank (history reset).
  */
 export function extractMarker(body: string): string | null {
+  // End-anchored like decodeMarker: a marker anywhere but last is not ours.
   const re = new RegExp(
-    `${escapeRegExp(MARKER_PREFIX)}[A-Za-z0-9+/=]*${escapeRegExp(MARKER_SUFFIX)}`,
+    `(${escapeRegExp(MARKER_PREFIX)}[A-Za-z0-9+/=]*${escapeRegExp(MARKER_SUFFIX)})\\s*$`,
   );
-  return body.match(re)?.[0] ?? null;
+  return body.match(re)?.[1] ?? null;
 }
 
 /** Inputs to {@link diffState}: prior state, this run's findings, scope, and clock. */

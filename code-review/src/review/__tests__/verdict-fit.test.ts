@@ -6,7 +6,13 @@
 //
 // The ledger sections are rendered by review/ledger.ts from a real
 // `buildRoundLedger` ledger — the exact strings pipeline/publish.ts passes in.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi, afterEach } from "vitest";
+import { createHash } from "node:crypto";
+import * as core from "@actions/core";
+// @actions/core is native ESM, whose namespace is frozen: spy-mode mock so vi.spyOn can
+// redirect core.warning while every export stays the real implementation.
+vi.mock(import("@actions/core"), { spy: true });
+import { boundedMarker } from "@/pipeline/settle.js";
 import { formatVerdict, VerdictIntegrityError, BODY_SIZE_LIMIT } from "@/review/verdict.js";
 import {
   buildRoundLedger,
@@ -17,7 +23,7 @@ import {
 } from "@/review/ledger.js";
 import type { ProviderResult } from "@/llm/reviewWithModel.js";
 import type { Finding } from "@/llm/schema.js";
-import { encodeMarker } from "@/state.js";
+import { decodeMarker, encodeMarker, type ReviewState } from "@/state.js";
 
 const MARKER = encodeMarker({
   schema: "toolu-review-state",
@@ -207,5 +213,80 @@ describe("fitToSizeLimit — VerdictIntegrityError's narrowed condition", () => 
     );
     expect(body).toContain(MARKER);
     expect(lastLine(body)).toBe(MARKER);
+  });
+});
+
+describe("boundedMarker — the state marker cannot sink the verdict body", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** `n` findings whose text is high-entropy (sha256 hex, ~390 chars each once stored);
+   *  the first `blockers` are blockers, the rest alternate high/low. */
+  function stateOf(n: number, blockers: number): ReviewState {
+    return {
+      schema: "toolu-review-state",
+      version: 1,
+      findings: Array.from({ length: n }, (_, i) => ({
+        path: `src/m${i % 40}.ts`,
+        line: 1 + i,
+        severity: i < blockers ? "blocker" : i % 2 === 0 ? "high" : "low",
+        category: "correctness",
+        confidence: "high",
+        text: Array.from({ length: 5 }, (_, j) =>
+          createHash("sha256").update(`${i}:${j}`).digest("hex"),
+        ).join(" "),
+        fp: createHash("sha1").update(String(i)).digest("hex"),
+      })),
+      history: [],
+      rounds: 3,
+    };
+  }
+
+  it("800 high-entropy findings: the body publishes, every blocker survives, one warning", () => {
+    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+    // Premise: the unbounded marker alone overflows the body (the old failure).
+    expect(() =>
+      formatVerdict(
+        { ...CHANGES, findings: findings(10) },
+        { historyMarker: encodeMarker(stateOf(800, 20)) },
+      ),
+    ).toThrow(VerdictIntegrityError);
+
+    const marker = boundedMarker(stateOf(800, 20));
+    const { body } = formatVerdict(
+      { ...CHANGES, findings: findings(10) },
+      { historyMarker: marker },
+    );
+    expect(body.length).toBeLessThanOrEqual(BODY_SIZE_LIMIT);
+    expect(lastLine(body)).toBe(marker);
+
+    const kept = decodeMarker(marker);
+    const stored = "findings" in kept ? kept.findings : [];
+    expect(stored.filter((f) => f["severity"] === "blocker")).toHaveLength(20);
+    expect(stored.length).toBeLessThan(800);
+    expect("rounds" in kept ? kept.rounds : undefined).toBe(3);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/dropped \d+ of 800/));
+  });
+
+  it("an oversized state with no findings is returned as is, with no warning", () => {
+    // Nothing to drop: the size comes from elsewhere (thousands of unreviewed paths), so
+    // claiming "dropped 0 of 0 remembered findings" would be noise.
+    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+    const state: ReviewState = {
+      ...stateOf(0, 0),
+      unreviewed_paths: Array.from({ length: 6000 }, (_, i) => `src/${i}-${i * 7919}.ts`),
+    };
+    expect(encodeMarker(state).length).toBeGreaterThan(BODY_SIZE_LIMIT / 2);
+    expect(boundedMarker(state)).toBe(encodeMarker(state));
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("a normal-sized state encodes byte-identically, with no warning", () => {
+    const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+    const state = stateOf(30, 3);
+    expect(boundedMarker(state)).toBe(encodeMarker(state));
+    expect(warn).not.toHaveBeenCalled();
   });
 });

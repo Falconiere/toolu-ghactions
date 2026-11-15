@@ -191,15 +191,17 @@ header for the full story, this is just the index).
 - **`reviewWithModel.ts`** — the OpenRouter `generateObject` call
   (timeout/abort, retries, budget escalation, salvage, abstain). A failed
   call's error result carries `failure: "schema" | "transport" | "timeout"`
-  so callers can tell a bisectable failure from one that isn't.
+  so callers can tell a bisectable failure from one that isn't. Reviews stream
+  through `streamVerdict.ts`, which rejects a response whose JSON never closed.
 - **`merge.ts`** — combines a chunked review's per-package `ProviderResult`s
   into one: partial failure keeps every success and only reports `error`
   when **every** package failed.
 
 ### `src/state.ts`
-- The sticky-comment marker: `fingerprint()`/`normText` (byte-compat,
-  **never modified**), `encodeMarker`/`decodeMarker` (gzip+base64,
-  fail-safe on a corrupt or hostile marker), and `diffState()` — the *sole*
+- The sticky-comment marker: `fingerprint()`/`normText` (ASCII-only text hashes
+  byte-identically to every earlier release; Unicode letters and digits are kept so
+  non-Latin findings stay distinct), `encodeMarker`/`decodeMarker` (gzip+base64,
+  fail-safe on a corrupt or hostile marker; only a marker that ends the body is read), and `diffState()` — the *sole*
   carrier of every marker field into `next_state`; a field not threaded
   through `DiffInput` here is dropped on the next round. See
   [Marker contract](#marker-contract-statets) below.
@@ -235,6 +237,7 @@ reading an old marker both work) carries:
 |---|---|---|
 | `findings` | every run | This round's full finding list (fingerprint-stamped), post-cluster-expansion. |
 | `history` | **complete** runs only | Capped at the last 10 entries; a partial run appends **nothing**, so a resumed round never burns a `MAX_ROUNDS` slot. |
+| `rounds` | **complete** runs only | Monotonic count of complete rounds — the `MAX_ROUNDS` counter, uncapped (unlike `history`). Read through `completedRounds()`, which falls back to `history.length` for a marker written before this field. |
 | `reviewed_sha` | **complete** runs only | Full head sha; drives the **line-level** `IncrementalScope` (`sinceChangedLines`, `pipeline/git.ts`). |
 | `reviewed_tree` | **complete** runs only | Root **tree** sha; drives the **file-set** scope (`resolveTreeScope`, `pipeline/scope.ts`). Constant-size regardless of PR size. |
 | `unreviewed_paths` | every run (threaded straight from the caller) | Attempted-and-failed paths this round; empty → **omitted** (an absent field is how a completing round clears the prior round's exceptions). |

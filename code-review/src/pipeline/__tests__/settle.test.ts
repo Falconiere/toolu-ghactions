@@ -19,6 +19,9 @@ import type { ActionInputs } from "@/inputs.js";
 import type { BlockableVerdict } from "@/review/gate.js";
 import type { ReviewState, HistoryEntry, Finding as StoredFinding } from "@/state.js";
 import { fingerprint } from "@/state.js";
+import { validate } from "@/pipeline/validate.js";
+import { shapeDiff } from "@/git/shape.js";
+import { labelAndBadge } from "@/review/verdict.js";
 
 /** ActionInputs with the review-memory knobs this suite drives, overridable. */
 function inputsWith(over: Partial<ActionInputs> = {}): ActionInputs {
@@ -183,6 +186,8 @@ function settle(opts: {
   selfNegating?: number;
   /** Count the source-evidence gate dropped as unverifiable quotes (default none). */
   unverifiedEvidence?: number;
+  /** Count validateFindings dropped as unanchored or below MIN_CONFIDENCE (default none). */
+  discardedFindings?: number;
   jevDismissed?: number;
   /** The marker's monotonic completed-round counter (state.ts `rounds`). Omit it to
    *  build a marker written BEFORE that field existed, whose round count falls back
@@ -224,6 +229,9 @@ function settle(opts: {
       ...(opts.unverifiedEvidence === undefined
         ? {}
         : { unverifiedEvidence: opts.unverifiedEvidence }),
+      ...(opts.discardedFindings === undefined
+        ? {}
+        : { discardedFindings: opts.discardedFindings }),
       enhancement: {
         assessed: 1,
         rechecked: 1,
@@ -268,6 +276,72 @@ describe("settleVerdict — MAX_ROUNDS surrender vs the coverage degrade", () =>
     expect(settled.verdict).toBe("error");
     expect(settled.validated.verdict).toBe("error");
     expect(settled.validated.error).toContain("no source-validated actionable findings");
+    expect(labelAndBadge(settled.validated.verdict, settled.validated.failure).badge).toBe(
+      "🚫 Review incomplete — provider error",
+    );
+  });
+
+  it("names the discarded findings when the gate leaves a `changes` verdict with none", () => {
+    // The provider answered in full; the local MIN_CONFIDENCE gate discarded its only
+    // finding. Same verdict and label as a bare `changes`, but not a "provider error".
+    const raw = [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "@@ -11,0 +12,1 @@",
+      "+const timeoutMs = retries * 1000;",
+    ].join("\n");
+    const shaped = shapeDiff(raw);
+    const gated = validate(
+      {
+        verdict: "changes",
+        findings: [
+          {
+            path: "src/a.ts",
+            line: 12,
+            severity: "high",
+            confidence: "medium",
+            quoted_line: "const timeoutMs = retries * 1000;",
+            text: "The timeout grows linearly with retries and is never capped.",
+          },
+        ],
+      },
+      {
+        diff: shaped.diff,
+        files: shaped.files,
+        changed_files: ["src/a.ts"],
+        binary_files: [],
+        dropped_files: [],
+        renames: [],
+        total_lines: 1,
+        total_files: 1,
+        truncated: false,
+        base_sha: "base123",
+      },
+      inputsWith({ minConfidence: "high" }),
+      [],
+    );
+    expect(gated.stamped).toEqual([]);
+
+    const settled = settle({
+      findings: gated.stamped,
+      reviewed: ["src/a.ts"],
+      unreviewed: [],
+      maxRounds: 0,
+      priorRounds: 0,
+      discardedFindings: gated.discarded,
+    });
+
+    expect(settled.verdict).toBe("error");
+    expect(settled.validated.verdict).toBe("error");
+    expect(settled.validated.error).toBe(
+      "Model requested changes, but its 1 finding(s) were discarded " +
+        "(below MIN_CONFIDENCE or not anchored to the diff).",
+    );
+    expect(labelAndBadge(settled.validated.verdict, settled.validated.failure)).toEqual({
+      label: "request-changes",
+      badge: "🚫 Review incomplete — findings discarded",
+    });
   });
 
   it("the coverage degrade runs LAST and overrides the round cap's approval (decided order)", () => {
@@ -395,6 +469,9 @@ describe("settleVerdict — the coverage degrade on its own", () => {
     });
     expect(settled.verdict).toBe("error");
     expect(settled.validated.error).toContain("no source-validated actionable findings");
+    expect(labelAndBadge(settled.validated.verdict, settled.validated.failure).badge).toBe(
+      "🚫 Review incomplete — provider error",
+    );
   });
 
   it("a carried finding holds the prior round's `changes`, and validated.verdict agrees", () => {

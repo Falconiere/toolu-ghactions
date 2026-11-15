@@ -68,6 +68,26 @@ const ProviderErrorBody = z.object({
 });
 
 /**
+ * The provider's OWN structured complaint (`error.message` / `error.param`) out of an HTTP
+ * error body, or undefined for a non-JSON or differently-shaped body — never a throw.
+ * Read directly because the provider SDKs' own error schemas can reject real bodies
+ * (OpenRouter's `{message, code}` lacks the `type`/`param` they require).
+ */
+export function providerError(
+  responseBody: string | undefined,
+): z.infer<typeof ProviderErrorBody>["error"] | undefined {
+  if (responseBody === undefined) return undefined;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(responseBody);
+  } catch {
+    return undefined; // not JSON → no structured complaint to read
+  }
+  const parsed = ProviderErrorBody.safeParse(raw);
+  return parsed.success ? parsed.data.error : undefined;
+}
+
+/**
  * True when the provider's OWN complaint names `max_tokens` — read from the structured
  * `error.message` / `error.param` fields, never from the raw body text.
  *
@@ -78,17 +98,11 @@ const ProviderErrorBody = z.object({
  * thrown away. Non-JSON and differently-shaped bodies return false instead of throwing.
  */
 function providerComplaintNamesMaxTokens(responseBody: string | undefined): boolean {
-  if (responseBody === undefined) return false;
-  let raw: unknown;
-  try {
-    raw = JSON.parse(responseBody);
-  } catch {
-    return false; // not JSON → no structured complaint to read
-  }
-  const parsed = ProviderErrorBody.safeParse(raw);
-  if (!parsed.success) return false;
-  const { message, param } = parsed.data.error;
-  return (message ?? "").includes("max_tokens") || (param ?? "").includes("max_tokens");
+  const complaint = providerError(responseBody);
+  return (
+    (complaint?.message ?? "").includes("max_tokens") ||
+    (complaint?.param ?? "").includes("max_tokens")
+  );
 }
 
 /**

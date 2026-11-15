@@ -9,10 +9,13 @@
 // read. No @actions/core: plain workflow-command writes keep the future bundle lean,
 // matching how the composite's scanner steps log today.
 //
+// The count of copied files is appended to $GITHUB_OUTPUT as `copied=<n>` (the
+// composite skips the Code Scanning upload when it is 0 or unset).
+//
 // ALWAYS exits 0 (best-effort, like the composite's scanner steps) — but every
 // failure mode emits a `::warning` so a silent zero-file run is never mistaken for
 // a healthy one.
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { sanitizeSarif } from "./sanitize.js";
 
@@ -68,6 +71,18 @@ function sanitizeDir(srcDir: string, destDir: string): { copied: number; fixed: 
   return { copied, fixed };
 }
 
+/** Publish `copied` as a step output so the composite skips an upload with nothing to
+ * send. The early-exit paths write nothing — an unset output reads as 0 downstream. */
+function writeCopiedOutput(copied: number): void {
+  const file = process.env["GITHUB_OUTPUT"];
+  if (file === undefined || file === "") return;
+  try {
+    appendFileSync(file, `copied=${copied}\n`);
+  } catch (err) {
+    log("warning", `Could not write GITHUB_OUTPUT: ${message(err)}`);
+  }
+}
+
 function main(): void {
   const srcDir = process.env["INPUT_SRC_DIR"] ?? "";
   const destDir = process.env["INPUT_DEST_DIR"] ?? "";
@@ -92,6 +107,7 @@ function main(): void {
   }
 
   const { copied, fixed } = sanitizeDir(srcDir, destDir);
+  writeCopiedOutput(copied);
   if (copied === 0) {
     log("warning", `No SARIF files copied from '${srcDir}' — Code Scanning upload may be empty.`);
   }

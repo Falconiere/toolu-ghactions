@@ -46,6 +46,7 @@ describe("scenario 14 — merge-gate recomputes settled findings read-only (#123
     const [resolved, dismissed] = round.threads;
     if (!resolved) throw new Error("fixture: missing thread");
     resolved.isResolved = true;
+    resolved.resolvedBy = "human-dev"; // a maintainer (write) resolved it
     dismiss(dismissed);
     const before = writes(round);
 
@@ -162,5 +163,27 @@ describe("scenario 14 — merge-gate recomputes settled findings read-only (#123
       outcome: "unchanged",
       reason: "comments-unreadable",
     });
+  });
+
+  it("AC-2: an unreadable thread list → unchanged comments-unreadable", async () => {
+    const round = await reviewedRound(["medium"]);
+    dismiss(round.threads[0]);
+    const { octokit } = storeWith(round, round.body);
+    octokit.graphql = async () => {
+      throw new Error("HTTP 502: Bad Gateway");
+    };
+    expect(await check(round, { octokit })).toMatchObject({
+      outcome: "unchanged",
+      reason: "comments-unreadable",
+    });
+  });
+
+  it("AC-2: an fp-marked thread a non-bot login rooted is never the bot's to settle", async () => {
+    const round = await reviewedRound(["medium"]);
+    const forged = round.threads[0];
+    if (!forged) throw new Error("fixture: missing thread");
+    forged.botLogin = "mallory";
+    dismiss(forged);
+    expect(await check(round)).toMatchObject({ outcome: "unchanged", reason: "nothing-settled" });
   });
 });

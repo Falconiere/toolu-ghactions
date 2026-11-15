@@ -11,7 +11,7 @@ import { reviewWithModel } from "@/llm/reviewWithModel.js";
 import type { ProviderResult, ReviewOptions } from "@/llm/reviewWithModel.js";
 import type { Finding } from "@/llm/schema.js";
 import { reviewChunked } from "@/review/chunked.js";
-import { validate } from "./validate.js";
+import { changedLinesOf, validate } from "./validate.js";
 import { distill, type Distillation } from "@/git/distill.js";
 import { mapPr, type Brief } from "@/review/cartographer.js";
 import { buildRoundLedger, type CoverageEntry, type CoverageLedger } from "@/review/ledger.js";
@@ -102,8 +102,13 @@ export async function reviewAndValidate(input: ReviewCallInput): Promise<ReviewC
     cwd,
   });
 
-  // Deterministic findings (gitleaks/opengrep SARIF); absent dir → [].
-  const mechanical = gatherMechanical(input.sarifDir);
+  // Deterministic findings (gitleaks/opengrep SARIF); absent dir → []. Scanners cover
+  // the whole tree, so keep only hits on the PR's changed lines — pre-existing ones
+  // would fill the prompt cap and crowd out the PR's own. Code Scanning reads the files.
+  const changedLines = changedLinesOf(diff);
+  const mechanical = gatherMechanical(input.sarifDir).filter((f) =>
+    changedLines.get(f.path)?.includes(f.line),
+  );
   const priorThreadContexts = buildThreadContexts(input.priorThreads);
 
   // Layer 0 — deterministic distillation. `review_diff` is the shrunk diff every
@@ -161,6 +166,7 @@ export async function reviewAndValidate(input: ReviewCallInput): Promise<ReviewC
           maxTokens: inputs.maxTokens,
           enforceJsonSchema: inputs.enforceJsonSchema,
           reviewPromptFile: inputs.reviewPromptFile,
+          reviewPromptRef: inputs.rulesRef === "merge" ? reviewHead : diff.base_sha,
           codebaseOverview: inputs.codebaseOverview,
           reviewInstruction: event.instruction ?? "",
           projectRules,
@@ -201,16 +207,18 @@ export async function reviewAndValidate(input: ReviewCallInput): Promise<ReviewC
     );
   }
   result.findings = kept;
-  const { stamped, selfNegating, unverifiedQuote, missingQuotePaths } = validate(
+  const { stamped, selfNegating, unverifiedQuote, missingQuotePaths, discarded } = validate(
     result,
     distillation.review_diff,
     inputs,
+    mechanical,
   );
   // A quote that does not match its cited line is the model misreading one line of a
   // file it did read: drop the finding like any other gate drop and keep the file
   // reviewed. Condemning the file instead turned toolu-ghrunner PR #210's re-wrapped AGENTS.md
   // into a "Review incomplete" request-changes verdict on a provider call that succeeded.
   if (unverifiedQuote > 0) result.unverifiedEvidence = unverifiedQuote;
+  if (discarded > 0) result.discardedFindings = discarded;
   // A finding with NO quote is a model ignoring the evidence contract — nothing it said
   // can be checked, so its path is condemned, but only when NOTHING of the model's
   // work on that path survived: a file with a surviving finding was reviewed.

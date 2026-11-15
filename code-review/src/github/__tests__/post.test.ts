@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { MAX_COMMENTS_PER_REVIEW, postInlineReview } from "@/github/review.js";
 import type { ReviewClient, ReviewComment, ReviewTarget } from "@/github/review.js";
+import { RequestError } from "@octokit/request-error";
 import { setVerdictLabel } from "@/github/label.js";
 import type { LabelClient, LabelTarget } from "@/github/label.js";
 import type { Finding } from "@/llm/schema.js";
@@ -551,7 +552,7 @@ describe("postInlineReview — batching + 422 bisection (AC-5)", () => {
 });
 
 /** A recording labels client capturing add/remove/create operations. */
-function fakeLabelClient(opts: { failAdd?: boolean } = {}): {
+function fakeLabelClient(opts: { failAdd?: boolean; removeStatus?: number } = {}): {
   client: LabelClient;
   calls: { created: string[]; removed: string[]; added: string[][] };
 } {
@@ -569,6 +570,7 @@ function fakeLabelClient(opts: { failAdd?: boolean } = {}): {
         },
         removeLabel: async (p) => {
           calls.removed.push(p.name);
+          if (opts.removeStatus !== undefined) throw labelsError(opts.removeStatus);
           return {};
         },
         addLabels: async (p) => {
@@ -580,6 +582,19 @@ function fakeLabelClient(opts: { failAdd?: boolean } = {}): {
     },
   };
   return { client, calls };
+}
+
+/** The error Octokit really raises for a failed labels call. */
+function labelsError(status: number): RequestError {
+  const url = `https://api.github.com/repos/o/r/issues/1/labels/merge-approved`;
+  return new RequestError(
+    status === 404 ? "Label does not exist" : "secondary rate limit",
+    status,
+    {
+      request: { method: "DELETE", url, headers: {} },
+      response: { status, url, headers: {}, data: {} },
+    },
+  );
 }
 
 describe("setVerdictLabel", () => {
@@ -628,5 +643,27 @@ describe("setVerdictLabel", () => {
     const r = await setVerdictLabel(client, "approved", LABEL_TARGET);
     expect(r.changed).toBe(false);
     expect(r.reason).toContain("403");
+  });
+
+  // merge-gate passes on `merge-approved` alone: a swallowed remove failure next to a
+  // successful add left the PR carrying BOTH labels on a "changes" verdict.
+  it("throws when merge-approved cannot be removed on a changes verdict", async () => {
+    const { client, calls } = fakeLabelClient({ removeStatus: 403 });
+    await expect(setVerdictLabel(client, "changes", LABEL_TARGET)).rejects.toThrow(
+      /could not remove merge-approved: .*secondary rate limit/,
+    );
+    expect(calls.added).toEqual([]);
+  });
+
+  it("ignores a 404 removing merge-approved (the label simply was not set)", async () => {
+    const { client } = fakeLabelClient({ removeStatus: 404 });
+    const r = await setVerdictLabel(client, "changes", LABEL_TARGET);
+    expect(r.changed).toBe(true);
+  });
+
+  it("keeps the approved direction non-fatal when request-changes cannot be removed", async () => {
+    const { client } = fakeLabelClient({ removeStatus: 403 });
+    const r = await setVerdictLabel(client, "approved", LABEL_TARGET);
+    expect(r.changed).toBe(true);
   });
 });

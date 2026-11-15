@@ -206,7 +206,8 @@ function runCli(env: Record<string, string | undefined>): RunResult {
   try {
     const stdout = execFileSync(BUN_BIN, [CLI], {
       encoding: "utf8",
-      env: { ...process.env, INPUT_SRC_DIR: "", INPUT_DEST_DIR: "", ...env },
+      // GITHUB_OUTPUT blanked so a CI runner's real output file is never appended to.
+      env: { ...process.env, INPUT_SRC_DIR: "", INPUT_DEST_DIR: "", GITHUB_OUTPUT: "", ...env },
     });
     return { status: 0, stdout, stderr: "" };
   } catch (err) {
@@ -270,6 +271,34 @@ describe("sanitize-cli", () => {
 
       // Originals are read-only inputs to the LLM triage — must be byte-identical after the run.
       expect(readFileSync(join(srcDir, "gitleaks.sarif"), "utf8")).toBe(original);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("appends copied=<n> to GITHUB_OUTPUT so the composite can skip an empty upload", () => {
+    const base = mkTempDir("sanitize-cli-output-");
+    const srcDir = join(base, "src");
+    const destDir = join(base, "dest");
+    const outFile = join(base, "github-output");
+    mkdirSync(srcDir, { recursive: true });
+    for (const name of ["gitleaks.sarif", "opengrep.sarif"]) {
+      writeFileSync(join(srcDir, name), readFileSync(join(FIXTURES, name), "utf8"), "utf8");
+    }
+    try {
+      const result = runCli({
+        INPUT_SRC_DIR: srcDir,
+        INPUT_DEST_DIR: destDir,
+        GITHUB_OUTPUT: outFile,
+      });
+      expect(result.status).toBe(0);
+      expect(readFileSync(outFile, "utf8")).toBe("copied=2\n");
+
+      // An empty source still reports an explicit zero.
+      const emptySrc = join(base, "empty");
+      mkdirSync(emptySrc);
+      runCli({ INPUT_SRC_DIR: emptySrc, INPUT_DEST_DIR: destDir, GITHUB_OUTPUT: outFile });
+      expect(readFileSync(outFile, "utf8")).toBe("copied=2\ncopied=0\n");
     } finally {
       rmSync(base, { recursive: true, force: true });
     }

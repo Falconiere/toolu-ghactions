@@ -20,8 +20,10 @@
 // supported ones are — the default `github.token` (github-actions[bot]) and a
 // GitHub App (APP_ID + APP_PRIVATE_KEY). A TOKEN from an ordinary user account
 // (a machine user's PAT) authors `type: "User"` comments, which are no longer
-// recognised as the sticky: memory would reset and a fresh comment would be
-// created each run. Use the App identity for a custom-branded bot instead.
+// recognised as the sticky: memory would reset, a fresh comment would be created
+// each run, and — the sticky's author being the identity whose review threads are
+// read (github/threads.ts) — no prior thread would be read either. Use the App
+// identity for a custom-branded bot instead.
 
 /** Marker prefix the state module writes; matched as a substring (mirrors state.ts). */
 const MARKER_PREFIX = "<!-- toolu-review-state:v1";

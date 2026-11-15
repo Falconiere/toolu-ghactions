@@ -23,7 +23,7 @@ AI coding agents open pull requests faster than human review scales. The discipl
 
 **Problem** — review quality depends on who is looking and how much time they have. It is inconsistent, and it is the bottleneck.
 
-**Approach** — pin the checklist, run it on the diff, make the verdict machine-readable. `code-review` audits each pull request against a fixed 8-dimension checklist (correctness, security, performance, test coverage, doc accuracy, tight assertions, migration warnings, and adherence to the project's own convention files), running one model through [OpenRouter](https://openrouter.ai) or a [custom OpenAI-compatible endpoint](code-review/README.md#custom-endpoints-omlx-and-local-models) via the [Vercel AI SDK](https://sdk.vercel.ai) — structured output and retries, not free-text parsing. It posts one structured comment ending in `` `merge-approved` `` / `` `request-changes` `` — the format [`pr-babysit`](https://github.com/Falconiere/toolu/tree/main/plugins/pr-babysit) already consumes — alongside inline, committable suggestions. Advisory by design: findings never hard-block, CI stays green.
+**Approach** — pin the checklist, run it on the diff, make the verdict machine-readable. `code-review` audits each pull request against a fixed 8-dimension checklist (correctness, security, performance, test coverage, doc accuracy, tight assertions, migration warnings, and adherence to the project's own convention files), running one model through [OpenRouter](https://openrouter.ai) or a [custom OpenAI-compatible endpoint](code-review/README.md#custom-endpoints-omlx-and-local-models) via the [Vercel AI SDK](https://sdk.vercel.ai) — structured output and retries, not free-text parsing. It posts one structured comment ending in `` `merge-approved` `` / `` `request-changes` `` — the format [`pr-babysit`](https://github.com/Falconiere/toolu/tree/main/plugins/pr-babysit) already consumes — alongside inline, committable suggestions. Under the default `FAIL_ON: changes` the job goes red on a `changes` verdict (set `FAIL_ON: none` for a purely advisory review); a failing check blocks a merge only if you mark it required.
 
 ## Actions
 
@@ -61,7 +61,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: falconiere/toolu-ghactions/code-review@v4
+      - uses: falconiere/toolu-ghactions/code-review@v8
         with:
           API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 ```
@@ -179,10 +179,10 @@ Each action is listed on the GitHub Marketplace from its own mirror repo — [`t
 
 ```bash
 cd code-review
-npm ci
-npx tsc --noEmit        # type-check
-npx vitest run          # tests (real recorded fixtures, no mocks)
-node build.mjs          # bundle src/ → run/index.cjs + sanitize-sarif/index.cjs (commit the result)
+bun install
+bun run typecheck       # type-check
+bun run test            # tests (real recorded fixtures, no mocks)
+bun run build           # bundle src/ → run/index.cjs + sanitize-sarif/index.cjs (commit the result)
 ```
 
 `cloudflare-tunnel` (and the shared `scripts/`) is still bash — test and lint it with bats + shellcheck:

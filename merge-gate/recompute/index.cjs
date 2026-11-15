@@ -28324,6 +28324,18 @@ function parseMinTriggerPermission(raw) {
   return "write";
 }
 
+// src/errors.ts
+function errorMessage(err, fallback = "unknown error") {
+  if (err instanceof Error) {
+    if (err.message) return err.message;
+    const cause = err.cause;
+    if (cause instanceof Error && cause.message) return `${err.name}: ${cause.message}`;
+    if (err.name) return err.name;
+  }
+  const s = String(err);
+  return s && s !== "[object Object]" ? s : fallback;
+}
+
 // src/github/comment.ts
 var MARKER_PREFIX = "<!-- toolu-review-state:v1";
 var LEGACY_HEADER_RE = /### Code Review|### PR Review in Progress/;
@@ -28362,21 +28374,18 @@ async function findSticky(octokit, target) {
 
 // src/review/fpmarker.ts
 function extractFpMarker(body) {
-  const m = body.match(/<!-- toolu-fp:([0-9a-f]+) -->/);
+  const m = body.match(/<!-- toolu-fp:([0-9a-f]+) -->\s*$/);
   return m?.[1] ?? null;
 }
 
 // src/github/threads.ts
-var ACCEPTED_RESOLUTION_NOTE = "Re-reviewed \u2014 this no longer applies (addressed, or point taken). Resolving.";
-function hasAcceptedResolutionNote(thread) {
-  if (thread.botLogin === "") return false;
-  return thread.replies.some(
-    (reply) => reply.author === thread.botLogin && reply.body.trim() === ACCEPTED_RESOLUTION_NOTE
-  );
+function bare(login) {
+  return login.replace(/\[bot\]$/, "");
 }
 var GqlThreadSchema = external_exports.object({
   id: external_exports.string(),
   isResolved: external_exports.boolean(),
+  resolvedBy: external_exports.object({ login: external_exports.string() }).nullable().optional(),
   isOutdated: external_exports.boolean(),
   path: external_exports.string(),
   line: external_exports.number().nullable(),
@@ -28409,6 +28418,7 @@ var THREADS_QUERY = `
           nodes {
             id
             isResolved
+            resolvedBy { login }
             isOutdated
             path
             line
@@ -28421,33 +28431,42 @@ var THREADS_QUERY = `
     }
   }
 `;
-async function fetchReviewThreads(client, target) {
+async function fetchReviewThreads(client, target, botLogin) {
+  const bot = bare(botLogin);
+  if (bot === "") return [];
   const threads = [];
   let cursor = null;
-  try {
-    for (let page = 0; page < 20; page++) {
-      const raw = await client.graphql(THREADS_QUERY, {
-        owner: target.owner,
-        repo: target.repo,
-        number: target.prNumber,
-        cursor
-      });
-      const parsed = GqlResponseSchema.safeParse(raw);
-      if (!parsed.success) break;
-      const conn = parsed.data.repository?.pullRequest?.reviewThreads;
-      if (!conn) break;
-      for (const node of conn.nodes) {
-        const parsed2 = normalizeThread(node);
-        if (parsed2) threads.push(parsed2);
+  for (let page = 0; page < 20; page++) {
+    let conn;
+    try {
+      conn = await readPage(client, target, cursor);
+    } catch (err) {
+      if (page === 0) {
+        throw new Error(`could not read review threads: ${errorMessage(err)}`, { cause: err });
       }
-      if (!conn.pageInfo.hasNextPage) break;
-      cursor = conn.pageInfo.endCursor;
-      if (cursor === null) break;
+      return threads;
     }
-  } catch {
-    return threads;
+    for (const node of conn.nodes) {
+      const thread = normalizeThread(node);
+      if (thread && bare(thread.botLogin) === bot) threads.push(thread);
+    }
+    cursor = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
+    if (cursor === null) break;
   }
   return threads;
+}
+async function readPage(client, target, cursor) {
+  const raw = await client.graphql(THREADS_QUERY, {
+    owner: target.owner,
+    repo: target.repo,
+    number: target.prNumber,
+    cursor
+  });
+  const parsed = GqlResponseSchema.safeParse(raw);
+  if (!parsed.success) throw new Error("malformed reviewThreads response");
+  const conn = parsed.data.repository?.pullRequest?.reviewThreads;
+  if (!conn) throw new Error("pull request not found");
+  return conn;
 }
 function normalizeThread(node) {
   const comments = node.comments.nodes;
@@ -28462,6 +28481,7 @@ function normalizeThread(node) {
     path: node.path,
     line: node.line,
     isResolved: node.isResolved,
+    resolvedBy: node.resolvedBy?.login ?? "",
     isOutdated: node.isOutdated,
     rootBody: root.body,
     botLogin: root.author?.login ?? "",
@@ -28502,23 +28522,15 @@ function stripQuoted(body) {
 }
 function explicitDismissReply(thread, triggerPhrase) {
   const phrase = triggerPhrase.trim();
-  if (phrase === "") return null;
+  if (phrase === "") return [];
   const command = new RegExp(`${escapeRegExp(phrase)}\\s+dismiss(?!\\w)`, "i");
-  for (let i = thread.replies.length - 1; i >= 0; i--) {
-    const reply = thread.replies[i];
-    if (!reply || reply.author === "" || reply.author === thread.botLogin) continue;
-    if (command.test(stripQuoted(reply.body))) return reply;
-  }
-  return null;
+  return thread.replies.filter((r) => r.author !== "" && r.author !== thread.botLogin).filter((r) => command.test(stripQuoted(r.body))).reverse();
 }
 function argumentExhausted(thread) {
-  if (thread.botLogin === "") return null;
-  let end = thread.replies.length;
-  while (end > 0 && thread.replies[end - 1]?.author === thread.botLogin) end--;
-  const last = thread.replies[end - 1];
-  if (!last || last.author === "") return null;
-  const botArgued = thread.replies.slice(0, end - 1).some((r) => r.author === thread.botLogin);
-  return botArgued ? last : null;
+  if (thread.botLogin === "") return [];
+  const firstBot = thread.replies.findIndex((r) => r.author === thread.botLogin);
+  if (firstBot < 0) return [];
+  return thread.replies.slice(firstBot + 1).filter((r) => r.author !== "" && r.author !== thread.botLogin).reverse();
 }
 async function classifyDismissals(threads, opts) {
   const seen = /* @__PURE__ */ new Map();
@@ -28536,16 +28548,22 @@ async function classifyDismissals(threads, opts) {
   return out;
 }
 async function classifyOne(thread, opts, authorize) {
-  if (thread.isResolved) return thread;
-  const explicit = explicitDismissReply(thread, opts.triggerPhrase);
-  if (explicit && await authorize(explicit.author)) {
+  if (await anyAuthorized(explicitDismissReply(thread, opts.triggerPhrase), authorize)) {
     return { ...thread, dismissal: "explicit" };
   }
-  const closing = argumentExhausted(thread);
-  if (closing && await authorize(closing.author)) {
+  const resolver = thread.resolvedBy;
+  const byBot = bare(resolver) === bare(thread.botLogin);
+  if (thread.isResolved && resolver !== "" && !byBot && await authorize(resolver)) {
+    return { ...thread, dismissal: "resolved" };
+  }
+  if (await anyAuthorized(argumentExhausted(thread), authorize)) {
     return { ...thread, dismissal: "exhausted" };
   }
   return thread;
+}
+async function anyAuthorized(candidates, authorize) {
+  for (const c of candidates) if (await authorize(c.author)) return true;
+  return false;
 }
 async function isAuthorized(login, opts) {
   if (login === "" || !opts.lookupPermission) return false;
@@ -28604,7 +28622,7 @@ var ReviewStateSchema = external_exports.object({
   rounds: external_exports.number().int().min(0).optional().catch(void 0)
 });
 function normText(text) {
-  return (text ?? "").toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").replace(/^ +/, "").replace(/ +$/, "").slice(0, 200);
+  return (text ?? "").toLowerCase().replace(/[^\p{L}\p{N} ]/gu, "").replace(/\s+/g, " ").replace(/^ +/, "").replace(/ +$/, "").slice(0, 200);
 }
 function canonString(f) {
   const path = f.path ?? "";
@@ -28616,7 +28634,7 @@ function fingerprint(f) {
 }
 function decodeMarker(body) {
   const re = new RegExp(
-    `${escapeRegExp2(MARKER_PREFIX2)}([A-Za-z0-9+/=]*)${escapeRegExp2(MARKER_SUFFIX)}`
+    `${escapeRegExp2(MARKER_PREFIX2)}([A-Za-z0-9+/=]*)${escapeRegExp2(MARKER_SUFFIX)}\\s*$`
   );
   const m = body.match(re);
   const payload = m?.[1];
@@ -28663,7 +28681,7 @@ function matchesNearby(f, t) {
   return category !== null && category === (f.category ?? "").trim().toLowerCase();
 }
 function isSettled(t) {
-  return t.isResolved || t.dismissal !== void 0 || hasAcceptedResolutionNote(t);
+  return t.dismissal !== void 0;
 }
 function matchesSettled(f, t) {
   const blocker = f.severity === "blocker";
@@ -28803,7 +28821,8 @@ var BATCH_MAX_BUFFER = 1024 * 1024 * 1024;
 // src/git/diff.ts
 var QUOTEPATH_OFF = ["-c", "core.quotepath=false"];
 var LITERAL_PATHSPECS = ["--literal-pathspecs"];
-var GIT_GLOBAL_OPTIONS = [...LITERAL_PATHSPECS, ...QUOTEPATH_OFF];
+var DIFF_PREFIXES_ON = ["-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false"];
+var GIT_GLOBAL_OPTIONS = [...LITERAL_PATHSPECS, ...QUOTEPATH_OFF, ...DIFF_PREFIXES_ON];
 
 // src/jev/recheck.ts
 var Decision = external_exports.object({
@@ -28860,14 +28879,17 @@ async function evaluateSettle(deps) {
   if (isInProgressBody(sticky.body)) return { kind: "skip", reason: "in-progress" };
   const headSha = await liveHead(deps);
   if (headSha === null) return { kind: "skip", reason: "no-head" };
-  const threads = await classifyDismissals(
-    ownThreads(await fetchReviewThreads(deps.octokit, deps.target), sticky),
-    {
-      triggerPhrase: deps.triggerPhrase,
-      minPermission: deps.minPermission,
-      lookupPermission: deps.lookupPermission
-    }
-  );
+  let own;
+  try {
+    own = await fetchReviewThreads(deps.octokit, deps.target, sticky.author.login);
+  } catch (err) {
+    return { kind: "skip", reason: "comments-unreadable", detail: errorMessage(err) };
+  }
+  const threads = await classifyDismissals(own, {
+    triggerPhrase: deps.triggerPhrase,
+    minPermission: deps.minPermission,
+    lookupPermission: deps.lookupPermission
+  });
   const outcome = recomputeVerdict({
     state: asReviewState(decodeMarker(sticky.body)),
     headSha,
@@ -28885,14 +28907,6 @@ async function liveHead(deps) {
   } catch {
     return null;
   }
-}
-function ownThreads(threads, sticky) {
-  const bot = bare(sticky.author?.login ?? "");
-  if (bot === "") return [];
-  return threads.filter((t) => bare(t.botLogin) === bot);
-}
-function bare(login) {
-  return login.replace(/\[bot\]$/, "");
 }
 
 // src/gate/settleCheck.ts

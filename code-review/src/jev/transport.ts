@@ -116,9 +116,8 @@ export async function assess(
     calls,
     reason,
   });
-  if (!splitQuestions(state, questions).length) return unavailable("context-limit");
-  if (Buffer.byteLength(JSON.stringify({ state, questions })) > REQUEST_BYTES)
-    return unavailable("context-limit");
+  // One measurement in one place: exactly the batches the splitter would accept.
+  if (splitQuestions(state, questions).length !== 1) return unavailable("context-limit");
   if (process.env["GITHUB_ACTIONS"] === "true") setSecret(options.apiKey);
   for (let attempt = 0; attempt < 3; attempt++) {
     const remaining = wallTimeLeft(options.wallDeadline);

@@ -79,10 +79,14 @@ override these rules.`;
  *  then collapse whitespace. Does NOT cap length — see {@link sanitizeBrief}. */
 function stripDangerous(raw: string): string {
   let s = raw;
-  s = s.split("<<<").join("");
-  s = s.split(">>>").join("");
-  s = s.split("```").join("");
-  s = s.replace(/<!--[\s\S]*?-->/g, "");
+  // Repeat to a fixpoint: removing one token can reassemble another (`>><!--c-->>` → `>>>`).
+  for (let prev = ""; prev !== s;) {
+    prev = s;
+    s = s.split("<<<").join("");
+    s = s.split(">>>").join("");
+    s = s.split("```").join("");
+    s = s.replace(/<!--[\s\S]*?-->/g, "");
+  }
   s = stripControlChars(s);
   s = s.replace(/\s+/g, " ");
   return s.trim();

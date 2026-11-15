@@ -299,6 +299,9 @@ export function labelAndBadge(
         badge: `🚫 Review incomplete — ${failure === "evidence" ? "source evidence" : "coverage incomplete"}`,
       };
     }
+    if (failure === "discarded") {
+      return { label: "request-changes", badge: "🚫 Review incomplete — findings discarded" };
+    }
     return { label: "request-changes", badge: "🚫 Review incomplete — provider error" };
   }
   return { label: "request-changes", badge: "⚠️ Changes requested" };

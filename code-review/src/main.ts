@@ -3,9 +3,10 @@
 // bundle, run the pipeline, set outputs. All orchestration lives in pipeline.ts.
 //
 // TOP-LEVEL GUARD: a thrown infra error (diff resolution, comment-post, an
-// unexpected crash) sets verdict=error, posts a best-effort error comment, and
-// calls setFailed so the job goes red. A provider ABSTAIN is NOT an infra error
-// — runReview returns verdict:"error" normally and the job stays green.
+// unexpected crash) sets verdict=error, posts a best-effort error comment, sets a
+// best-effort request-changes label, and calls setFailed so the job goes red. A
+// provider ABSTAIN is NOT an infra error — runReview returns verdict:"error"
+// normally and the job stays green.
 import * as core from "@actions/core";
 import * as github from "@actions/github";
 import { readInputs } from "./inputs.js";
@@ -18,6 +19,7 @@ import { createAppAuth } from "@octokit/auth-app";
 import { retry } from "@octokit/plugin-retry";
 import type { EventPayload } from "./github/event.js";
 import { baseRefLookup, headShaLookup, permissionLookup } from "./github/lookups.js";
+import { setVerdictLabel } from "./github/label.js";
 
 /** The Octokit client this action threads through the pipeline. */
 type Octokit = ReturnType<typeof github.getOctokit>;
@@ -75,11 +77,15 @@ function buildContext(): GithubContext {
  *
  * Every client carries @octokit/plugin-retry: one run makes dozens of API calls
  * (comment pages, file pages, thread pages, one reply and one resolve per thread),
- * several runs can share a PR, and GitHub answers rate limits with 403/429 plus a
- * Retry-After. Without it a single secondary-limit response fails the call outright.
+ * and several runs can share a PR. It retries 429 and 5xx answers with its own
+ * backoff; a 403 — how GitHub answers a SECONDARY rate limit — is in its default
+ * `doNotRetry` list, so that one still fails the call outright.
+ *
+ * Exactly one of APP_ID / APP_PRIVATE_KEY set is a misconfiguration: it reaches
+ * resolveInstallationId, which warns and returns null (default token).
  */
 async function resolveOctokit(inputs: ActionInputs): Promise<Octokit> {
-  if (inputs.appId === "" || inputs.appPrivateKey === "") {
+  if (inputs.appId === "" && inputs.appPrivateKey === "") {
     return github.getOctokit(inputs.token, {}, retry);
   }
   const repo = `${github.context.repo.owner}/${github.context.repo.repo}`;
@@ -109,11 +115,17 @@ async function resolveOctokit(inputs: ActionInputs): Promise<Octokit> {
   );
 }
 
+/** The PR (or issue) number the triggering event names, if any. */
+function eventPrNumber(): number | undefined {
+  const payload = github.context.payload;
+  return payload.pull_request?.number ?? payload.issue?.number;
+}
+
 /** Post a best-effort error comment when the pipeline crashes before posting one. */
 async function postErrorComment(octokit: Octokit, message: string): Promise<string> {
   const ctx = github.context;
   const url = `${ctx.serverUrl}/${ctx.repo.owner}/${ctx.repo.repo}/actions/runs/${ctx.runId}`;
-  const prNumber = ctx.payload.pull_request?.number ?? ctx.payload.issue?.number;
+  const prNumber = eventPrNumber();
   if (prNumber === undefined) return "";
   const body = `**AI Code Review failed** —— [View job](${url})
 
@@ -170,6 +182,15 @@ async function main(): Promise<void> {
     core.setOutput("findings-count", 0);
     const url = await postErrorComment(octokit, message).catch(() => "");
     if (url !== "") core.setOutput("comment-url", url);
+    // Best-effort, never masking `message`: a crashed run must not leave the previous
+    // head's `merge-approved` standing (error → request-changes, github/label.ts).
+    const prNumber = eventPrNumber();
+    if (prNumber !== undefined) {
+      const target = { ...github.context.repo, prNumber };
+      await setVerdictLabel(octokit, "error", target, { manageLabels: inputs.manageLabels }).catch(
+        (labelErr: unknown) => core.warning(`Could not set the error label: ${String(labelErr)}`),
+      );
+    }
     core.setFailed(`AI Code Review failed: ${message}`);
   }
 }

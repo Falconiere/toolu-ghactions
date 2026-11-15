@@ -14,6 +14,9 @@ inputs:
   DEST_DIR:
     description: 'Directory to write sanitized copies into (created if absent)'
     required: true
+outputs:
+  copied:
+    description: 'Number of SARIF files copied into DEST_DIR (unset when the step exited early)'
 runs:
   using: 'node24'
   main: 'index.cjs'

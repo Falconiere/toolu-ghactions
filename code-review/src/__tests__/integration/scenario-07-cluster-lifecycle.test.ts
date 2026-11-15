@@ -181,7 +181,7 @@ describe("scenario 7 — cluster lifecycle (AC-15.7)", () => {
     // The author reads the body — which says dismissing this thread dismisses the
     // whole pattern — and resolves it on GitHub.
     const seed = seedFromPosted(posted?.body ?? "", posted?.path ?? "", posted?.line);
-    threads.push({ ...seed, isResolved: true });
+    threads.push({ ...seed, isResolved: true, resolvedBy: "human-dev" });
     git(dir, "fetch", dir, "HEAD"); // real fetch writes FETCH_HEAD (update-ref refuses pseudorefs on newer git)
 
     const after = await runReview({

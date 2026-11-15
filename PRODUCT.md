@@ -10,7 +10,7 @@ Developers integrating AI code review into their CI/CD pipeline. They discover t
 
 ## Product Purpose
 
-Publishable GitHub Actions that bring the toolu review methodology to any repository. The code-review action replaces the private `Falconiere/workflows` reusable workflow with a first-class, marketplace-discoverable Docker action. The monorepo structure allows future actions (claude-mention, etc.) to share conventions and utilities.
+Publishable GitHub Actions that bring the toolu review methodology to any repository. The code-review action replaces the private `Falconiere/workflows` reusable workflow with a first-class, marketplace-discoverable composite action (with nested node24 actions). The monorepo structure allows future actions (claude-mention, etc.) to share conventions and utilities.
 
 Success: a developer pastes 10 lines of YAML, adds their OpenRouter API key, and gets structured AI code review on every PR — complete with a review plan, targeted findings per dimension, and a machine-readable verdict that `pr-babysit` / `parse-verdict.sh` can act on.
 
@@ -20,7 +20,7 @@ Success: a developer pastes 10 lines of YAML, adds their OpenRouter API key, and
 
 - Utilitarian: every word in the README earns its place. No marketing prose, no buzzwords. Show the YAML, show the output, explain the inputs.
 - Sharp: precise technical communication. Correct shell syntax in examples. Exact environment variable names. No hand-waving about "AI-powered insights."
-- Confident: the tool knows what it does and doesn't do. Clear about limitations (diff truncation, file limits, LLM provider dependency — OpenRouter or a native vendor API). No hedging.
+- Confident: the tool knows what it does and doesn't do. Clear about limitations (diff truncation, file limits, LLM provider dependency — OpenRouter or a custom OpenAI-compatible endpoint). No hedging.
 
 ## Anti-references
 

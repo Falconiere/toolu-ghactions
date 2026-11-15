@@ -1,6 +1,7 @@
 import { it, expect } from "bun:test";
 import { readFileSync } from "node:fs";
-import { accounting, quality } from "../compare.js";
+import { parseArgs } from "../args.js";
+import { accounting, compareInputs, quality } from "../compare.js";
 
 it("reads real OpenRouter usage without retaining response text", () => {
   const fixture = JSON.parse(
@@ -28,4 +29,11 @@ it("scores known PR175 false positives separately from unclassified findings", (
   };
   expect(quality(fixture.comments, [label]).knownFalsePositives).toBe(1);
   expect(quality([], [label]).knownFalsePositives).toBe(0);
+});
+
+it("passes --max-wall-ms through to the review, so an explicit 0 stays unlimited", () => {
+  for (const flag of ["0", "12000"]) {
+    const args = parseArgs(["--max-wall-ms", flag]);
+    expect(compareInputs(args, "key", true).maxWallMs).toBe(Number(flag));
+  }
 });

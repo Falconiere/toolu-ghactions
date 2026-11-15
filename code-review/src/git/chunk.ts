@@ -8,11 +8,11 @@
 // so joining the segments reproduces the input EXACTLY — the single-chunk path is
 // byte-identical to the un-chunked prompt, keeping existing fixtures stable.
 import { countLines } from "./diff.js";
-import { headerOperandPath } from "./path.js";
+import { headerOperandPath, unquoteGitPath } from "./path.js";
 
 /** One file's slice of the shaped diff. */
 export interface FileSegment {
-  /** File path, from `+++ b/<path>` (or `--- a/<path>` for a deletion); "" if absent. */
+  /** File path, from `+++ b/<path>` (or `--- a/<path>` for a deletion), else the block header. */
   path: string;
   /** The `diff --git …` block for exactly this file, including its trailing newline. */
   diff: string;
@@ -123,8 +123,9 @@ export function packGroups(
 /**
  * Parse the file path from one file's diff block. Prefers `+++ b/<path>` (the new
  * path); falls back to `--- a/<path>` when `+++` is `/dev/null` (a deletion).
- * Returns "" when neither header is present (a mode-only change) — the segment
- * still rides in a chunk, it just carries no mechanical-finding key.
+ * A block with neither header (an empty file added or deleted, a mode-only
+ * change, an exact rename) is keyed by its `rename to` line, else by the
+ * `diff --git a/X b/X` header, whose two operands then name the same path.
  */
 function parsePath(segment: string): string {
   const plus = segment.match(/^\+\+\+ (.+)$/m)?.[1];
@@ -137,5 +138,8 @@ function parsePath(segment: string): string {
     const path = headerOperandPath(minus);
     if (path !== "/dev/null") return path;
   }
-  return "";
+  const renameTo = segment.match(/^rename to (.+)$/m)?.[1];
+  if (renameTo !== undefined) return unquoteGitPath(renameTo);
+  const operands = segment.match(/^diff --git (.+)$/m)?.[1] ?? "";
+  return headerOperandPath(operands.slice(Math.ceil(operands.length / 2)));
 }

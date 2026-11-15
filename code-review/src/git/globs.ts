@@ -10,38 +10,43 @@ export function splitGlobs(raw: string): string[] {
 }
 
 /**
- * Translate one tracked-path glob entry into a matcher. `dir/**` and `dir/` are
- * prefix matches (everything under dir/); anything else is a shell-style glob
- * where `*` matches any run including `/` and `?` matches one char — reproducing
- * bash `[[ "$p" == $entry ]]` against tracked paths.
+ * Translate one tracked-path glob entry into a whole-path matcher. `*` matches any
+ * run INCLUDING `/` and `?` matches one char; all else is literal — bash
+ * `[[ "$p" == $entry ]]` semantics, NOT standard globbing, so `src/*.ts` also
+ * matches `src/sub/deep.ts` and `dir/**` means everything under `dir/`. An entry
+ * ending in `/` is a directory: `dir/` means `dir/*`. Shared with RULES_GLOB.
  */
 export function globMatcher(entry: string): (p: string) => boolean {
-  if (entry.endsWith("/**")) {
-    const prefix = entry.slice(0, -2); // drop the "**", keep the trailing "/"
-    return (p) => p.startsWith(prefix);
-  }
-  if (entry.endsWith("/")) {
-    return (p) => p.startsWith(entry);
-  }
-  const re = globToRegExp(entry);
-  return (p) => re.test(p);
+  const glob = entry.endsWith("/") ? `${entry}*` : entry;
+  return (p) => wildcardMatch(glob, p);
 }
 
 /**
- * Compile a shell glob to an anchored RegExp; all else is literal. NOTE: `*` matches any
- * run INCLUDING `/` (and `?` any single char) — bash `[[ "$p" == $entry ]]` semantics, NOT
- * standard globbing. So `src/*.ts` also matches `src/sub/deep.ts`. This is intentional and
- * shared with RULES_GLOB; for a single path segment use an explicit prefix like `src/` or
- * a suffix like `*.ts`.
+ * Match `path` against `glob` by backtracking to the last `*` only. A compiled
+ * `[\s\S]*` regex backtracks across EVERY star and goes cubic on deep paths
+ * (`**` + `/*.snap` vs a 4 000-char path took ~20 s).
  */
-export function globToRegExp(glob: string): RegExp {
-  let out = "";
-  for (const ch of glob) {
-    if (ch === "*") out += "[\\s\\S]*";
-    else if (ch === "?") out += "[\\s\\S]";
-    else out += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+function wildcardMatch(glob: string, path: string): boolean {
+  let g = 0;
+  let p = 0;
+  let star = -1;
+  let resume = 0;
+  while (p < path.length) {
+    if (glob[g] === "*") {
+      star = g++;
+      resume = p;
+    } else if (g < glob.length && (glob[g] === "?" || glob[g] === path[p])) {
+      g++;
+      p++;
+    } else if (star !== -1) {
+      g = star + 1;
+      p = ++resume;
+    } else {
+      return false;
+    }
   }
-  return new RegExp(`^${out}$`);
+  while (glob[g] === "*") g++;
+  return g === glob.length;
 }
 
 /** True if `path` matches ANY of the glob entries. */

@@ -101,6 +101,16 @@ function sanitizeDir(srcDir, destDir) {
   }
   return { copied, fixed };
 }
+function writeCopiedOutput(copied) {
+  const file = process.env["GITHUB_OUTPUT"];
+  if (file === void 0 || file === "") return;
+  try {
+    (0, import_node_fs.appendFileSync)(file, `copied=${copied}
+`);
+  } catch (err) {
+    log("warning", `Could not write GITHUB_OUTPUT: ${message(err)}`);
+  }
+}
 function main() {
   const srcDir = process.env["INPUT_SRC_DIR"] ?? "";
   const destDir = process.env["INPUT_DEST_DIR"] ?? "";
@@ -120,6 +130,7 @@ function main() {
     return;
   }
   const { copied, fixed } = sanitizeDir(srcDir, destDir);
+  writeCopiedOutput(copied);
   if (copied === 0) {
     log("warning", `No SARIF files copied from '${srcDir}' \u2014 Code Scanning upload may be empty.`);
   }

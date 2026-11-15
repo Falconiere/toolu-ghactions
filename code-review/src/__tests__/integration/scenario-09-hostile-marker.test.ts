@@ -6,9 +6,11 @@
 //
 // Two hostile shapes, both of which must be non-events:
 //  1. a marker whose findings are individually malformed (no line, an off-enum
-//     severity, empty text) plus one carrying a huge bogus field — carry-forward's
-//     strict re-injection (pipeline/carry.ts) drops them into the ledger's `carried`
-//     bucket, keeps the one well-formed finding, and none of it reaches a comment;
+//     severity, empty text) plus one carrying a huge bogus field, all on PR files the
+//     round carries (unchanged since the marker's tree) — carry-forward's strict
+//     re-injection (pipeline/carry.ts) leaves the malformed ones finding-less in the
+//     ledger's `carried` bucket, keeps the one well-formed finding, and none of it
+//     reaches a comment;
 //  2. a marker that inflates past the gzip-bomb guard — it decodes to empty state
 //     and the round simply reviews everything from scratch.
 import { afterEach, describe, expect, it } from "vitest";
@@ -19,6 +21,7 @@ import { encodeMarker, type ReviewState } from "@/state.js";
 import {
   baseInputs,
   cleanupRepos,
+  commitAll,
   inlineComments,
   lastBody,
   markerState,
@@ -44,6 +47,9 @@ function twoFileRepo(): Scratch {
 
 /** A prior marker an attacker edited: three findings that cannot be trusted into a
  *  validated path, and one well-formed one that must still carry. */
+/** The PR files the tampered marker names: carried, since none changes after round 1. */
+const CARRIED = ["src/gone.ts", "src/bad.ts", "src/noline.ts", "src/legit.ts"];
+
 const TAMPERED: ReviewState = {
   schema: "toolu-review-state",
   version: 1,
@@ -72,9 +78,18 @@ const TAMPERED: ReviewState = {
 
 describe("scenario 9 — a hostile state marker (AC-15.9)", () => {
   it("filters malformed carried findings into the ledger, keeps the valid one, injects nothing", async () => {
-    const { dir, headSha } = twoFileRepo();
+    // Round 1's tree holds every file; the push after it touches only a.ts and b.ts,
+    // so the four files the marker names are carried (a path that left the PR is not).
+    const { dir } = scratchRepo((d) => {
+      for (const p of ["src/a.ts", "src/b.ts", ...CARRIED]) writeFile(d, p, "export {};\n");
+    });
+    const reviewed_tree = treeSha(dir);
+    writeFile(dir, "src/a.ts", "export const a = 1;\n");
+    writeFile(dir, "src/b.ts", "export const b = 2;\n");
+    const headSha = commitAll(dir, "push after round 1");
+    const marker = encodeMarker({ ...TAMPERED, reviewed_tree });
     const { octokit, rec } = fakeOctokit({
-      existing: [{ id: 555, body: `### Code Review — old\n\n${encodeMarker(TAMPERED)}` }],
+      existing: [{ id: 555, body: `### Code Review — old\n\n${marker}` }],
     });
     const server = modelServer({
       reply: () =>
@@ -102,10 +117,10 @@ describe("scenario 9 — a hostile state marker (AC-15.9)", () => {
     });
     expect(result.verdict).toBe("changes");
 
-    // The three malformed ones are ledgered `carried` WITHOUT a finding; the two
-    // real changed files were reviewed.
+    // The four untouched files are ledgered `carried` (three of them WITHOUT a
+    // finding); the two files changed since round 1 were reviewed.
     const body = lastBody(rec);
-    expect(body).toContain("reviewed: 2 · carried: 3");
+    expect(body).toContain("reviewed: 2 · carried: 4");
 
     // The valid prior finding still carries; the malformed ones are gone from the
     // marker entirely — and so is the huge bogus field zod stripped off it. (The

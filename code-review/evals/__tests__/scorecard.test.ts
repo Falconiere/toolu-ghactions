@@ -133,7 +133,7 @@ describe("renderTable", () => {
     expect(text).toContain("Model calls");
     expect(text).toContain("Findings");
     expect(text).toContain("Coverage");
-    expect(text).toContain("Marker bytes");
+    expect(text).toContain("Comment chars");
     expect(text).toContain("65000");
     expect(text).toContain("Wall time");
     expect(text).toContain("Verdict");

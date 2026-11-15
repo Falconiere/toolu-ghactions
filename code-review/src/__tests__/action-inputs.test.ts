@@ -178,3 +178,46 @@ describe("action.yml delivers every declared input to the reviewer", () => {
     expect(text).not.toContain("using: 'node24'");
   });
 });
+
+/** The text of the step whose `- name:` matches `nameRe`, up to the next step. */
+function stepText(nameRe: RegExp): string {
+  const start = findLine(new RegExp(`^ {4}- name: .*${nameRe.source}`));
+  if (start === -1) return "";
+  let end = LINES.length;
+  for (let i = start + 1; i < LINES.length; i++) {
+    if (/^ {4}- name:/.test(LINES[i] ?? "")) {
+      end = i;
+      break;
+    }
+  }
+  return LINES.slice(start, end).join("\n");
+}
+
+/** The step's `if:` expression, or "". */
+function ifOf(step: string): string {
+  return /^\s*if: (.*)$/m.exec(step)?.[1] ?? "";
+}
+
+describe("action.yml skips the SARIF steps when there is nothing to upload", () => {
+  const install = stepText(/Install scanners/);
+  const sanitize = stepText(/Sanitize SARIF/);
+  const upload = stepText(/Upload SARIF/);
+
+  it("found the three steps", () => {
+    expect(install).toContain("run:");
+    expect(sanitize).toContain("uses: $/code-review/sanitize-sarif");
+    expect(upload).toContain("github/codeql-action/upload-sarif");
+  });
+
+  it("gates install and sanitize on at least one scanner being enabled", () => {
+    for (const step of [install, sanitize]) {
+      expect(ifOf(step)).toContain("inputs.RUN_SECRET_SCAN");
+      expect(ifOf(step)).toContain("inputs.RUN_SAST");
+    }
+  });
+
+  it("uploads only when the sanitize step reports copied files", () => {
+    expect(sanitize).toMatch(/^ {6}id: sanitize$/m);
+    expect(ifOf(upload)).toContain("steps.sanitize.outputs.copied");
+  });
+});

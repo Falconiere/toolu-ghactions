@@ -4,11 +4,12 @@
 // nothing). One implementation, so both callers agree on what "settled" means.
 //
 // It locates the sticky, trusts it only when Bot-authored and not mid-review, reads the
-// PR's LIVE head, keeps only the threads that same bot opened, classifies dismissals,
-// and runs review/recompute.ts. Every refusal is a typed skip reason (fail closed).
-// Two trust checks exist because the sticky lookup is login-agnostic
-// (github/comment.ts): otherwise anyone able to comment could post a forged state
-// marker (or a forged fp-marked thread) and approve through this cheap path.
+// PR's LIVE head, reads only the threads that same bot opened (github/threads.ts filters
+// on the sticky's author), classifies dismissals, and runs review/recompute.ts. Every
+// refusal is a typed skip reason (fail closed) — an unreadable thread list included.
+// The trust checks exist because otherwise anyone able to comment could post a forged
+// state marker (or a forged fp-marked thread) and approve through this cheap path.
+import { errorMessage } from "@/errors.js";
 import { findSticky } from "@/github/comment.js";
 import type { CommentClient, CommentTarget, StickyComment } from "@/github/comment.js";
 import { fetchReviewThreads } from "@/github/threads.js";
@@ -78,14 +79,17 @@ export async function evaluateSettle(deps: SettleEvalDeps): Promise<SettleEvalua
   const headSha = await liveHead(deps);
   if (headSha === null) return { kind: "skip", reason: "no-head" };
 
-  const threads = await classifyDismissals(
-    ownThreads(await fetchReviewThreads(deps.octokit, deps.target), sticky),
-    {
-      triggerPhrase: deps.triggerPhrase,
-      minPermission: deps.minPermission,
-      lookupPermission: deps.lookupPermission,
-    },
-  );
+  let own: PriorThread[];
+  try {
+    own = await fetchReviewThreads(deps.octokit, deps.target, sticky.author.login);
+  } catch (err) {
+    return { kind: "skip", reason: "comments-unreadable", detail: errorMessage(err) };
+  }
+  const threads = await classifyDismissals(own, {
+    triggerPhrase: deps.triggerPhrase,
+    minPermission: deps.minPermission,
+    lookupPermission: deps.lookupPermission,
+  });
   const outcome = recomputeVerdict({
     state: asReviewState(decodeMarker(sticky.body)),
     headSha,
@@ -96,8 +100,27 @@ export async function evaluateSettle(deps: SettleEvalDeps): Promise<SettleEvalua
   return { kind: "approve", outcome, sticky };
 }
 
-/** The PR's head sha right now, or null when it cannot be read (fail closed). */
-async function liveHead(deps: SettleEvalDeps): Promise<string | null> {
+/**
+ * The review path's freshness check (pipeline.ts): true when `sha` is no longer the
+ * PR's live head, logged as `[SKIP] stale-head`. An unknown sha, or a lookup that is
+ * absent or fails, is NOT stale — the review proceeds exactly as it always has.
+ */
+export async function staleHead(
+  deps: Pick<SettleEvalDeps, "target" | "lookupHeadSha">,
+  sha: string | undefined,
+): Promise<boolean> {
+  if (sha === undefined || sha === "") return false;
+  const live = await liveHead(deps);
+  if (live === null || live === sha) return false;
+  process.stderr.write(`[SKIP] stale-head: reviewed ${sha}, but the PR head is now ${live}\n`);
+  return true;
+}
+
+/** The PR's head sha right now, or null when it cannot be read (the settle path then
+ *  fails closed). */
+async function liveHead(
+  deps: Pick<SettleEvalDeps, "target" | "lookupHeadSha">,
+): Promise<string | null> {
   if (!deps.lookupHeadSha) return null;
   try {
     const sha = await deps.lookupHeadSha(deps.target.prNumber);
@@ -105,16 +128,4 @@ async function liveHead(deps: SettleEvalDeps): Promise<string | null> {
   } catch {
     return null;
   }
-}
-
-/** Only the threads opened by the sticky's own author. REST spells an App's login
- *  `name[bot]`, GraphQL spells the same thread root `name` — compare without it. */
-function ownThreads(threads: PriorThread[], sticky: StickyComment): PriorThread[] {
-  const bot = bare(sticky.author?.login ?? "");
-  if (bot === "") return [];
-  return threads.filter((t) => bare(t.botLogin) === bot);
-}
-
-function bare(login: string): string {
-  return login.replace(/\[bot\]$/, "");
 }

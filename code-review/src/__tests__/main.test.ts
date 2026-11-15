@@ -1,18 +1,68 @@
 // main.test.ts — exercise the THIN entry main.ts end to end with REAL boundaries:
 // the @actions/core inputs come from real INPUT_* env vars, the @actions/github
 // context is hydrated from a real event-payload file, and core.setOutput writes
-// to a real GITHUB_OUTPUT file we read back. No network: the scenarios chosen
-// (a non-trigger push, and a missing-token infra failure) never reach an API.
+// to a real GITHUB_OUTPUT file we read back. No network: GitHub's REST API is a local
+// HTTP server (GITHUB_API_URL), so a crashing PR run's label + comment writes are real.
 //
 // @actions/github.context is a module-level singleton built at import time, so
-// each case sets the env, then dynamically imports a FRESH main module.
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+// each case sets the env, then dynamically imports a FRESH main module (node_modules
+// are NOT re-evaluated by that: GITHUB_API_URL must be set before the first import).
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from "vitest";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer } from "node:http";
 
 let workdir: string;
 const savedEnv = { ...process.env };
+
+/**
+ * A local GitHub REST API — the real Octokit talks HTTP to it, never to github.com:
+ * PR #7 carries `labels`, listing its comments answers 403 (a crashing pipeline), and
+ * every write succeeds. Records each request's method, path and auth header.
+ */
+const api: {
+  labels: Set<string>;
+  calls: { method: string; path: string; auth: string }[];
+  url: string;
+} = { labels: new Set(), calls: [], url: "" };
+const server = createServer((req, res) => {
+  let raw = "";
+  req.on("data", (chunk: Buffer) => (raw += chunk.toString()));
+  req.on("end", () => {
+    const method = req.method ?? "GET";
+    const path = new URL(req.url ?? "/", "http://localhost").pathname;
+    api.calls.push({ method, path, auth: req.headers.authorization ?? "" });
+    const send = (status: number, body: unknown) => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify(body));
+    };
+    const label = /\/issues\/7\/labels\/(.+)$/.exec(path)?.[1];
+    if (method === "GET" && path.endsWith("/issues/7/comments")) {
+      return send(403, { message: "Resource not accessible by integration" });
+    }
+    if (method === "DELETE" && label !== undefined) {
+      api.labels.delete(decodeURIComponent(label));
+      return send(200, []);
+    }
+    if (method === "POST" && path.endsWith("/issues/7/labels")) {
+      const body: { labels: string[] } = JSON.parse(raw);
+      for (const l of body.labels) api.labels.add(l);
+      return send(200, []);
+    }
+    return send(201, { html_url: "https://github.com/test-org/test-repo/issues/7#c1" });
+  });
+});
+
+beforeAll(async () => {
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  api.url = `http://127.0.0.1:${typeof address === "object" && address !== null ? address.port : 0}`;
+});
+
+afterAll(async () => {
+  await new Promise((resolve) => server.close(resolve));
+});
 
 /** Read the parsed key=value pairs core.setOutput wrote to GITHUB_OUTPUT. */
 function readOutputs(): Record<string, string> {
@@ -55,6 +105,9 @@ beforeEach(() => {
     if (k.startsWith("INPUT_") || k.startsWith("GITHUB_")) delete process.env[k];
   }
   process.env["GITHUB_REPOSITORY"] = "test-org/test-repo";
+  process.env["GITHUB_API_URL"] = api.url;
+  api.labels.clear();
+  api.calls.length = 0;
   process.env["GITHUB_SERVER_URL"] = "https://github.com";
   process.env["GITHUB_RUN_ID"] = "999";
   process.env["GITHUB_OUTPUT"] = join(workdir, "outputs.txt");
@@ -120,5 +173,64 @@ describe("main — entry wiring", () => {
     expect(process.exitCode).toBe(1);
     // Reset so a failing exit code does not leak into the rest of the suite.
     process.exitCode = 0;
+  });
+});
+
+/** Wait (bounded) for main()'s floating promise to fail the job. */
+async function untilFailed(): Promise<void> {
+  for (let i = 0; i < 200 && process.exitCode !== 1; i++) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
+describe("main — infra failure on a PR", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    process.exitCode = 0;
+  });
+
+  async function prRun(): Promise<void> {
+    process.env["INPUT_API_KEY"] = "sk-test";
+    process.env["INPUT_TOKEN"] = "ghs_token";
+    process.env["GITHUB_SHA"] = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+    const payload = { action: "synchronize", pull_request: { number: 7, base: { ref: "main" } } };
+    setEvent("pull_request", payload);
+    // vi.resetModules does not re-evaluate node_modules, so @actions/github's context
+    // singleton keeps the FIRST test's event — point it at this one.
+    const { context } = await import("@actions/github");
+    context.eventName = "pull_request";
+    context.payload = payload;
+  }
+
+  it("takes merge-approved away and still fails with the ORIGINAL error", async () => {
+    await prRun();
+    api.labels.add("merge-approved");
+    // core.setFailed reports through a `::error::` workflow command on stdout.
+    const stdout = vi.spyOn(process.stdout, "write");
+
+    await runMain();
+    await untilFailed();
+
+    expect([...api.labels]).toEqual(["request-changes"]);
+    expect(readOutputs()["verdict"]).toBe("error");
+    expect(process.exitCode).toBe(1);
+    const lines = stdout.mock.calls.map((c) => String(c[0]));
+    expect(lines.find((l) => l.startsWith("::error::"))).toContain(
+      "AI Code Review failed: could not read PR comments to locate the prior review",
+    );
+  });
+
+  it("one App credential alone warns and falls back to the default token", async () => {
+    await prRun();
+    process.env["INPUT_APP_ID"] = "12345";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await runMain();
+    await untilFailed();
+
+    expect(warn).toHaveBeenCalledWith(
+      "[WARN] APP_ID and APP_PRIVATE_KEY must both be set; falling back to github-actions[bot]",
+    );
+    expect(api.calls[0]?.auth).toBe("token ghs_token");
   });
 });

@@ -121,7 +121,13 @@ describe("partitionFindings — the two reconcile() edge cases", () => {
       line: 12,
       severity: "blocker",
     });
-    const t = thread({ fp: "fp-orph-t", path: "src/x.ts", line: 10, isResolved: true });
+    const t = thread({
+      fp: "fp-orph-t",
+      path: "src/x.ts",
+      line: 10,
+      isResolved: true,
+      dismissal: "resolved",
+    });
     const applied = reconcile([f], [t]);
     expect(applied.toCreate).toEqual([f]);
     expect(applied.toReply).toEqual([]);
@@ -181,13 +187,20 @@ describe("partitionFindings — exhaustiveness and disjointness", () => {
       fp: "fp-dism-1",
       dismissal: "explicit",
     });
-    const orphanThread = thread({ fp: "fp-orph-t", path: "src/x.ts", line: 10, isResolved: true });
+    const orphanThread = thread({
+      fp: "fp-orph-t",
+      path: "src/x.ts",
+      line: 10,
+      isResolved: true,
+      dismissal: "resolved",
+    });
     const suppressedThread = thread({
       threadId: "T_sup",
       fp: "fp-sup-t",
       path: "src/s.ts",
       line: 5,
       isResolved: true,
+      dismissal: "resolved",
     });
     const suppressed = stampedFinding({ fp: "fp-sup", path: "src/s.ts", line: 5 });
     const priorThreads = [

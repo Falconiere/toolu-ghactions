@@ -62,7 +62,7 @@ function gitOrNull(args: string[], cwd: string): string | null {
  * "buffer" so a binary blob's NUL bytes survive for the binary check; null on a
  * non-zero git exit.
  */
-function defaultGitShow(cwd: string): GitShow {
+export function defaultGitShow(cwd: string): GitShow {
   return (ref: string, path: string): Buffer | null => {
     try {
       return execFileSync("git", ["show", `${ref}:${path}`], {
@@ -88,7 +88,7 @@ function listTracked(ref: string, cwd: string): string[] {
   return out.split("\n").filter((p) => p !== "");
 }
 
-// splitGlobs / globMatcher / globToRegExp now live in git/globs.ts (shared with EXCLUDE_GLOBS).
+// splitGlobs / globMatcher now live in git/globs.ts (shared with EXCLUDE_GLOBS).
 
 /** Ancestor directories of a changed file, nearest first (root file → none). */
 function ancestorDirs(file: string): string[] {

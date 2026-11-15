@@ -254,12 +254,12 @@ describe("reviewWithModel", () => {
     expect(result.error).toBeUndefined();
   });
 
-  it("overrides a TRUNCATED response's 'approved' to changes", async () => {
+  it("never posts a TRUNCATED response's 'approved', nor its half-written finding", async () => {
     // The mirror of the test above, and the reason the two cases cannot share a rule.
     // deepseek-truncated-approved.json is a real completion that wrote "approved" and
-    // then got cut mid-findings. A verdict written BEFORE the cut is not the model's
-    // conclusion — it never saw the findings it had not written yet — so a recovered
-    // truncation carrying findings is "changes", never a stale "approved".
+    // then got cut inside its only finding's text (`"text": "Unused`). A verdict written
+    // BEFORE the cut is not the model's conclusion, and the half sentence is not a
+    // finding: nothing completed, so this abstains — never a stale "approved".
     const result = await reviewWithModel(ENVELOPE, {
       model: "deepseek/deepseek-v4-flash",
       apiKey: "sk-test",
@@ -268,10 +268,35 @@ describe("reviewWithModel", () => {
       maxAttempts: 1,
     });
 
-    expect(result.verdict).toBe("changes");
-    expect(result.findings.length).toBeGreaterThan(0);
-    expect(result.partial).toBe(true);
+    expect(result.verdict).toBe("error");
+    expect(result.verdict).not.toBe("approved");
+    expect(result.findings).toEqual([]);
     expect(result.finishReason).toBe("length");
+  });
+
+  it("never recovers a response cut mid-JSON under a non-length finish", async () => {
+    // The recorded approved-with-nit completion, cut inside its finding's `text` but still
+    // reporting finish_reason "stop" (a dropped connection the provider closed cleanly).
+    // The quoted line makes the strict schema reject it, so it reaches recovery — which
+    // must not repair the cut into the "approved" the model wrote before it.
+    const body: unknown = JSON.parse(
+      readFileSync(join(FIXTURES, "deepseek-approved-with-nit.json"), "utf8"),
+      (key, value: unknown) =>
+        key === "content" && typeof value === "string"
+          ? value.slice(0, value.indexOf("const over"))
+          : value,
+    );
+
+    const result = await reviewWithModel(ENVELOPE, {
+      model: "deepseek/deepseek-v4-flash",
+      apiKey: "sk-test",
+      fetch: replayFetch(body),
+      maxRetries: 0,
+      maxAttempts: 1,
+    });
+
+    expect(result.verdict).toBe("error");
+    expect(result.findings).toEqual([]);
   });
 
   it("abstains on a complete response whose verdict is unrecognizable and findings empty", async () => {
@@ -471,6 +496,61 @@ describe("reviewWithModel", () => {
     expect(result.findings).toEqual([]);
     expect(result.error).toBeTruthy();
     expect(result.failure).toBe("transport");
+  });
+
+  it.each([0, 1])(
+    "keeps a custom endpoint's host out of the public error on a DNS failure (maxRetries %i)",
+    async (maxRetries) => {
+      // result.error is rendered in the PUBLIC PR comment. Real undici reports a DNS failure
+      // as TypeError("fetch failed") whose cause names the host — an internal hostname must
+      // reach the job log only. With any retries (production defaults to 2) the SDK wraps
+      // the failure in a RetryError carrying the same text.
+      const dnsFailure: typeof fetch = async () => {
+        throw new TypeError("fetch failed", {
+          cause: Object.assign(new Error("getaddrinfo ENOTFOUND llm.internal.corp"), {
+            code: "ENOTFOUND",
+          }),
+        });
+      };
+
+      const result = await reviewWithModel(ENVELOPE, {
+        provider: "openai-compatible",
+        baseUrl: "http://llm.internal.corp/v1",
+        model: "qwen3-32b",
+        apiKey: "",
+        fetch: dnsFailure,
+        maxRetries,
+        maxAttempts: 1,
+      });
+
+      expect(result.verdict).toBe("error");
+      expect(result.failure).toBe("transport");
+      expect(result.error).not.toContain("llm.internal.corp");
+      expect(result.error).toContain("Could not reach the model provider");
+    },
+    20_000,
+  );
+
+  it("shows the provider's own message for an HTTP error whose body lacks type/param", async () => {
+    // OpenRouter's real 401 body: `{message, code}` only. The provider SDK's error schema
+    // requires type/param, so its parse fails and the reader used to see just the status.
+    const unauthorized: typeof fetch = async () =>
+      new Response('{"error":{"message":"User not found.","code":401}}', {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      });
+
+    const result = await reviewWithModel(ENVELOPE, {
+      model: "deepseek/deepseek-v4-flash",
+      apiKey: "sk-test",
+      fetch: unauthorized,
+      maxRetries: 0,
+      maxAttempts: 1,
+    });
+
+    expect(result.verdict).toBe("error");
+    expect(result.failure).toBe("transport");
+    expect(result.error).toBe("HTTP 401: User not found.");
   });
 });
 

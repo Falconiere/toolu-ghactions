@@ -39,6 +39,7 @@ function thread(f: Finding, over: Partial<PriorThread> = {}): PriorThread {
     path: String(f.path),
     line: typeof f.line === "number" ? f.line : null,
     isResolved: false,
+    resolvedBy: "",
     isOutdated: false,
     rootBody: `**finding** ${String(f.text)}`,
     replies: [{ author: "human-dev", body: "@toolu dismiss — intentional" }],
@@ -107,7 +108,9 @@ describe("recomputeVerdict — settlement", () => {
   });
 
   it("a thread resolved on GitHub settles its finding too", () => {
-    const out = run(stored([MEDIUM]), [thread(MEDIUM, { isResolved: true, replies: [] })]);
+    const out = run(stored([MEDIUM]), [
+      thread(MEDIUM, { isResolved: true, dismissal: "resolved", replies: [] }),
+    ]);
     expect(out).toMatchObject({ kind: "approve", verdict: "approved" });
   });
 

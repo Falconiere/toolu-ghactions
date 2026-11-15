@@ -13,7 +13,9 @@
 //  - package assignment: the brief's `path_prefixes` beat path order when packing,
 //    and a null brief falls back to today's grouping exactly.
 import { describe, it, expect, afterEach } from "vitest";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { reviewAndValidate } from "@/pipeline/reviewCall.js";
 import { fetchDiff } from "@/git/diff.js";
 import type { DiffData } from "@/git/diff.js";
@@ -266,6 +268,69 @@ describe("reviewAndValidate — Layer 0 (distill) runs before chunking", () => {
     expect(out.ledger.entries["src/mod_a.ts"]?.status).toBe("reviewed");
     expect(out.ledger.entries["src/mod_b.ts"]?.status).toBe("pattern");
     expect(out.ledger.entries["src/util.ts"]?.status).toBe("reviewed");
+  });
+});
+
+describe("reviewAndValidate — scanner findings are scoped to the PR", () => {
+  it("keeps the PR's own finding in the prompt when 51 hits on an untouched file would fill the cap", async () => {
+    const dir = repoWith(
+      { "src/new.ts": "export const token = 'REDACTED-GITHUB-PAT';\n" },
+      { "src/old.ts": "export const x = 1;\n".repeat(60) },
+    );
+    // Real recorded gitleaks result, cloned: 51 on the base-only file, 1 on the PR's line.
+    interface Sarif {
+      runs: { results: { ruleId: string; locations: { physicalLocation: PhysLoc }[] }[] }[];
+    }
+    interface PhysLoc {
+      artifactLocation: { uri: string };
+      region: { startLine: number };
+    }
+    const sarif: Sarif = JSON.parse(
+      readFileSync(
+        new URL("../../mechanical/__tests__/fixtures/gitleaks.sarif", import.meta.url),
+        "utf8",
+      ),
+    );
+    const run = sarif.runs[0];
+    const template = run?.results[1];
+    if (run === undefined || template === undefined) throw new Error("fixture shape changed");
+    const clone = (
+      uri: string,
+      startLine: number,
+      ruleId: string,
+    ): Sarif["runs"][0]["results"][0] => ({
+      ...template,
+      ruleId,
+      locations: [{ physicalLocation: { artifactLocation: { uri }, region: { startLine } } }],
+    });
+    run.results = [
+      ...Array.from({ length: 51 }, (_, i) => clone("src/old.ts", i + 1, "stale-rule")),
+      clone("src/new.ts", 1, "pr-own-rule"),
+    ];
+    const sarifDir = mkdtempSync(join(tmpdir(), "reviewcall-sarif-"));
+    repos.push(sarifDir);
+    writeFileSync(join(sarifDir, "gitleaks.sarif"), JSON.stringify(sarif));
+
+    const calls: CapturedCall[] = [];
+    const server = modelServer(calls, VALID_BRIEF);
+    const out = await reviewAndValidate({
+      inputs: baseInputs(),
+      diff: diffOf(dir),
+      event: EVENT,
+      priorThreads: [],
+      reviewHead: "HEAD",
+      cwd: dir,
+      fetch: server.fetch,
+      sarifDir,
+    });
+
+    const prompt = calls
+      .filter((c) => !isCartographer(c))
+      .map((c) => c.user)
+      .join("\n");
+    expect(prompt).toContain("[gitleaks] pr-own-rule at src/new.ts:1");
+    expect(prompt).not.toContain("stale-rule");
+    expect(out.mechanical.map((f) => f.ruleId)).toEqual(["pr-own-rule"]);
   });
 });
 
@@ -547,6 +612,7 @@ describe("reviewAndValidate — the source-evidence gate's coverage consequence"
           line: finding.line,
           fp: fingerprint(finding),
           isResolved: true,
+          dismissal: "resolved",
         }),
       ],
       reviewHead: "HEAD",
@@ -578,7 +644,13 @@ describe("reviewAndValidate — the source-evidence gate's coverage consequence"
       diff: diffOf(dir),
       event: EVENT,
       priorThreads: [
-        thread({ path: first.path, line: 1, fp: fingerprint(first), isResolved: true }),
+        thread({
+          path: first.path,
+          line: 1,
+          fp: fingerprint(first),
+          isResolved: true,
+          dismissal: "resolved",
+        }),
       ],
       reviewHead: "HEAD",
       cwd: dir,

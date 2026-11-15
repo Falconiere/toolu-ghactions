@@ -14,8 +14,10 @@ export function appendFpMarker(body: string, fp: string): string {
 }
 
 /** Extract the fingerprint from a comment body, or null when the marker is absent
- *  (e.g. a human-authored review thread, which the bot must not manage). */
+ *  (e.g. a human-authored review thread, which the bot must not manage). Anchored to
+ *  the END, where {@link appendFpMarker} puts it: finding text above it may echo a
+ *  forged marker from the reviewed code. */
 export function extractFpMarker(body: string): string | null {
-  const m = body.match(/<!-- toolu-fp:([0-9a-f]+) -->/);
+  const m = body.match(/<!-- toolu-fp:([0-9a-f]+) -->\s*$/);
   return m?.[1] ?? null;
 }

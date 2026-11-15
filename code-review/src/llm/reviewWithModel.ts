@@ -126,6 +126,10 @@ export interface ProviderResult {
    *  its coverage, but they count toward settleVerdict's `removed` and the comment
    *  says how many were discarded. */
   unverifiedEvidence?: number;
+  /** Findings validateFindings dropped as unanchored or below MIN_CONFIDENCE
+   *  (pipeline/reviewCall.ts). Never counted in `removed`: settleVerdict only names
+   *  them when a "changes" verdict is left with no finding. */
+  discardedFindings?: number;
   /** Set on a salvaged partial whose output budget could grow no further — the ceiling
    *  (budget.ts's MAX_TOKEN_CEILING) was reached, or the provider refused the budget. It
    *  is what tells the reader (via the budget.ts wording) that MAX_TOKENS is no longer
@@ -140,9 +144,10 @@ export interface ProviderResult {
    * {@link REQUEST_TIMEOUT_MS}); a transient stall, not a schema problem. `"transport"` —
    * an HTTP or network-level failure reaching the provider at all (5xx after the SDK's own
    * retries, DNS/connection errors): an APICallError or a bare fetch failure, never
-   * NoObjectGeneratedError.
+   * NoObjectGeneratedError. `"discarded"` — set by pipeline/settle.ts only: a "changes"
+   * verdict whose findings the local gate discarded (below MIN_CONFIDENCE or unanchored).
    */
-  failure?: "schema" | "transport" | "timeout" | "evidence" | "coverage";
+  failure?: "schema" | "transport" | "timeout" | "evidence" | "coverage" | "discarded";
 }
 
 /**
@@ -296,7 +301,22 @@ export async function reviewWithModel(
       if (recovered !== null) return recovered;
       // Nothing recoverable: abstain. `controller.signal.aborted` is the source of truth
       // for "our own per-attempt deadline fired", read here in the controller's scope.
-      return abstain(err, controller.signal.aborted);
+      const failed = abstain(err, controller.signal.aborted);
+      // An EARLIER attempt or escalation already salvaged findings: keep them rather than
+      // discard a real prefix over this retry's failure, and say why it stayed a prefix.
+      if (best !== undefined) {
+        const salvaged = salvageResult(
+          best,
+          escalations > 0
+            ? { reason: "length", exhausted: budgetExhausted(budget) }
+            : { reason: "deadline" },
+        );
+        return {
+          ...salvaged,
+          error: `${salvaged.error ?? ""} The retry then failed: ${failed.error ?? ""}`,
+        };
+      }
+      return failed;
     } finally {
       clearTimeout(timeout);
     }

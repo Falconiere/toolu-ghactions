@@ -5,8 +5,8 @@
 // Adds the verdict label and removes the OPPOSITE one, so a PR never carries
 // both `merge-approved` and `request-changes` at once. "error" maps
 // to the request-changes label on purpose (a failed review must not auto-merge).
-// Honors MANAGE_LABELS (false → no-op). Non-fatal: any API error is caught and
-// reported; this never throws.
+// Honors MANAGE_LABELS (false → no-op). Non-fatal except for one case: failing to
+// remove `merge-approved` (anything but a 404) throws — see setVerdictLabel.
 import { errorMessage } from "@/errors.js";
 
 const APPROVED_LABEL = "merge-approved";
@@ -83,7 +83,8 @@ function mapVerdict(verdict: string): { add: string; remove: string; color: stri
  * Ensures the label exists (idempotent — an "already exists" error is ignored),
  * removes the opposite verdict label (a 404 when it isn't set is ignored), then
  * adds the verdict label. Honors `manageLabels:false` as a no-op and treats an
- * unknown verdict as "no label change". Never throws — any API error is caught.
+ * unknown verdict as "no label change". Every other API error is caught and reported,
+ * EXCEPT a non-404 failure removing `merge-approved`, which throws.
  *
  * @param octokit - the injected REST client.
  * @param verdict - the review verdict: "approved" | "changes" | "error".
@@ -117,7 +118,9 @@ export async function setVerdictLabel(
     // already exists / insufficient perms — non-fatal, the add below still tries.
   }
 
-  // Remove the opposite verdict label (ignore a 404 when it isn't set).
+  // Remove the opposite verdict label. A 404 means it was not set. Any other failure
+  // to drop merge-approved throws: merge-gate trusts that label alone, so a PR left
+  // carrying it beside request-changes would merge on a "changes" verdict.
   try {
     await octokit.rest.issues.removeLabel({
       owner,
@@ -125,8 +128,11 @@ export async function setVerdictLabel(
       issue_number: prNumber,
       name: mapping.remove,
     });
-  } catch {
-    // not set — ignore.
+  } catch (err) {
+    const notSet = typeof err === "object" && err !== null && "status" in err && err.status === 404;
+    if (!notSet && mapping.remove === APPROVED_LABEL) {
+      throw new Error(`could not remove ${APPROVED_LABEL}: ${errorMessage(err)}`, { cause: err });
+    }
   }
 
   // Add the verdict label.
