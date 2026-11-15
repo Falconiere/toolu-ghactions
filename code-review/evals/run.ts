@@ -14,10 +14,9 @@ import { compareJev } from "./compare.js";
 // changed files, so evals/fetch.ts fetches the paginated per-file "list pull
 // request files" API instead (no such cap) — see its module doc.
 //
-// NOT part of `bun run check`: evals/ sits outside tsconfig's `include` and is
-// listed in .oxlintrc.json's `ignorePatterns`, and vitest's own `include` glob
-// (src/**/__tests__/**) never reaches here either — see evals/__tests__/ for
-// this file's own tests, run directly with `bun test evals/__tests__`.
+// This file's own tests live in evals/__tests__/ and are `bun:test` specs, not
+// vitest — vitest's `include` glob (src/**/__tests__/**) never reaches them. They
+// run via `bun run test:evals`, which `bun run check` and CI both invoke.
 //
 // METRICS: `strata`/`patternGroups` are recomputed by calling `distill()`
 // ourselves on the identical diff object handed to `runReview` (pure,

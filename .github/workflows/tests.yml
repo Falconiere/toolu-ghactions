@@ -112,6 +112,11 @@ jobs:
       - name: Unit tests
         if: ${{ env.RUN == 'true' }}
         run: bun run test
+      - name: Eval harness tests
+        # evals/__tests__ are bun:test specs, not vitest — `bun run test` never
+        # discovered them, so they rotted unnoticed. Run them explicitly.
+        if: ${{ env.RUN == 'true' }}
+        run: bun run test:evals
       - name: Build bundles
         if: ${{ env.RUN == 'true' }}
         run: bun run build

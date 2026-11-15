@@ -1,6 +1,5 @@
 // evals/__tests__/args.test.ts — pure argument-parsing tests (no gh/network/
-// key). Run directly with `bun test evals/__tests__` — NOT part of `bun run
-// check` (evals/ is outside every leg's project, see .oxlintrc.json + tsconfig).
+// key). Run with `bun run test:evals`, which `bun run check` and CI both invoke.
 import { describe, it, expect } from "bun:test";
 import { parseArgs, parsePrRef, usage, ArgError, DEFAULT_PR } from "../args.js";
 

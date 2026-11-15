@@ -159,7 +159,7 @@ wall time includes their replayed latency.
 case-insensitive text substring. Unmatched findings are explicitly unclassified and
 need human adjudication. Use representative known false positives and cross-file defects
 to evaluate routing and prompt changes; fewer tokens or fewer findings alone do not
-establish better review quality. Run `bun test evals/__tests__` for harness tests.
+establish better review quality. Run `bun run test:evals` for harness tests.
 
 ## Quick start
 
@@ -677,7 +677,6 @@ checkout step is needed.
   is sanitized and injected into the user prompt inside a delimited UNTRUSTED
   block as a hint about *where* to look — **never** as instructions, and it
   cannot change the task, output schema, or verdict rules.
-- An allowed trigger reacts 👀 on the comment; a denied one reacts 👎.
 - A scoped/steered review (`@toolu review focus on …`) does **not** recompute
   "resolved" — see [Review memory](#review-memory).
 
@@ -1087,10 +1086,11 @@ package-layer, which folds in any bisection retries), findings raw vs. clustered
 coverage-status counts, marker bytes vs. the 65 000-char comment-size ceiling, and
 wall time.
 
-It is **excluded from `bun run check`** — evals/ sits outside `tsconfig.json`'s
-`include` and outside oxlint/oxfmt's walk (see `package.json`'s `lint`/`fmt`
-scripts), and vitest's own `include` glob never reaches it either. Its own tests
-live in `evals/__tests__/`, run directly with `bun test evals/__tests__`.
+Its own tests live in `evals/__tests__/` and run via `bun run test:evals`, which
+`bun run check` and CI both invoke. They are `bun:test` specs, not vitest, so
+vitest's own `include` glob never reaches them. The harness **source** is
+typechecked (`tsconfig.json` includes `evals/*.ts`) but still sits outside
+oxlint/oxfmt's walk (see `package.json`'s `lint`/`fmt` scripts).
 
 ```bash
 cd code-review
