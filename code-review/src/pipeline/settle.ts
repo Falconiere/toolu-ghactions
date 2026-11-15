@@ -119,9 +119,14 @@ export function settleVerdict(
       // Keep the review distinct from both an actionable change request and an
       // approval when the provider gives no supporting finding at all.
       verdict = "error";
-      validated.failure ??= "schema";
+      // Findings the local gate discarded are not the provider's fault: say so.
+      const discarded = input.result.discardedFindings ?? 0;
+      validated.failure ??= discarded > 0 ? "discarded" : "schema";
       validated.error ??=
-        "Model requested changes but supplied no source-validated actionable findings.";
+        discarded > 0
+          ? `Model requested changes, but its ${discarded} finding(s) were discarded ` +
+            "(below MIN_CONFIDENCE or not anchored to the diff)."
+          : "Model requested changes but supplied no source-validated actionable findings.";
     }
   }
   // A CARRIED finding was not re-examined this round (its path was out of the tree

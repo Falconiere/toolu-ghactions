@@ -85,8 +85,11 @@ const BARE_CONCLUSION = /^(?:consistent|safe|correct|harmless|abstain(?:ing)?)$/
 /** "This is a false positive" — the model's triage rejecting a scanner hit. */
 const FALSE_POSITIVE = /^(?:an?\s+)?false positive$/i;
 
-/** Negation inside an affirmation flips it: "is not acceptable for negative counts". */
-const NEGATION = /\b(?:not|never|no)\b|n't\b/i;
+/** Negation, restriction, or a different subject inside an affirmation flips it: "is
+ *  not acceptable for negative counts", "is only safe in single-threaded mode", "The
+ *  rest of the function is correct." */
+// shortcut: a different-subject compliment without one of these words ("The base case is correct.") still drops the finding, upgrade when the corpus shows it
+const NEGATION = /\b(?:not|never|no|only|unless|rest|otherwise|surrounding|remaining)\b|n't\b/i;
 
 /** A later clause that carries a claim of its own: "No defect, but …", "…, so X panics". */
 const CONTINUATION =

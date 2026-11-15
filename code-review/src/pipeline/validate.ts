@@ -2,6 +2,7 @@
 import type { ProviderResult } from "@/llm/reviewWithModel.js";
 import type { DiffData } from "@/git/diff.js";
 import type { ActionInputs } from "@/inputs.js";
+import type { MechanicalFinding } from "@/mechanical/sarif.js";
 import type { StampedFinding } from "./reviewCall.js";
 import { validateFindings } from "@/review/validate.js";
 import { fingerprint } from "@/state.js";
@@ -17,11 +18,13 @@ export function validate(
   result: ProviderResult,
   diff: DiffData,
   inputs: ActionInputs,
+  mechanical: readonly MechanicalFinding[],
 ): {
   stamped: StampedFinding[];
   selfNegating: number;
   unverifiedQuote: number;
   missingQuotePaths: string[];
+  discarded: number;
 } {
   const changedLinesByPath = changedLinesOf(diff);
   const lineTextByPath = new Map<string, Map<number, string>>(
@@ -35,12 +38,13 @@ export function validate(
     changedLinesByPath,
     inputs.minConfidence,
     lineTextByPath,
-    { requireQuote: true },
+    { requireQuote: true, mechanical },
   );
   return {
     stamped: anchored.findings.map((f) => ({ ...f, fp: fingerprint(f) })),
     selfNegating: anchored.selfNegating,
     unverifiedQuote: anchored.unverifiedQuote,
     missingQuotePaths: anchored.missingQuotePaths,
+    discarded: anchored.discarded,
   };
 }

@@ -206,16 +206,18 @@ export async function reviewAndValidate(input: ReviewCallInput): Promise<ReviewC
     );
   }
   result.findings = kept;
-  const { stamped, selfNegating, unverifiedQuote, missingQuotePaths } = validate(
+  const { stamped, selfNegating, unverifiedQuote, missingQuotePaths, discarded } = validate(
     result,
     distillation.review_diff,
     inputs,
+    mechanical,
   );
   // A quote that does not match its cited line is the model misreading one line of a
   // file it did read: drop the finding like any other gate drop and keep the file
   // reviewed. Condemning the file instead turned toolu-ghrunner PR #210's re-wrapped AGENTS.md
   // into a "Review incomplete" request-changes verdict on a provider call that succeeded.
   if (unverifiedQuote > 0) result.unverifiedEvidence = unverifiedQuote;
+  if (discarded > 0) result.discardedFindings = discarded;
   // A finding with NO quote is a model ignoring the evidence contract — nothing it said
   // can be checked, so its path is condemned, but only when NOTHING of the model's
   // work on that path survived: a file with a surviving finding was reviewed.

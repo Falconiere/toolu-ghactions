@@ -42741,7 +42741,7 @@ var NO_EXCESS_CLAUSE = /^no\s+(?:excessive|unbounded|significant)\s+[\w-]+(?:\s+
 var AFFIRMATION_CLAUSE = /^(?:[\w`'().:&-]+\s+){1,6}(?:is|are)\s+(?:[\w-]+\s+){0,4}?(?:acceptable|safe|correct|consistent|fine|harmless)(?:\s+(?:for|in|as)\s+.+)?$/i;
 var BARE_CONCLUSION = /^(?:consistent|safe|correct|harmless|abstain(?:ing)?)$/i;
 var FALSE_POSITIVE = /^(?:an?\s+)?false positive$/i;
-var NEGATION = /\b(?:not|never|no)\b|n't\b/i;
+var NEGATION = /\b(?:not|never|no|only|unless|rest|otherwise|surrounding|remaining)\b|n't\b/i;
 var CONTINUATION = /\b(?:but|however|although|though|yet|except|still|so|because|since|which|causing|leading)\b/i;
 var PRAISE_ONLY_PATTERNS = [
   /^the [^.!?]+ call is unchanged\. it is still called after [^.!?]+, which is correct because [^.!?]+\.$/i,
@@ -42801,10 +42801,21 @@ function validateFindings(findings, changedLinesByPath, minConfidence, lineTextB
   let selfNegating = 0;
   let missingQuote = 0;
   let unverifiedQuote = 0;
+  let discarded = 0;
   const missingQuotePaths = /* @__PURE__ */ new Set();
-  for (const f of findings) {
+  for (const claimed of findings) {
+    let f = claimed;
+    if (f.source !== void 0 && f.source !== "llm" && !(options.mechanical ?? []).some(
+      (m) => m.tool === claimed.source && m.path === claimed.path && m.line === claimed.line
+    )) {
+      const { source: _unbacked, ...rest } = f;
+      f = rest;
+    }
     const changedSet = changedSetByPath.get(f.path) ?? EMPTY_CHANGED;
-    if (!changedSet.has(f.line)) continue;
+    if (!changedSet.has(f.line)) {
+      discarded++;
+      continue;
+    }
     if (f.conclusion === "no_defect" || isSelfNegating(f.text)) {
       selfNegating++;
       continue;
@@ -42835,7 +42846,10 @@ function validateFindings(findings, changedLinesByPath, minConfidence, lineTextB
     }
     const c = f.confidence ?? "low";
     const keep = minConfidence === "high" && c === "high" || minConfidence === "medium" && (c === "high" || c === "medium");
-    if (!keep) continue;
+    if (!keep) {
+      discarded++;
+      continue;
+    }
     const spanInDiff = spanIsInDiff(f, changedSet);
     if (f.suggestion !== void 0 && !suggestionIsSafe(f, lineTextByPath, spanInDiff)) {
       const { suggestion: _dropped, ...rest } = f;
@@ -42860,7 +42874,8 @@ function validateFindings(findings, changedLinesByPath, minConfidence, lineTextB
     unsupportedEvidence: missingQuote + unverifiedQuote,
     missingQuote,
     unverifiedQuote,
-    missingQuotePaths: [...missingQuotePaths]
+    missingQuotePaths: [...missingQuotePaths],
+    discarded
   };
 }
 var QUOTE_SPILL_LINES = 3;
@@ -42875,7 +42890,9 @@ var ABSENT_LINE = "\0";
 function quoteInSpan(lines, finding, quoted) {
   const q = normalize(stripDiffPrefixes(quoted));
   const first = finding.line;
-  const last = Math.max(finding.end_line ?? first, first);
+  let maxLine = first;
+  for (const n of lines.keys()) if (n > maxLine) maxLine = n;
+  const last = Math.min(Math.max(finding.end_line ?? first, first), maxLine);
   if (q === "" || !lines.has(first)) return false;
   let lo = first;
   while (lo > first - QUOTE_SPILL_LINES && lines.has(lo - 1)) lo--;
@@ -44247,7 +44264,7 @@ function partitionMechanical(mechanical, chunks) {
 function changedLinesOf(diff) {
   return new Map(diff.files.map((f) => [f.path, f.changed_lines]));
 }
-function validate(result, diff, inputs) {
+function validate(result, diff, inputs, mechanical) {
   const changedLinesByPath = changedLinesOf(diff);
   const lineTextByPath = new Map(
     diff.files.map((f) => [
@@ -44260,13 +44277,14 @@ function validate(result, diff, inputs) {
     changedLinesByPath,
     inputs.minConfidence,
     lineTextByPath,
-    { requireQuote: true }
+    { requireQuote: true, mechanical }
   );
   return {
     stamped: anchored.findings.map((f) => ({ ...f, fp: fingerprint(f) })),
     selfNegating: anchored.selfNegating,
     unverifiedQuote: anchored.unverifiedQuote,
-    missingQuotePaths: anchored.missingQuotePaths
+    missingQuotePaths: anchored.missingQuotePaths,
+    discarded: anchored.discarded
   };
 }
 
@@ -45300,12 +45318,14 @@ async function reviewAndValidate(input) {
     );
   }
   result.findings = kept;
-  const { stamped, selfNegating, unverifiedQuote, missingQuotePaths } = validate(
+  const { stamped, selfNegating, unverifiedQuote, missingQuotePaths, discarded } = validate(
     result,
     distillation.review_diff,
-    inputs
+    inputs,
+    mechanical
   );
   if (unverifiedQuote > 0) result.unverifiedEvidence = unverifiedQuote;
+  if (discarded > 0) result.discardedFindings = discarded;
   const pathsWithSurvivors = new Set(stamped.map((f) => f.path));
   const condemned = missingQuotePaths.filter((path) => !pathsWithSurvivors.has(path));
   for (const path of condemned) {
@@ -45691,6 +45711,9 @@ function labelAndBadge(verdict, failure) {
         label: "request-changes",
         badge: `\u{1F6AB} Review incomplete \u2014 ${failure === "evidence" ? "source evidence" : "coverage incomplete"}`
       };
+    }
+    if (failure === "discarded") {
+      return { label: "request-changes", badge: "\u{1F6AB} Review incomplete \u2014 findings discarded" };
     }
     return { label: "request-changes", badge: "\u{1F6AB} Review incomplete \u2014 provider error" };
   }
@@ -46162,8 +46185,9 @@ function settleVerdict(input, reduction, exceptions) {
       verdict = "approved";
     } else {
       verdict = "error";
-      validated.failure ??= "schema";
-      validated.error ??= "Model requested changes but supplied no source-validated actionable findings.";
+      const discarded = input.result.discardedFindings ?? 0;
+      validated.failure ??= discarded > 0 ? "discarded" : "schema";
+      validated.error ??= discarded > 0 ? `Model requested changes, but its ${discarded} finding(s) were discarded (below MIN_CONFIDENCE or not anchored to the diff).` : "Model requested changes but supplied no source-validated actionable findings.";
     }
   }
   if (verdict === "approved" && lastVerdict(input) === "changes" && hasCarried(findings, reduction)) {

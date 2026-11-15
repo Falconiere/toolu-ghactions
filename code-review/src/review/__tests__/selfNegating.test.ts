@@ -129,4 +129,16 @@ describe("isSelfNegating — PR #307 replay", () => {
       false,
     );
   });
+
+  // A closing compliment about a DIFFERENT subject ("the rest", "otherwise") or a
+  // restricted one ("only safe in …") is not a retraction of the defect stated earlier.
+  it.each([
+    "Secret is compared with ==, enabling timing attacks. The rest of the function is correct.",
+    "The delete query has no WHERE clause and wipes the table. The surrounding logic is fine.",
+    "user.id is dereferenced before the null check, crashing on anonymous requests. The rest of the handler is safe.",
+    "Passwords are stored unhashed. The schema is otherwise consistent.",
+    "The shared buffer is mutated across requests, which is only safe in single-threaded mode.",
+  ])("keeps a defect followed by a different-subject or restricted affirmation: %j", (text) => {
+    expect(isSelfNegating(text)).toBe(false);
+  });
 });

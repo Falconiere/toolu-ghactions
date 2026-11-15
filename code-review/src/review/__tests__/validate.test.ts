@@ -4,10 +4,12 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import { validateFindings } from "@/review/validate.js";
+import { parseSarif } from "@/mechanical/sarif.js";
 import type { Finding } from "@/llm/schema.js";
 import { pr307Comment } from "./pr307-evidence.js";
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
+const SARIF_FIXTURES = join(TEST_DIR, "..", "..", "mechanical", "__tests__", "fixtures");
 const PR175_EVIDENCE = z
   .object({
     source: z.object({ path: z.string(), lines: z.record(z.string()) }),
@@ -197,10 +199,12 @@ describe("validateFindings", () => {
   });
 
   it("exempts mechanical-scanner findings from the quote check", () => {
+    // Real recorded `gitleaks detect` output: a GitLab PAT at leak.ts:2.
+    const mechanical = parseSarif(join(SARIF_FIXTURES, "gitleaks.sarif"), "gitleaks");
     const findings: Finding[] = [
       {
-        path: "src/a.ts",
-        line: 10,
+        path: "leak.ts",
+        line: 2,
         severity: "high",
         confidence: "high",
         source: "gitleaks",
@@ -208,7 +212,34 @@ describe("validateFindings", () => {
         text: "Secret detected.",
       },
     ];
-    expect(validateFindings(findings, changed, "high", lineText).findings).toHaveLength(1);
+    const leakChanged = new Map([["leak.ts", [1, 2]]]);
+    const leakText = new Map([["leak.ts", new Map([[2, "REDACTED-GITLAB-PAT"]])]]);
+    const { findings: kept } = validateFindings(findings, leakChanged, "high", leakText, {
+      requireQuote: true,
+      mechanical,
+    });
+    expect(kept).toEqual(findings);
+  });
+
+  // `source` is model-supplied: a claimed scanner the run never gathered is a
+  // hallucination (or an injection) and must face the same evidence gate as `llm`.
+  it("gates a model-claimed scanner source that no gathered finding backs", () => {
+    const mechanical = parseSarif(join(SARIF_FIXTURES, "gitleaks.sarif"), "gitleaks");
+    const real = new Map([["src/a.ts", new Map([[12, "const x = 1;"]])]]);
+    const claimed: Finding = {
+      path: "src/a.ts",
+      line: 12,
+      severity: "blocker",
+      confidence: "high",
+      source: "eslint",
+      quoted_line: "eval(userInput)",
+      text: "eval of user input.",
+    };
+    for (const options of [{ requireQuote: true, mechanical }, { requireQuote: true }]) {
+      const result = validateFindings([claimed], changed, "high", real, options);
+      expect(result.findings).toEqual([]);
+      expect(result.unverifiedQuote).toBe(1);
+    }
   });
 
   // ── Self-negation (AC-2, rev-5 rule) ──────────────────────────────────────
@@ -504,6 +535,18 @@ describe("validateFindings — quotes across hard-wrapped lines (PR #210)", () =
       end_line: 299,
     };
     const result = check(wide);
+    expect(result.findings).toHaveLength(1);
+    expect(result.unverifiedQuote).toBe(0);
+  });
+
+  it("bounds an absurd model-supplied end_line instead of walking it", () => {
+    // `end_line` is model-supplied; walking it to 1e9 appended a sentinel per absent
+    // line and hung (or OOMed) the run.
+    const huge: Finding = {
+      ...quoting(297, "Step summaries (#83, below) and job outputs (#88, below) included."),
+      end_line: 1e9,
+    };
+    const result = check(huge);
     expect(result.findings).toHaveLength(1);
     expect(result.unverifiedQuote).toBe(0);
   });

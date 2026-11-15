@@ -4,6 +4,8 @@
 // providers, so the dedup that used to live there runs here instead).
 //
 // Four drops, in order, matching the bash jq pipeline plus the rev-5 noise gate:
+//   0. (Not a drop) Provenance — a model-claimed scanner `source` that no gathered
+//      scanner finding backs is removed, so every gate below treats it as `llm`.
 //   1. Anchored — the cited `line` must be a real changed line in the diff for
 //      that path (anti-hallucination). Unanchored findings are dropped.
 //   2. Self-negation — the model set `conclusion: "no_defect"`, or the finding's
@@ -22,6 +24,7 @@
 // Then dedup by (path|line|end_line|normalized-text) fingerprint, keeping the
 // max severity within each group.
 import type { Finding } from "@/llm/schema.js";
+import type { MechanicalFinding } from "@/mechanical/sarif.js";
 // SEVERITY_RANK is owned by findings.ts (single source of truth) — imported here
 // so the dedup's max-severity comparison can never drift from the render ordering.
 import { SEVERITY_RANK } from "./findings.js";
@@ -52,12 +55,19 @@ export interface ValidateFindingsResult {
    *  never quotes leaves nothing to verify, while a quote that fails to match is the
    *  model misreading one line of a file it did review — an ordinary dropped finding. */
   missingQuotePaths: string[];
+  /** Findings dropped as unanchored (cited line not changed in the diff) or below
+   *  MIN_CONFIDENCE — what settleVerdict names when a "changes" verdict has none left. */
+  discarded: number;
 }
 
 /** Options for {@link validateFindings}. Legacy callers keep optional quotes;
  * fresh live model responses set `requireQuote` and must provide one. */
 export interface ValidateFindingsOptions {
   requireQuote?: boolean;
+  /** The scanner findings this run gathered. A non-`llm` `source` is model-supplied, so
+   *  it keeps its quote-gate exemption only when one of these backs it (same tool, path
+   *  and line); absent → no claimed scanner source is trusted. */
+  mechanical?: readonly MechanicalFinding[];
 }
 
 /**
@@ -94,12 +104,29 @@ export function validateFindings(
   let selfNegating = 0;
   let missingQuote = 0;
   let unverifiedQuote = 0;
+  let discarded = 0;
   const missingQuotePaths = new Set<string>();
-  for (const f of findings) {
+  for (const claimed of findings) {
+    // 0. Provenance: the model writes `source`, so a scanner it names must have
+    // reported this exact location this run, or the finding is gated as `llm`.
+    let f = claimed;
+    if (
+      f.source !== undefined &&
+      f.source !== "llm" &&
+      !(options.mechanical ?? []).some(
+        (m) => m.tool === claimed.source && m.path === claimed.path && m.line === claimed.line,
+      )
+    ) {
+      const { source: _unbacked, ...rest } = f;
+      f = rest;
+    }
     const changedSet = changedSetByPath.get(f.path) ?? EMPTY_CHANGED;
 
     // 1. Anchored: the cited line must be a real changed line in the diff.
-    if (!changedSet.has(f.line)) continue;
+    if (!changedSet.has(f.line)) {
+      discarded++;
+      continue;
+    }
 
     // 2. Self-negation: the model withdrew the finding (`conclusion: "no_defect"`)
     // or its own text concludes there is no defect ("No issue.", "… is safe. No
@@ -120,7 +147,7 @@ export function validateFindings(
     // not come from the cited line means the model is unsure what it is flagging
     // (precision over recall, per the checklist). It only fires when the model
     // supplied a quote AND we have the line's text; mechanical scanners (which
-    // anchor exactly) are exempt.
+    // anchor exactly) are exempt once step 0 confirmed the scanner reported it.
     const isLlm = f.source === undefined || f.source === "llm";
     const failure = isLlm ? quoteFailure(f, lineTextByPath, options.requireQuote === true) : null;
     if (failure !== null) {
@@ -154,7 +181,10 @@ export function validateFindings(
     const keep =
       (minConfidence === "high" && c === "high") ||
       (minConfidence === "medium" && (c === "high" || c === "medium"));
-    if (!keep) continue;
+    if (!keep) {
+      discarded++;
+      continue;
+    }
 
     // 4. Suggestion strip: keep it only when high-confidence AND the whole span
     // is in the diff; otherwise drop just the suggestion, keep the finding.
@@ -187,6 +217,7 @@ export function validateFindings(
     missingQuote,
     unverifiedQuote,
     missingQuotePaths: [...missingQuotePaths],
+    discarded,
   };
 }
 
@@ -238,7 +269,11 @@ const ABSENT_LINE = "\0";
 function quoteInSpan(lines: Map<number, string>, finding: Finding, quoted: string): boolean {
   const q = normalize(stripDiffPrefixes(quoted));
   const first = finding.line;
-  const last = Math.max(finding.end_line ?? first, first);
+  // `end_line` is model-supplied: past the file's last present line the walk below
+  // would only append sentinels, so clamping there leaves every match unchanged.
+  let maxLine = first;
+  for (const n of lines.keys()) if (n > maxLine) maxLine = n;
+  const last = Math.min(Math.max(finding.end_line ?? first, first), maxLine);
   if (q === "" || !lines.has(first)) return false;
   let lo = first;
   while (lo > first - QUOTE_SPILL_LINES && lines.has(lo - 1)) lo--;
