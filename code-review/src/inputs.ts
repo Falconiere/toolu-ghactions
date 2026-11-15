@@ -228,13 +228,9 @@ export const DEFAULT_TRIGGER_PHRASE = "@toolu";
 
 /**
  * Parse TRIGGER_PHRASE: trimmed, falling back to {@link DEFAULT_TRIGGER_PHRASE} when
- * empty. PURE (no `core.getInput`) on purpose — gate/settleCheckCli.ts is a node-type
- * action, which gets no argv and reads its inputs off `process.env` as `INPUT_*`, so
- * it cannot go through `readInputs()` and used to hand-duplicate this default. One
- * parser, two call sites: the merge-gate recompute can no longer drift from the
- * review run on which phrase settles a finding.
+ * empty.
  */
-export function parseTriggerPhrase(raw: string): string {
+function parseTriggerPhrase(raw: string): string {
   return raw.trim() || DEFAULT_TRIGGER_PHRASE;
 }
 
@@ -245,10 +241,9 @@ export function parseTriggerPhrase(raw: string): string {
  * {@link readVerbosity} and {@link readRulesRef} use — rather than silently failing
  * OPEN to the looser gate, which is how a `MIN_TRIGGER_PERMISSION: "maintain"` typo
  * would quietly let any write-level commenter dismiss a blocker. An empty value is
- * the normal default and stays silent. Pure, for the same reason
- * {@link parseTriggerPhrase} is.
+ * the normal default and stays silent.
  */
-export function parseMinTriggerPermission(raw: string): "write" | "admin" {
+function parseMinTriggerPermission(raw: string): "write" | "admin" {
   const token = raw.trim().toLowerCase();
   if (token === "" || token === "write") return "write";
   if (token === "admin") return "admin";

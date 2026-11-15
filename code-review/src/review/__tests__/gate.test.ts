@@ -1,4 +1,4 @@
-// gate.test.ts — real-data unit tests for the FAIL_ON merge-gate policy. Inputs
+// gate.test.ts — real-data unit tests for the FAIL_ON policy. Inputs
 // are real CSV strings; core.warning is spied (a platform double, not mock data)
 // to assert the dropped-token diagnostic without writing to the run log.
 import { describe, it, expect, vi, afterEach } from "vitest";

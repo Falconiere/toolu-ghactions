@@ -1,7 +1,6 @@
-// pipeline/settleEvaluation.ts — the READ-ONLY half of the settle recompute, shared by
-// the code-review settle pass (pipeline/dismissRecompute.ts, which then writes the
-// sticky + label) and merge-gate's recompute (gate/settleCheck.ts, which writes
-// nothing). One implementation, so both callers agree on what "settled" means.
+// pipeline/settleEvaluation.ts — the READ-ONLY half of the settle recompute. The
+// code-review settle pass (pipeline/dismissRecompute.ts) runs it, then writes the
+// sticky + label.
 //
 // It locates the sticky, trusts it only when Bot-authored and not mid-review, reads the
 // PR's LIVE head, reads only the threads that same bot opened (github/threads.ts filters

@@ -150,8 +150,7 @@ describe("action.yml delivers every declared input to the reviewer", () => {
   it("forwards APPROVE_BELOW — the input that shipped dead in #127", () => {
     // Named explicitly because this one already regressed once: declared with a full
     // description, absent from the env block, so getInput("APPROVE_BELOW") always returned
-    // "" and parseApproveBelow always fell back to "nit". merge-gate/action.yml forwards its
-    // mirror of the same input, so the gate and the review disagreed about what blocks.
+    // "" and parseApproveBelow always fell back to "nit".
     expect(DECLARED).toContain("APPROVE_BELOW");
     expect(FORWARDED).toContainEqual(["APPROVE_BELOW", "APPROVE_BELOW"]);
   });

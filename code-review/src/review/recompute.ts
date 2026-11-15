@@ -1,7 +1,7 @@
 // review/recompute.ts — recompute a review's verdict and label DETERMINISTICALLY from
 // the last completed round's stored findings minus the ones settled on their threads.
-// No model, no git, no I/O: the shared primitive behind the `@toolu dismiss` settle
-// pass (pipeline/dismissRecompute.ts) and, later, merge-gate's recompute (#123).
+// No model, no git, no I/O: the primitive behind the `@toolu dismiss` settle
+// pass (pipeline/dismissRecompute.ts).
 //
 // FAIL CLOSED (epic #126 invariant): no stored state, an incomplete round, a stored
 // head that is not the PR's current head, or a last verdict other than "changes" all

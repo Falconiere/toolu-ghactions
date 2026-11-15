@@ -1,4 +1,4 @@
-// gate.ts — merge-gate policy for the action's exit status. Maps the FAIL_ON
+// gate.ts — the FAIL_ON policy for the action's exit status. Maps the FAIL_ON
 // input to the set of verdicts that should fail the job (turning this check red
 // so branch protection can block the PR). Pure + side-effect-free except for a
 // single core.warning when an input token is unrecognized.
