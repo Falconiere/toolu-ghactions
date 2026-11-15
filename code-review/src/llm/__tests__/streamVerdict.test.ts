@@ -126,6 +126,54 @@ describe("streamVerdict — a cut stream (AC-5)", () => {
     expect(err.text).toBe(content);
   });
 
+  it.each([
+    ["finish_reason stop", (c: string) => sseResponse(contentFrames(c, "stop"))],
+    [
+      "finish_reason content_filter",
+      (c: string) => sseResponse(contentFrames(c, "content_filter")),
+    ],
+    [
+      "no finish_reason and no [DONE]",
+      (c: string) => sseResponse(contentFrames(c, "stop").slice(0, -1), false),
+    ],
+  ])('rejects a stream cut at `"findings":[` with %s, never a complete review', async (_, body) => {
+    // The SDK validates its REPAIRED partial snapshot, which closes the open array to `[]`
+    // — so without the raw-text check this cut came back as a complete zero-finding review.
+    const { content } = fixture("deepseek-truncated-before-findings");
+    const err: unknown = await stream(async () => body(content)).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(Error);
+    // A plain (transport) Error: a NoObjectGeneratedError would let recover() repair the cut.
+    expect(NoObjectGeneratedError.isInstance(err)).toBe(false);
+  });
+
+  it("accepts a complete JSON object followed by trailing prose", async () => {
+    const { content } = fixture("findings-two");
+    const result = await stream(async () =>
+      sseResponse(contentFrames(`${content}\n\nThat concludes the review.`, "stop")),
+    );
+
+    expect(result.outcome).toBe("complete");
+    if (result.outcome !== "complete") throw new Error("expected a complete stream");
+    expect(result.object.findings).toHaveLength(2);
+  });
+
+  it("drops the half-written last finding when the length cut lands inside its text", async () => {
+    // findings-two.json cut mid-way through the SECOND finding's `text`: the SDK's repair
+    // closes the open string, so the half sentence would otherwise validate as a finding.
+    const { content } = fixture("findings-two");
+    const cut = content.slice(0, content.indexOf("lacks a doc comment"));
+    const result = await stream(async () => sseResponse(contentFrames(cut, "length")));
+
+    expect(result.outcome).toBe("truncated");
+    if (result.outcome !== "truncated") throw new Error("expected a truncated stream");
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]?.line).toBe(2);
+  });
+
   it("salvages the streamed prefix when the caller's deadline cuts the body", async () => {
     // The deadline case: every finding of a real recorded review reaches us, then the
     // per-attempt AbortController fires before the finish frame. The prefix is worth

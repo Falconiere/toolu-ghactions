@@ -296,7 +296,22 @@ export async function reviewWithModel(
       if (recovered !== null) return recovered;
       // Nothing recoverable: abstain. `controller.signal.aborted` is the source of truth
       // for "our own per-attempt deadline fired", read here in the controller's scope.
-      return abstain(err, controller.signal.aborted);
+      const failed = abstain(err, controller.signal.aborted);
+      // An EARLIER attempt or escalation already salvaged findings: keep them rather than
+      // discard a real prefix over this retry's failure, and say why it stayed a prefix.
+      if (best !== undefined) {
+        const salvaged = salvageResult(
+          best,
+          escalations > 0
+            ? { reason: "length", exhausted: budgetExhausted(budget) }
+            : { reason: "deadline" },
+        );
+        return {
+          ...salvaged,
+          error: `${salvaged.error ?? ""} The retry then failed: ${failed.error ?? ""}`,
+        };
+      }
+      return failed;
     } finally {
       clearTimeout(timeout);
     }

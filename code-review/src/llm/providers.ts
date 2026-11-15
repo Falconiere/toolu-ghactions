@@ -7,12 +7,7 @@
 // transport so OpenRouter routing/reasoning extras never reach another server.
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import {
-  defaultSettingsMiddleware,
-  wrapLanguageModel,
-  type JSONValue,
-  type LanguageModel,
-} from "ai";
+import type { JSONValue, LanguageModel } from "ai";
 
 /** Supported backends. Kept as a type so the input contract, the report
  *  payload and the eval CLI all name the same resolved value. */
@@ -107,20 +102,27 @@ export function resolveModel(opts: ResolveModelOptions): LanguageModel {
   const fetchOpt = opts.fetch ? { fetch: opts.fetch } : {};
   if (opts.provider === "openai-compatible") {
     if (!opts.baseUrl) throw new Error("BASE_URL is required for PROVIDER=openai-compatible.");
-    const model = createOpenAICompatible({
+    const extra = opts.extraBody;
+    return createOpenAICompatible({
       name: "openai-compatible",
       baseURL: validateBaseUrl(opts.baseUrl),
       ...(opts.apiKey ? { apiKey: opts.apiKey } : {}),
-      ...fetchOpt,
+      // EXTRA_BODY is merged into the WIRE body: passed as provider metadata, the SDK's
+      // getArgs re-sets `reasoning_effort` from its own camelCase option and drops ours.
+      // Reserved keys never get here — parseExtraBody rejects them. The SDK always posts
+      // a JSON string; any other body is passed through untouched.
+      ...(extra
+        ? {
+            fetch: (url: Parameters<typeof fetch>[0], init?: RequestInit) =>
+              (opts.fetch ?? fetch)(
+                url,
+                typeof init?.body === "string"
+                  ? { ...init, body: JSON.stringify({ ...JSON.parse(init.body), ...extra }) }
+                  : init,
+              ),
+          }
+        : fetchOpt),
     })(opts.model);
-    return opts.extraBody
-      ? wrapLanguageModel({
-          model,
-          middleware: defaultSettingsMiddleware({
-            settings: { providerMetadata: { "openai-compatible": opts.extraBody } },
-          }),
-        })
-      : model;
   }
   if (opts.baseUrl) throw new Error("BASE_URL requires PROVIDER=openai-compatible.");
   if (opts.extraBody) throw new Error("EXTRA_BODY requires PROVIDER=openai-compatible.");

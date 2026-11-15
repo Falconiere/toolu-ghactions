@@ -46,6 +46,7 @@ import {
   type ObjectStreamPart,
 } from "ai";
 import { Finding, PartialVerdict, Verdict, normalizeFinding } from "./schema.js";
+import { closedFindings, closesJson } from "./recover.js";
 
 /** Everything one streamed review call needs. Mirrors the generateObject call it
  *  replaces; `mode: "json"`, the {@link Verdict} schema and temperature 0 are pinned
@@ -143,7 +144,17 @@ export async function streamVerdict(args: StreamVerdictArgs): Promise<StreamVerd
   if (finishReason !== "length") {
     // Clean finish: the SDK-validated object, or its NoObjectGeneratedError for output
     // that never matched the schema — the throw the existing recover() path expects.
-    return { outcome: "complete", object: await result.object, finishReason };
+    const object = await result.object;
+    // `object` is the REPAIRED snapshot, so a body cut mid-JSON with a non-length finish
+    // (stop, content-filter, or the `other` the SDK synthesises when none arrives) would
+    // validate as a finished review. Require the raw text to close; trailing prose is fine.
+    // A plain Error on purpose: a NoObjectGeneratedError would let recover() repair the cut.
+    if (!closesJson(text)) {
+      throw new Error(
+        `model stream stopped before its JSON closed (finish_reason ${finishReason})`,
+      );
+    }
+    return { outcome: "complete", object, finishReason };
   }
   const prefix = salvagePrefix(snapshot);
   if (prefix.findings.length > 0) return { outcome: "truncated", ...prefix, finishReason };
@@ -182,15 +193,16 @@ function salvageAbortOrThrow(
 
 /**
  * The findings of a partial snapshot that already validate, element-wise. The SDK's
- * partial parser closes the open JSON, so the half-written trailing finding is present
- * but almost always invalid (a cut severity/path fails its own schema) and drops out
- * here — the completed ones survive. NORMALIZE, NEVER INVENT: same rule as recover.ts.
+ * partial parser closes the open JSON, so the half-written trailing finding is present —
+ * and a cut inside its `text` or `conclusion` would still validate — so
+ * {@link closedFindings} drops it; the completed ones survive. NORMALIZE, NEVER INVENT:
+ * same rule as recover.ts.
  */
 function salvagePrefix(snapshot: unknown): Prefix {
   const loose = PartialVerdict.safeParse(snapshot);
   if (!loose.success) return { findings: [] };
   const findings: Finding[] = [];
-  for (const raw of loose.data.findings ?? []) {
+  for (const raw of closedFindings(snapshot, loose.data.findings ?? [])) {
     const parsed = Finding.safeParse(normalizeFinding(raw));
     if (parsed.success) findings.push(parsed.data);
   }

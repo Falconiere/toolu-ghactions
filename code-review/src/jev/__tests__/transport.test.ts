@@ -194,6 +194,32 @@ it("does not schedule backoff beyond the shared deadline", async () => {
   expect(result.reason).toBe("deadline");
 });
 
+it("dispatches a batch the splitter accepted at exactly its byte limit", async () => {
+  // The splitter budgets state + questions; assess used to measure the `{state,questions}`
+  // wrapper too (23 bytes more), so a batch landing at the limit was refused with zero calls.
+  const fixture = Fixture.parse(
+    JSON.parse(readFileSync(new URL("./fixtures/supported.json", import.meta.url), "utf8")),
+  );
+  const questions = { ...fixture.request.questions };
+  for (let i = 0; i < 400; i++) {
+    questions[`q${String(i).padStart(3, "0")}`] = { ...question, instructions: "x".repeat(300) };
+  }
+  // Pad the state so the splitter's single batch is exactly REQUEST_BYTES (180000).
+  const state = "s".repeat(180000 - Buffer.byteLength(JSON.stringify(questions)) - 2);
+  expect(splitQuestions(state, questions)).toHaveLength(1);
+  let calls = 0;
+  const result = await assess(state, questions, {
+    apiKey: "private",
+    model: "typesafe/jev-1.13",
+    fetch: async () => {
+      calls++;
+      return new Response(JSON.stringify(fixture.response));
+    },
+  });
+  expect(calls).toBe(1);
+  expect(result.answers.finding?.choice).toBe("supported");
+});
+
 it("rejects malformed probabilities and incomplete answers independently", async () => {
   const fixture = Fixture.parse(
     JSON.parse(readFileSync(new URL("./fixtures/supported.json", import.meta.url), "utf8")),

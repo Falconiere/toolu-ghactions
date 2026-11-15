@@ -18,6 +18,7 @@ interface CapturedBody {
   stream?: boolean;
   /** A caller-supplied EXTRA_BODY field, for the openai-compatible transport only. */
   chat_template_kwargs?: { enable_thinking?: boolean };
+  reasoning_effort?: string;
 }
 
 /** A fetch that records the outgoing request body, then replays the success fixture
@@ -68,10 +69,9 @@ describe("outgoing request shape (reasoning-off proof)", () => {
 
 describe("outgoing request shape (custom openai-compatible endpoint)", () => {
   it("carries EXTRA_BODY onto the wire, and no OpenRouter-only extras with it", async () => {
-    // EXTRA_BODY reaches the request ONLY through providers.ts's
-    // defaultSettingsMiddleware({ settings: { providerMetadata: { "openai-compatible": … } } })
-    // — which works because that literal string happens to equal config.provider.split(".")[0]
-    // inside @ai-sdk/openai-compatible. The only other exercise of the path is
+    // EXTRA_BODY reaches the request ONLY through the fetch wrapper providers.ts hands to
+    // createOpenAICompatible, which merges it into the serialized wire body (provider
+    // metadata lost `reasoning_effort` to the SDK's own option). The only other exercise of the path is
     // custom-endpoint-live.test.ts, and it is skipIf(!TOOLU_LIVE_BASE_URL || !TOOLU_LIVE_MODEL)
     // — permanently skipped in CI. custom-endpoint-inputs.test.ts asserts the resolved
     // provider id but never that the fields land in the body. So an SDK upgrade, or a rename
@@ -84,7 +84,9 @@ describe("outgoing request shape (custom openai-compatible endpoint)", () => {
     await reviewWithModel(ENVELOPE, {
       provider: "openai-compatible",
       baseUrl: "http://127.0.0.1:8000/v1",
-      extraBody: { chat_template_kwargs: { enable_thinking: false } },
+      // reasoning_effort is the field @ai-sdk/openai-compatible's getArgs overwrites from its
+      // own camelCase option when extras ride in as provider metadata.
+      extraBody: { chat_template_kwargs: { enable_thinking: false }, reasoning_effort: "low" },
       model: "qwen3-32b",
       apiKey: "",
       fetch: capturingFetch(captured),
@@ -97,6 +99,7 @@ describe("outgoing request shape (custom openai-compatible endpoint)", () => {
 
     // The caller's extra field arrives verbatim, at the TOP LEVEL of the request body.
     expect(body.chat_template_kwargs).toEqual({ enable_thinking: false });
+    expect(body.reasoning_effort).toBe("low");
     expect(body.model).toBe("qwen3-32b");
     // OpenRouter's routing/reasoning extras must never reach another server.
     expect(body.reasoning).toBeUndefined();

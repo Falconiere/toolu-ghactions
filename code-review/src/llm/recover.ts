@@ -14,13 +14,14 @@
 // The ABSTENTION itself lives here too ({@link abstain}), because it is the other half of
 // the same decision: recover-then-abstain is one policy, and keeping the two together is
 // what stops a caller from inventing a third answer. reviewWithModel keeps only the loop.
-import { NoObjectGeneratedError } from "ai";
+import { APICallError, NoObjectGeneratedError, RetryError } from "ai";
 import { jsonrepair } from "jsonrepair";
 import { errorMessage } from "@/errors.js";
 import { Finding, PartialVerdict, normalizeFinding, normalizeVerdict } from "./schema.js";
 import {
   deadlineSalvageMessage,
   droppedFindingsMessage,
+  providerError,
   truncationSalvageMessage,
 } from "./budget.js";
 import type { ProviderResult } from "./reviewWithModel.js";
@@ -55,6 +56,42 @@ export function hasPartialOutput(err: unknown): boolean {
 export interface Prefix {
   findings: Finding[];
   review_plan?: string;
+}
+
+/**
+ * The raw findings of a CUT response's repaired JSON, minus the one being written when the
+ * cut landed. When `findings` is the object's last key the array was still open, and the
+ * repair closed its last element — a cut inside `text` or `conclusion` would otherwise
+ * survive as a finding (a cut `"no_defe` even turns a withdrawal into a defect).
+ * Key order is read off the parsed JSON itself, never off a zod parse (which reorders).
+ */
+export function closedFindings(repaired: unknown, findings: unknown[]): unknown[] {
+  if (typeof repaired !== "object" || repaired === null) return findings;
+  // shortcut: also drops a finished finding when the cut lands exactly between two findings, the budget escalation re-asks
+  return Object.keys(repaired).at(-1) === "findings" ? findings.slice(0, -1) : findings;
+}
+
+/**
+ * True when every JSON bracket the raw text opened was closed — a string-aware depth
+ * count, so fences or prose around a finished object still pass while a body cut
+ * mid-object (or mid-string) does not.
+ */
+export function closesJson(text: string): boolean {
+  let depth = 0;
+  let opened = false;
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === "\\") i++;
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') inString = true;
+    else if (ch === "{" || ch === "[") {
+      depth++;
+      opened = true;
+    } else if (ch === "}" || ch === "]") depth--;
+  }
+  return opened && depth === 0 && !inString;
 }
 
 /** The better of two salvaged prefixes: more completed findings wins, and a tie keeps the
@@ -131,6 +168,9 @@ export function recover(err: unknown, exhausted = false): ProviderResult | null 
   if (!NoObjectGeneratedError.isInstance(err) || typeof err.text !== "string") return null;
   // Nothing was emitted at all (the hidden-reasoning bug) — there is no output to read.
   if (err.text.trim() === "") return null;
+  // A non-length finish whose text never closed its JSON is a cut stream, not a complete
+  // off-schema answer: repairing it would launder the cut into the verdict written first.
+  if (!isLengthTruncation(err) && !closesJson(err.text)) return null;
   let repaired: unknown;
   try {
     repaired = JSON.parse(jsonrepair(err.text));
@@ -140,14 +180,15 @@ export function recover(err: unknown, exhausted = false): ProviderResult | null 
   const loose = PartialVerdict.safeParse(repaired);
   if (!loose.success) return null;
 
-  const raw = loose.data.findings ?? [];
+  const truncated = isLengthTruncation(err);
+  const all = loose.data.findings ?? [];
+  const raw = truncated ? closedFindings(repaired, all) : all;
   const findings: Finding[] = [];
   for (const f of raw) {
     const r = Finding.safeParse(normalizeFinding(f));
     if (r.success) findings.push(r.data);
   }
   const dropped = raw.length - findings.length;
-  const truncated = isLengthTruncation(err);
 
   // A truncated response's findings array is open-ended by construction: a cut landing
   // before the first finding closes (or before any was written at all) jsonrepair-repairs
@@ -213,6 +254,30 @@ function classifyFailure(err: unknown, aborted: boolean): "schema" | "transport"
 }
 
 /**
+ * The failure text the PUBLIC PR comment may carry; the raw detail goes to the job log.
+ * A provider HTTP answer → `HTTP <status>: <its own error.message>`. No HTTP answer at all
+ * (DNS, connect, TLS) → a fixed line, because the raw text names the endpoint's host —
+ * possibly an internal one. Anything else (schema errors, aborts, this action's own
+ * stream errors) → verbatim. A RetryError is judged by the failure it gave up on.
+ */
+function publicError(err: unknown): string {
+  const last = RetryError.isInstance(err) ? err.lastError : err;
+  const cause = last instanceof Error && last.cause instanceof Error ? last.cause.message : "";
+  process.stdout.write(`  Model call failed: ${errorMessage(err)}${cause && ` (${cause})`}\n`);
+  if (APICallError.isInstance(last) && last.statusCode !== undefined) {
+    const message = providerError(last.responseBody)?.message ?? errorMessage(last);
+    return `HTTP ${last.statusCode}: ${message}`;
+  }
+  if (
+    APICallError.isInstance(last) ||
+    (last instanceof TypeError && last.message === "fetch failed")
+  ) {
+    return "Could not reach the model provider (network error); details are in the job log.";
+  }
+  return errorMessage(err, "OpenRouter request failed");
+}
+
+/**
  * Build the abstention result from a thrown error — what the caller returns when nothing
  * was recoverable and nothing was salvaged. Pulls the model's finishReason off a
  * {@link NoObjectGeneratedError} when present (the error class for empty content — the
@@ -225,7 +290,7 @@ export function abstain(err: unknown, aborted: boolean): ProviderResult {
   const result: ProviderResult = {
     verdict: "error",
     findings: [],
-    error: errorMessage(err, "OpenRouter request failed"),
+    error: publicError(err),
     failure: classifyFailure(err, aborted),
   };
   if (NoObjectGeneratedError.isInstance(err) && err.finishReason !== undefined) {
