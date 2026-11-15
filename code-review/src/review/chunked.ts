@@ -44,7 +44,8 @@ export interface ChunkedReviewOptions {
   diff: DiffData;
   /** Per-chunk diff-line budget; ≤ 0 disables chunking (always one call). */
   maxChunkLines: number;
-  /** Max chunks (packages); files beyond spill out and are noted. 0 = unlimited.
+  /** Max chunks (packages); files beyond spill out and are ledgered
+   *  `unreviewed (chunk-limit)`. 0 = unlimited.
    *  NOT a model-call count: a package costs 1 call when it succeeds or fails
    *  unbisectably-without-retry, 2 with its one retry, and up to 7 when a schema
    *  failure bisects (1 + 2 halves + 4 quarters, review/bisect.ts) — so the call
@@ -126,13 +127,14 @@ export async function reviewChunked(opts: ChunkedReviewOptions): Promise<Provide
     (i) => runPackage(i),
   );
 
-  // Spilled files were never attempted: loud per-path (ledger) AND in the comment.
+  // Spilled files were never attempted: loud per-path, as `unreviewed (chunk-limit)`
+  // ledger rows the comment's Coverage section names. There is deliberately no
+  // prose footnote here — it used to ride `other_checks`, which settle.ts clears
+  // (free-form model commentary is never reconcilable with individual findings), so
+  // the notice was built and thrown away while the ledger rows already carried the
+  // same information path by path.
   reportCoverage(opts.onCoverage, dropped, { status: "unreviewed", reason: "chunk-limit" });
-  const merged = mergeResults([first, ...rest]);
-  if (dropped.length > 0) {
-    merged.other_checks = appendDroppedNotice(merged.other_checks, dropped, maxChunks);
-  }
-  return merged;
+  return mergeResults([first, ...rest]);
 }
 
 /** The whole diff in ONE call: the fast path and the degenerate fallback. Never
@@ -232,16 +234,4 @@ function partitionMechanical(
     partitions[chunkOf.get(finding.path) ?? 0]?.push(finding);
   }
   return partitions;
-}
-
-/** Append a "files not reviewed (chunk limit reached)" note to the other-checks blurb. */
-function appendDroppedNotice(
-  otherChecks: string | undefined,
-  dropped: FileSegment[],
-  maxChunks: number,
-): string {
-  const names = dropped.map((s) => s.path).filter((p) => p !== "");
-  const list = names.length > 0 ? `: ${names.join(", ")}` : "";
-  const notice = `⚠️ ${dropped.length} file(s) were not reviewed — chunk limit (MAX_CHUNKS=${maxChunks}) reached${list}.`;
-  return otherChecks !== undefined && otherChecks !== "" ? `${otherChecks}\n\n${notice}` : notice;
 }

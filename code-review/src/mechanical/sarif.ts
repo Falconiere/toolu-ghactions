@@ -16,10 +16,8 @@ export interface MechanicalFinding {
   tool: MechanicalTool;
   ruleId: string;
   path: string;
-  /** 1-based start line. */
+  /** 1-based start line — always a positive integer; a result without one is dropped. */
   line: number;
-  /** 1-based end line, when the report carries one. */
-  endLine?: number;
   severity: MechanicalSeverity;
   message: string;
 }
@@ -91,13 +89,18 @@ function toFinding(
 
   const path = (isRecord(artifact) ? asString(artifact["uri"]) : undefined) ?? "";
   const line = (isRecord(region) ? asNumber(region["startLine"]) : undefined) ?? 0;
-  if (path === "" || line === 0) return null; // not citable in the diff
+  // Not citable in the diff → dropped. `asNumber` accepts any number, so the report's own
+  // region is checked here: gitleaks emits sub-1 lines for path-anchored findings (the
+  // exact shape mechanical/sanitize.ts repairs for the Code Scanning upload), and a
+  // fractional line cites nothing. Either would otherwise print as `leak.ts:-3` inside a
+  // prompt block labelled TRUSTED.
+  if (path === "" || !Number.isInteger(line) || line < 1) return null;
 
   const message = isRecord(result["message"]) ? asString(result["message"]["text"]) : undefined;
   const declared = result["level"] ?? ruleLevel.get(ruleId);
   const severity = asSeverity(declared, TOOL_DEFAULT_SEVERITY[tool]);
 
-  const finding: MechanicalFinding = {
+  return {
     tool,
     ruleId,
     path,
@@ -105,9 +108,6 @@ function toFinding(
     severity,
     message: message ?? ruleId,
   };
-  const endLine = isRecord(region) ? asNumber(region["endLine"]) : undefined;
-  if (endLine !== undefined) finding.endLine = endLine;
-  return finding;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

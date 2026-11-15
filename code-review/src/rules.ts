@@ -165,9 +165,8 @@ function selectPaths(tracked: string[], changedFiles: string[], rulesGlob: strin
   return selected;
 }
 
-/** True when the blob holds a printable, non-whitespace byte (else blank/empty). */
-function hasNonWhitespace(blob: Buffer): boolean {
-  const text = blob.toString("utf8");
+/** True when the already-decoded text holds a printable, non-whitespace character. */
+function hasNonWhitespace(text: string): boolean {
   return /[^\s]/.test(text);
 }
 
@@ -234,10 +233,21 @@ export function gatherRules(opts: RulesOptions): string {
       process.stderr.write(`[project-rules] skipped unreadable: ${path}\n`);
       continue;
     }
-    if (!hasNonWhitespace(blob)) continue; // skip blank/empty blobs
-    if (hasNulByte(blob)) continue; // skip binary blobs
+    // Skip on RAW BYTE SIZE before any string conversion. gitShow allows a 1 GiB
+    // buffer, and a blob past the cap can never be emitted — decoding it first would
+    // spend ~3x its size of transient memory for nothing, and a blob past V8's max
+    // string length (~512 MiB) would make toString throw ERR_STRING_TOO_LONG here,
+    // turning a best-effort, never-throws gather into a hard failure of every review.
+    if (blob.byteLength > maxBytes) {
+      omitted++;
+      continue;
+    }
+    // Decode ONCE: the same text serves both the blank check and the section build.
+    const text = blob.toString("utf8");
+    if (!hasNonWhitespace(text)) continue; // skip blank/empty blobs
+    if (hasNulByte(blob)) continue; // skip binary blobs (checked on the Buffer)
 
-    const section = `### ${path}\n${blob.toString("utf8")}\n`;
+    const section = `### ${path}\n${text}\n`;
     const secBytes = Buffer.byteLength(section, "utf8");
     if (totalBytes + secBytes > maxBytes) {
       omitted++;

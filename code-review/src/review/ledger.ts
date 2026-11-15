@@ -57,6 +57,29 @@ const STATUS_ORDER: readonly CoverageStatus[] = [
 const ALWAYS_ROW_STATUSES: ReadonlySet<CoverageStatus> = new Set(["unreviewed", "pending"]);
 
 /**
+ * Which row-worthy status wins a slot inside {@link LEDGER_MAX_ROWS}: the
+ * always-visible exceptions first, the verbosity-gated `excluded` last.
+ *
+ * Without this the rows are ordered by path alone and one shared cap lets a wide
+ * `excluded` set crowd out every exception — 60 `assets/imgNNN.png` dropped as
+ * large-file hide all five `src/modN.ts` unreviewed paths behind the "… N more"
+ * overflow line, under `VERBOSITY=full`, i.e. exactly when the reader asked for
+ * MORE detail and `degradeOnCoverage` (pipeline/settle.ts) is pointing them here.
+ */
+function rowPriority(status: CoverageStatus): number {
+  if (status === "unreviewed") return 0;
+  if (status === "pending") return 1;
+  return 2; // "excluded": the only other row-worthy status, and the lowest priority
+}
+
+/** Code-unit path order — matches the default `Array.prototype.sort()` on `paths`,
+ *  so the pre-sorted input stays the deterministic tie-break inside a priority. */
+function comparePaths(a: string, b: string): number {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
+}
+
+/**
  * Build a ledger from `[path, entry]` pairs. Last write wins per path, so
  * accumulating from several sources (distill strata, dropped files, binary
  * files, review-phase outcomes) in a fixed, documented order is the caller's
@@ -160,9 +183,11 @@ export function binaryFileEntry(): CoverageEntry {
  * {@link STATUS_ORDER}. Per-path rows render ONLY for `unreviewed`/`pending`
  * (always, in both verbosities — an exception must stay visible) and, in
  * `"full"` verbosity only, `excluded` too (its `reason` shown per row). Rows are
- * sorted by path for determinism and hard-capped at {@link LEDGER_MAX_ROWS} with
- * a trailing "… N more" line. No rows at all (clean ledger, or a compact ledger
- * with no unreviewed/pending) renders as the summary line alone.
+ * ordered by {@link rowPriority} — exceptions before `excluded` — and by path
+ * within a priority, for determinism, then hard-capped at {@link LEDGER_MAX_ROWS}
+ * with a trailing "… N more" line: the cap must never be what hides an exception.
+ * No rows at all (clean ledger, or a compact ledger with no unreviewed/pending)
+ * renders as the summary line alone.
  */
 export function renderLedger(ledger: CoverageLedger, verbosity: "compact" | "full"): string {
   const paths = Object.keys(ledger.entries).sort();
@@ -170,10 +195,15 @@ export function renderLedger(ledger: CoverageLedger, verbosity: "compact" | "ful
 
   const rowStatuses: ReadonlySet<CoverageStatus> =
     verbosity === "full" ? new Set([...ALWAYS_ROW_STATUSES, "excluded"]) : ALWAYS_ROW_STATUSES;
-  const rowPaths = paths.filter((p) => {
-    const status = ledger.entries[p]?.status;
-    return status !== undefined && rowStatuses.has(status);
-  });
+  const rows: Array<{ path: string; status: CoverageStatus }> = [];
+  for (const path of paths) {
+    const status = ledger.entries[path]?.status;
+    if (status !== undefined && rowStatuses.has(status)) rows.push({ path, status });
+  }
+  rows.sort(
+    (a, b) => rowPriority(a.status) - rowPriority(b.status) || comparePaths(a.path, b.path),
+  );
+  const rowPaths = rows.map((row) => row.path);
 
   if (rowPaths.length === 0) return `### Coverage\n\n${summary}\n`;
 

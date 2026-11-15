@@ -94,6 +94,74 @@ describe("focused generative recheck safety", () => {
       ).dismissed,
     ).toEqual([]);
   });
+  it("still applies a valid dismissal when a sibling proposed revision is malformed", () => {
+    // RECHECK_SYSTEM asks for "path, changed line, severity, confidence, text, quoted_line".
+    // A model that quotes ONE line number as a string used to fail the whole strict
+    // `z.array(Finding)` parse, so applyRecheck returned empty everything — the valid,
+    // source-backed dismissal in the SAME reply was discarded with it and enhance.ts counted
+    // it unavailable: a wasted model call and a false positive that stayed posted. Each
+    // proposed revision is now normalized and parsed individually, as llm/recover.ts does.
+    const dismissal = {
+      id: "recorded-pr175",
+      decision: "dismiss",
+      explanation: "The prefix handler calls onKeyPrefixEdited, contrary to the claim.",
+      evidence: [{ path: recorded.source.path, quote: "onKeyPrefixEdited();" }],
+    };
+    const out = applyRecheck(
+      {
+        decisions: [dismissal],
+        findings: [
+          {
+            path: recorded.source.path,
+            line: "141", // quoted, not the integer the strict schema demands
+            severity: "critical", // an alias, not one of the five enum values
+            confidence: "very-high", // off-enum: dropped, not fatal
+            text: "The callback fires, but the empty-prefix guard is missing.",
+            quoted_line: "onKeyPrefixEdited();",
+          },
+        ],
+      },
+      findings,
+      evidence,
+    );
+    expect(out.dismissed).toEqual(["recorded-pr175"]);
+    expect(out.rechecked).toEqual(["recorded-pr175"]);
+    // normalizeFinding repairs what is unambiguous and drops what is not, rather than
+    // sinking the whole finding (or the whole reply).
+    expect(out.additions).toHaveLength(1);
+    expect(out.additions[0]?.line).toBe(141);
+    expect(out.additions[0]?.severity).toBe("blocker");
+    expect(out.additions[0]?.confidence).toBeUndefined();
+  });
+  it("drops an irreparable proposed revision without touching the dismissal beside it", () => {
+    const dismissal = {
+      id: "recorded-pr175",
+      decision: "dismiss",
+      explanation: "The prefix handler calls onKeyPrefixEdited, contrary to the claim.",
+      evidence: [{ path: recorded.source.path, quote: "onKeyPrefixEdited();" }],
+    };
+    // No path and no line: nothing to normalize into a citable finding, so it is dropped —
+    // inventing an anchor would be worse than losing the suggestion.
+    const out = applyRecheck(
+      { decisions: [dismissal], findings: [{ severity: "high", text: "Something is wrong." }] },
+      findings,
+      evidence,
+    );
+    expect(out.additions).toEqual([]);
+    expect(out.dismissed).toEqual(["recorded-pr175"]);
+    expect(out.rechecked).toEqual(["recorded-pr175"]);
+  });
+  it("reads a reply whose findings is not an array at all as no additions", () => {
+    const dismissal = {
+      id: "recorded-pr175",
+      decision: "dismiss",
+      explanation: "The prefix handler calls onKeyPrefixEdited, contrary to the claim.",
+      evidence: [{ path: recorded.source.path, quote: "onKeyPrefixEdited();" }],
+    };
+    const out = applyRecheck({ decisions: [dismissal], findings: "none" }, findings, evidence);
+    expect(out.additions).toEqual([]);
+    expect(out.dismissed).toEqual(["recorded-pr175"]);
+  });
 });
 
 describe("bounded risk routing", () => {
@@ -107,6 +175,35 @@ describe("bounded risk routing", () => {
         { index: 4, choice: "high", confidence: 0.9, probability: 0.9 },
       ]),
     ).toEqual([3, 0]);
+  });
+
+  it("never spends both slots on one package whose questions split into batches", () => {
+    // The risk question rides in EVERY batch of a package's questions, so a package that
+    // exceeds the request-byte budget answers "high" once per batch — several entries, all
+    // carrying the SAME index. Without a dedupe before the cap, this returned [0, 0]:
+    // enhance.ts then ran two full, minutes-long, paid reviewWithModel calls on the
+    // identical envelope while index 1, the genuinely second-riskiest DISTINCT package, was
+    // never reviewed at all.
+    const selected = selectRiskPackages([
+      { index: 0, choice: "high", confidence: 0.9, probability: 0.95 },
+      { index: 0, choice: "high", confidence: 0.85, probability: 0.8 },
+      { index: 1, choice: "high", confidence: 0.9, probability: 0.7 },
+    ]);
+    expect(new Set(selected).size).toBe(selected.length);
+    expect(selected).toEqual([0, 1]);
+  });
+
+  it("keeps the highest-probability answer for a package that answered high twice", () => {
+    // Dedupe must not reorder: the batch with the stronger high probability is the one that
+    // represents the package, and the third slot still loses to the two distinct leaders.
+    expect(
+      selectRiskPackages([
+        { index: 2, choice: "high", confidence: 0.9, probability: 0.4 },
+        { index: 2, choice: "high", confidence: 0.9, probability: 0.99 },
+        { index: 0, choice: "high", confidence: 0.9, probability: 0.6 },
+        { index: 1, choice: "high", confidence: 0.9, probability: 0.5 },
+      ]),
+    ).toEqual([2, 0]);
   });
 });
 

@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { gatherRules } from "@/rules.js";
+import { gatherRules, type GitShow } from "@/rules.js";
 
 // REAL temp git repos (no mocks): commit convention files, then read them back
 // from the BASE ref via gatherRules — exactly as the action does in production.
@@ -227,5 +227,89 @@ describe("gatherRules", () => {
     expect(out).toContain("### CLAUDE.md");
     expect(out).not.toContain("### CONVENTIONS.md");
     expect(out).not.toContain("### CONTRIBUTING.md");
+  });
+});
+
+describe("gatherRules — the byte cap is checked on RAW BYTES, before any decode", () => {
+  /** Read a real tracked blob at `ref` from the temp repo, as the production GitShow does. */
+  function realShow(dir: string): GitShow {
+    return (ref, path) =>
+      execFileSync("git", ["show", `${ref}:${path}`], {
+        cwd: dir,
+        encoding: "buffer",
+        maxBuffer: 64 * 1024 * 1024,
+      });
+  }
+
+  it("omits and counts an over-cap rules file without emitting any of it", () => {
+    const dir = setupRepo();
+    writeFile(dir, "CLAUDE.md", "short rule\n");
+    // Tier 1 selects AGENTS.md whatever its size, so only the cap can drop it.
+    writeFile(dir, "AGENTS.md", `${"convention ".repeat(400)}\n`);
+    const base = commitAll(dir, "init");
+
+    const out = gatherRules({ baseSha: base, cwd: dir, maxBytes: 128 });
+    expect(out).toContain("### CLAUDE.md");
+    expect(out).not.toContain("### AGENTS.md");
+    expect(out).not.toContain("convention convention");
+    expect(out).toContain("[Project rules truncated at 128 bytes; 1 file(s) omitted.]");
+  });
+
+  it("never decodes an over-cap blob, and decodes an emitted one exactly ONCE", () => {
+    const dir = setupRepo();
+    writeFile(dir, "CLAUDE.md", "short rule\n");
+    writeFile(dir, "AGENTS.md", `${"convention ".repeat(400)}\n`);
+    const base = commitAll(dir, "init");
+
+    // gitShow is the module's own injection seam (RulesOptions.gitShow) and returns the
+    // REAL bytes from the REAL repo; only the decode is observed. gitShow allows a 1 GiB
+    // buffer, so before the fix an over-cap blob was decoded twice (blank check + section
+    // build) and only THEN compared against the cap — ~3x its size in transient memory,
+    // spent on text that could never be emitted.
+    const decoded: string[] = [];
+    const utf8 = new TextDecoder();
+    const show = realShow(dir);
+    const gitShow: GitShow = (ref, path) => {
+      const blob = show(ref, path);
+      if (blob === null) return null;
+      blob.toString = (): string => {
+        decoded.push(path);
+        return utf8.decode(blob);
+      };
+      return blob;
+    };
+
+    const out = gatherRules({ baseSha: base, cwd: dir, maxBytes: 128, gitShow });
+    expect(out).toContain("### CLAUDE.md\nshort rule\n");
+    expect(out).not.toContain("### AGENTS.md");
+    expect(out).toContain("[Project rules truncated at 128 bytes; 1 file(s) omitted.]");
+    // The over-cap AGENTS.md is never turned into a string; the emitted CLAUDE.md is
+    // turned into one exactly once.
+    expect(decoded).toEqual(["CLAUDE.md"]);
+  });
+
+  it("skips instead of throwing when an over-cap blob's decode itself would fail", () => {
+    const dir = setupRepo();
+    writeFile(dir, "CLAUDE.md", "short rule\n");
+    writeFile(dir, "AGENTS.md", "too big to matter\n");
+    const base = commitAll(dir, "init");
+
+    // A tracked blob past V8's max string length (~512 MiB) makes Buffer.toString throw
+    // RangeError [ERR_STRING_TOO_LONG]. No test can create a real 512 MiB file, so this
+    // Buffer stands in for one: real bytes, real size ordering against the cap, and a
+    // decode that throws the same way. gatherRules has no try/catch and its caller
+    // documents it as best-effort/never-throws, so decoding first would hard-fail EVERY
+    // review of such a repo instead of skipping one file.
+    const huge = Buffer.alloc(4096, 0x78);
+    huge.toString = (): string => {
+      throw new RangeError("Cannot convert a large Buffer to a string");
+    };
+    const show = realShow(dir);
+    const gitShow: GitShow = (ref, path) => (path === "AGENTS.md" ? huge : show(ref, path));
+
+    const out = gatherRules({ baseSha: base, cwd: dir, maxBytes: 128, gitShow });
+    expect(out).toContain("### CLAUDE.md");
+    expect(out).not.toContain("### AGENTS.md");
+    expect(out).toContain("[Project rules truncated at 128 bytes; 1 file(s) omitted.]");
   });
 });

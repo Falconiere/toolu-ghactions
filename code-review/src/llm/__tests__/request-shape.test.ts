@@ -16,6 +16,8 @@ interface CapturedBody {
   temperature?: number;
   max_tokens?: number;
   stream?: boolean;
+  /** A caller-supplied EXTRA_BODY field, for the openai-compatible transport only. */
+  chat_template_kwargs?: { enable_thinking?: boolean };
 }
 
 /** A fetch that records the outgoing request body, then replays the success fixture
@@ -61,5 +63,70 @@ describe("outgoing request shape (reasoning-off proof)", () => {
     // Review calls STREAM (llm/streamVerdict.ts) — that is what makes a response cut at
     // max_tokens salvageable instead of an unparseable throw.
     expect(body.stream).toBe(true);
+  });
+});
+
+describe("outgoing request shape (custom openai-compatible endpoint)", () => {
+  it("carries EXTRA_BODY onto the wire, and no OpenRouter-only extras with it", async () => {
+    // EXTRA_BODY reaches the request ONLY through providers.ts's
+    // defaultSettingsMiddleware({ settings: { providerMetadata: { "openai-compatible": … } } })
+    // — which works because that literal string happens to equal config.provider.split(".")[0]
+    // inside @ai-sdk/openai-compatible. The only other exercise of the path is
+    // custom-endpoint-live.test.ts, and it is skipIf(!TOOLU_LIVE_BASE_URL || !TOOLU_LIVE_MODEL)
+    // — permanently skipped in CI. custom-endpoint-inputs.test.ts asserts the resolved
+    // provider id but never that the fields land in the body. So an SDK upgrade, or a rename
+    // of `name:` in createOpenAICompatible, silently drops EXTRA_BODY with a green suite: a
+    // Qwen3/oMLX user's enable_thinking:false stops being sent, the model burns max_tokens on
+    // hidden reasoning, the caller sees empty content with finish_reason "length", and every
+    // chunk abstains. This is the offline proof that cannot be skipped.
+    const captured: { body: CapturedBody | null } = { body: null };
+
+    await reviewWithModel(ENVELOPE, {
+      provider: "openai-compatible",
+      baseUrl: "http://127.0.0.1:8000/v1",
+      extraBody: { chat_template_kwargs: { enable_thinking: false } },
+      model: "qwen3-32b",
+      apiKey: "",
+      fetch: capturingFetch(captured),
+      maxRetries: 0,
+      maxAttempts: 1,
+    });
+
+    const body = captured.body;
+    if (body === null) throw new Error("capturingFetch never recorded a request body");
+
+    // The caller's extra field arrives verbatim, at the TOP LEVEL of the request body.
+    expect(body.chat_template_kwargs).toEqual({ enable_thinking: false });
+    expect(body.model).toBe("qwen3-32b");
+    // OpenRouter's routing/reasoning extras must never reach another server.
+    expect(body.reasoning).toBeUndefined();
+    expect(body.provider).toBeUndefined();
+    // The rest of the review contract is unchanged on the compatible transport.
+    expect(body.temperature).toBe(0);
+    expect(body.max_tokens).toBe(4096);
+    expect(body.stream).toBe(true);
+  });
+
+  it("omits the field entirely when EXTRA_BODY is not set (control for the capture above)", async () => {
+    // Without this control the assertion above could pass vacuously — e.g. if the capturing
+    // fetch recorded something other than the real outgoing body. Same transport, same
+    // endpoint, no extraBody: the field must be ABSENT, proving it arrives because of
+    // EXTRA_BODY and not from the compatible provider's own defaults.
+    const captured: { body: CapturedBody | null } = { body: null };
+
+    await reviewWithModel(ENVELOPE, {
+      provider: "openai-compatible",
+      baseUrl: "http://127.0.0.1:8000/v1",
+      model: "qwen3-32b",
+      apiKey: "",
+      fetch: capturingFetch(captured),
+      maxRetries: 0,
+      maxAttempts: 1,
+    });
+
+    const body = captured.body;
+    if (body === null) throw new Error("capturingFetch never recorded a request body");
+    expect(body.chat_template_kwargs).toBeUndefined();
+    expect(body.model).toBe("qwen3-32b");
   });
 });

@@ -221,13 +221,19 @@ function quoteFailure(
   return "unverified";
 }
 
+/** Stand-in for a line absent from `lines`. A NUL can never appear in a model's
+ *  quote (JSON transport, and {@link normalize} does not strip it — U+0000 is not
+ *  JS regex `\s`), so its presence in the joined text breaks contiguity. */
+const ABSENT_LINE = "\0";
+
 /**
  * True when the quote, whitespace-normalized and stripped of copied diff prefixes,
  * occurs in the post-change text around the cited span AND that occurrence overlaps
  * the span itself. The overlap keeps the anchor honest: a quote lifted wholly from a
  * neighbouring line still fails, as does one from a removed (`L---:`) line, which is
  * absent from `lines`. Only consecutive present lines join, so a quote never bridges
- * a gap between hunks.
+ * a gap between hunks — including the gaps INSIDE a wide `line`..`end_line` span,
+ * which {@link ABSENT_LINE} marks rather than silently skips.
  */
 function quoteInSpan(lines: Map<number, string>, finding: Finding, quoted: string): boolean {
   const q = normalize(stripDiffPrefixes(quoted));
@@ -243,7 +249,14 @@ function quoteInSpan(lines: Map<number, string>, finding: Finding, quoted: strin
   let spanStart = 0;
   let spanEnd = 0;
   for (let n = lo; n <= hi; n++) {
-    const part = normalize(lines.get(n) ?? "");
+    // An absent line contributes a sentinel, NOT nothing: skipping it would make its
+    // two present neighbours adjacent in `text`, so a quote stitched from two
+    // different hunks would match a `line`..`end_line` span wide enough to cover both.
+    // The `lo`/`hi` walks above only cross PRESENT lines, so a sentinel can occur
+    // only inside [first..last] — which is why the offsets below stay exact: both are
+    // recomputed from `text.length` at their own line, whatever precedes it.
+    const raw = lines.get(n);
+    const part = raw === undefined ? ABSENT_LINE : normalize(raw);
     if (part !== "") text += text === "" ? part : ` ${part}`;
     if (n === first) spanStart = text.length - part.length;
     if (n <= last) spanEnd = text.length;
@@ -281,9 +294,17 @@ function normalize(s: string): string {
 /**
  * True when every line in [line..end_line] is present in the diff's changed set
  * (end_line defaults to line). Mirrors the jq set-difference length===0 check.
+ *
+ * An INVERTED span (`end_line < line`, which the schema does not forbid) is never
+ * "in the diff": without this guard the loop below would not run at all and return
+ * true vacuously, which is what let {@link suggestionIsSafe} render a committable
+ * patch over a span nobody interpreted. A malformed span is treated as
+ * unrenderable rather than clamped, because the clamp is a reading of what the
+ * model MEANT and a suggested change is applied by GitHub verbatim.
  */
 function spanIsInDiff(f: Finding, changedSet: Set<number>): boolean {
   const end = f.end_line ?? f.line;
+  if (end < f.line) return false;
   for (let l = f.line; l <= end; l++) {
     if (!changedSet.has(l)) return false;
   }
@@ -312,8 +333,11 @@ function sourceSpan(
 ): string | undefined {
   const lines = lineTextByPath?.get(finding.path);
   if (lines === undefined) return undefined;
+  // Clamped exactly like quoteInSpan: an inverted span must NOT make the loop below
+  // vacuous, or it joins to "" and every no-op check against the real source passes.
+  const end = Math.max(finding.end_line ?? finding.line, finding.line);
   const source: string[] = [];
-  for (let line = finding.line; line <= (finding.end_line ?? finding.line); line++) {
+  for (let line = finding.line; line <= end; line++) {
     const text = lines.get(line);
     if (text === undefined) return undefined;
     source.push(text);
@@ -356,7 +380,9 @@ function dedup(findings: Finding[]): Finding[] {
 
 /** The dedup group key: path|line|end_line|first-80-chars of normalized text. */
 function dedupKey(f: Finding): string {
-  const end = f.end_line ?? f.line;
+  // Clamped exactly like the span checks above, so a finding with an inverted
+  // end_line groups with the same finding carrying no end_line at all.
+  const end = Math.max(f.end_line ?? f.line, f.line);
   const normText = f.text
     .toLowerCase()
     .replace(/[^a-z0-9 ]/g, "")

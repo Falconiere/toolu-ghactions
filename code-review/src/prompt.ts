@@ -246,9 +246,13 @@ export function buildPrompt(opts: PromptOptions): Envelope {
 
   user += renderRulesChangedNotice(opts.rulesChanged ?? []);
 
-  const diffFence = "`".repeat(
-    Math.max(3, ...(diffText.match(/`+/g) ?? []).map((run) => run.length + 1)),
-  );
+  // The fence must be longer than any backtick run INSIDE the diff, or the diff would
+  // close its own fence and leak the remainder as prompt text. Reduced, never spread into
+  // Math.max: a spread passes one argument per run, and a diff with ~125k separate runs
+  // then dies with an uncatchable-as-PromptError "Maximum call stack size exceeded".
+  // Same shape as the full-file-context fence below — keep the two visibly consistent.
+  const longestDiffRun = (diffText.match(/`+/g) ?? []).reduce((n, r) => Math.max(n, r.length), 0);
+  const diffFence = "`".repeat(Math.max(3, longestDiffRun + 1));
   user += `\n\n## Diff\n${diffFence}diff\n${diffText}\n${diffFence}`;
 
   // Full post-change files for oversized single-file chunks (see review/chunked.ts):
