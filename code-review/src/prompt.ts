@@ -8,7 +8,6 @@
 // stripped, capped to 500 chars) and injected into the USER prompt only, fenced in
 // an UNTRUSTED block. The SYSTEM checklist is NEVER altered by it. The gathered
 // project rules are TRUSTED (read from the base ref) and go in a separate block.
-import * as core from "@actions/core";
 import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import type { DiffData } from "./git/diff.js";
@@ -152,9 +151,11 @@ function resolveSystemPrompt(opts: PromptOptions): string {
           // not on disk either → the warning below
         }
       }
-      core.warning(
-        `REVIEW_PROMPT_FILE "${promptFile}" is not readable at ${ref === "" ? "an unknown base ref" : ref}; ` +
-          "using the shipped checklist (a PR cannot introduce its own system prompt).",
+      // A plain workflow command, not @actions/core: this module is also bundled as ESM
+      // by scripts/injection-probe.mjs, where core's CommonJS http stack cannot load.
+      process.stdout.write(
+        `::warning::REVIEW_PROMPT_FILE "${promptFile}" is not readable at ${ref === "" ? "an unknown base ref" : ref}; ` +
+          "using the shipped checklist (a PR cannot introduce its own system prompt).\n",
       );
     } else {
       const promptPath = isAbsolute(promptFile) ? promptFile : join(workspace, promptFile);

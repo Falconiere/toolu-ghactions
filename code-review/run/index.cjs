@@ -43736,8 +43736,9 @@ function resolveSystemPrompt(opts) {
         } catch {
         }
       }
-      warning(
-        `REVIEW_PROMPT_FILE "${promptFile}" is not readable at ${ref === "" ? "an unknown base ref" : ref}; using the shipped checklist (a PR cannot introduce its own system prompt).`
+      process.stdout.write(
+        `::warning::REVIEW_PROMPT_FILE "${promptFile}" is not readable at ${ref === "" ? "an unknown base ref" : ref}; using the shipped checklist (a PR cannot introduce its own system prompt).
+`
       );
     } else {
       const promptPath = (0, import_node_path2.isAbsolute)(promptFile) ? promptFile : (0, import_node_path2.join)(workspace, promptFile);

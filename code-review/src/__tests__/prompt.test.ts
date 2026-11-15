@@ -1,8 +1,4 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
-import * as core from "@actions/core";
-// @actions/core is native ESM, whose namespace is frozen: spy-mode mock so vi.spyOn can
-// redirect core.warning while every export stays the real implementation.
-vi.mock(import("@actions/core"), { spy: true });
 import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -228,7 +224,7 @@ describe("buildPrompt — envelope and inputs", () => {
       const dir = setupGitRepo();
       const base = git(dir, "rev-parse", "HEAD").trim();
       writeFile(dir, PROMPT, "FETCHED PROMPT");
-      const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+      const warn = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
       try {
         expect(systemFor(dir, base)).toBe("FETCHED PROMPT");
         expect(warn).not.toHaveBeenCalled();
@@ -243,7 +239,7 @@ describe("buildPrompt — envelope and inputs", () => {
       writeFile(dir, PROMPT, "PR-ADDED PROMPT");
       git(dir, "add", PROMPT);
       git(dir, "commit", "-m", "pr adds prompt", "--quiet");
-      const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+      const warn = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
       try {
         expect(systemFor(dir, base)).toBe(CHECKLIST_TEXT);
         expect(warn).toHaveBeenCalledTimes(1);
@@ -255,7 +251,7 @@ describe("buildPrompt — envelope and inputs", () => {
 
     it("never reads the working tree when the ref is empty (no base sha)", () => {
       const { dir } = repoWithEditedPrompt();
-      const warn = vi.spyOn(core, "warning").mockImplementation(() => {});
+      const warn = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
       try {
         expect(systemFor(dir, "")).toBe(CHECKLIST_TEXT);
         expect(warn).toHaveBeenCalledTimes(1);
