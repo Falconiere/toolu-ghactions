@@ -44291,10 +44291,11 @@ function partitionMechanical(mechanical, chunks) {
 }
 
 // src/pipeline/validate.ts
+function changedLinesOf(diff) {
+  return new Map(diff.files.map((f) => [f.path, f.changed_lines]));
+}
 function validate(result, diff, inputs) {
-  const changedLinesByPath = new Map(
-    diff.files.map((f) => [f.path, f.changed_lines])
-  );
+  const changedLinesByPath = changedLinesOf(diff);
   const lineTextByPath = new Map(
     diff.files.map((f) => [
       f.path,
@@ -45260,7 +45261,10 @@ async function reviewAndValidate(input) {
     maxBytes: inputs.rulesMaxBytes,
     cwd
   });
-  const mechanical = gatherMechanical(input.sarifDir);
+  const changedLines = changedLinesOf(diff);
+  const mechanical = gatherMechanical(input.sarifDir).filter(
+    (f) => changedLines.get(f.path)?.includes(f.line)
+  );
   const priorThreadContexts = buildThreadContexts(input.priorThreads);
   const distillation = distill(diff, { rulesPaths: rulesPathGlobs(inputs), cwd });
   if (distillation.review_diff.total_files === 0) {

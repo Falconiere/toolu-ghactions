@@ -5,6 +5,11 @@ import type { ActionInputs } from "@/inputs.js";
 import type { StampedFinding } from "./reviewCall.js";
 import { validateFindings } from "@/review/validate.js";
 import { fingerprint } from "@/state.js";
+/** The PR's anchor set: each changed file's changed lines. */
+export function changedLinesOf(diff: DiffData): Map<string, number[]> {
+  return new Map(diff.files.map((f) => [f.path, f.changed_lines]));
+}
+
 /** Validate findings against the diff's changed lines and stamp fingerprints;
  *  also surfaces the self-negation drop count for {@link reviewAndValidate} to
  *  carry forward (settleVerdict's `removed` — see {@link ReviewCallOutput}). */
@@ -18,9 +23,7 @@ export function validate(
   unverifiedQuote: number;
   missingQuotePaths: string[];
 } {
-  const changedLinesByPath = new Map<string, number[]>(
-    diff.files.map((f) => [f.path, f.changed_lines]),
-  );
+  const changedLinesByPath = changedLinesOf(diff);
   const lineTextByPath = new Map<string, Map<number, string>>(
     diff.files.map((f) => [
       f.path,

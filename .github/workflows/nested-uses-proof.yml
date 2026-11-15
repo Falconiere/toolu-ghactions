@@ -2,9 +2,10 @@
 # 2026-08-10-code-review-reliability-design.md): proves the composite's
 # `$/code-review/run` + `$/code-review/sanitize-sarif` references resolve when
 # the action is consumed REMOTELY (owner/repo/path@ref → actions cache), the
-# shape every real consumer uses. Success = both nested steps START (resolution);
-# the review step is expected to no-op/skip on workflow_dispatch — that part is
-# runtime, not resolution, and is not what this gate measures.
+# shape every real consumer uses. Success = the job reaches its steps: an
+# unresolved `$/` reference fails it BEFORE any step runs, so both references are
+# proven even though the sanitize step is skipped here (scanners are off) and the
+# review step no-ops on workflow_dispatch — that part is runtime, not resolution.
 #
 # The consumed ref is HARDCODED in the `uses:` line below (`uses:` cannot take
 # expressions). It points at `main` so the committed workflow stays valid after

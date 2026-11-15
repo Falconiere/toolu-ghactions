@@ -439,7 +439,13 @@ describe("runReview — end to end", () => {
   });
 
   it("graceful degradation: LLM error WITH mechanical findings → comment keeps the deterministic findings + 'LLM judgment unavailable', job NOT failed", async () => {
-    const { dir, headSha } = track(featureRepoWithChange());
+    const { dir } = track(featureRepoWithChange());
+    // The recorded SARIF cites leak.ts lines 1, 2 and 4; mechanical findings are scoped
+    // to the PR's changed lines, so the PR must actually add those lines.
+    writeFile(dir, "leak.ts", "const a = 1;\nconst b = 2;\nconst c = 3;\nconst d = 4;\n");
+    git(dir, "add", "leak.ts");
+    git(dir, "commit", "-m", "add leak", "--quiet");
+    const headSha = git(dir, "rev-parse", "HEAD").trim();
     const { octokit, rec } = fakeOctokit();
     // Real recorded gitleaks + opengrep SARIF — exactly what the composite steps write to TOOLU_SARIF_DIR.
     const sarifDir = join(

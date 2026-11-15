@@ -11,7 +11,7 @@ import { reviewWithModel } from "@/llm/reviewWithModel.js";
 import type { ProviderResult, ReviewOptions } from "@/llm/reviewWithModel.js";
 import type { Finding } from "@/llm/schema.js";
 import { reviewChunked } from "@/review/chunked.js";
-import { validate } from "./validate.js";
+import { changedLinesOf, validate } from "./validate.js";
 import { distill, type Distillation } from "@/git/distill.js";
 import { mapPr, type Brief } from "@/review/cartographer.js";
 import { buildRoundLedger, type CoverageEntry, type CoverageLedger } from "@/review/ledger.js";
@@ -102,8 +102,13 @@ export async function reviewAndValidate(input: ReviewCallInput): Promise<ReviewC
     cwd,
   });
 
-  // Deterministic findings (gitleaks/opengrep SARIF); absent dir → [].
-  const mechanical = gatherMechanical(input.sarifDir);
+  // Deterministic findings (gitleaks/opengrep SARIF); absent dir → []. Scanners cover
+  // the whole tree, so keep only hits on the PR's changed lines — pre-existing ones
+  // would fill the prompt cap and crowd out the PR's own. Code Scanning reads the files.
+  const changedLines = changedLinesOf(diff);
+  const mechanical = gatherMechanical(input.sarifDir).filter((f) =>
+    changedLines.get(f.path)?.includes(f.line),
+  );
   const priorThreadContexts = buildThreadContexts(input.priorThreads);
 
   // Layer 0 — deterministic distillation. `review_diff` is the shrunk diff every
