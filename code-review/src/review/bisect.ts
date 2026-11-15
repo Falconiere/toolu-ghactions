@@ -130,8 +130,8 @@ function splitMechanical(
   return parts;
 }
 
-/** Report one outcome for every path in `segments`. Path-less segments (mode-only
- *  changes carry no `+++`/`---` path) have nothing to ledger and are skipped; each
+/** Report one outcome for every path in `segments`. A path-less segment (only
+ *  possible for malformed diff text) has nothing to ledger and is skipped; each
  *  path gets its OWN entry object so a consumer can store them without aliasing. */
 export function reportCoverage(
   onCoverage: (path: string, entry: CoverageEntry) => void,

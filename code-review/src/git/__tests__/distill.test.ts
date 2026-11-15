@@ -77,9 +77,9 @@ function pr72Repo(): string {
     changes[`src/feat/f${i}.ts`] =
       `export const f${i} = ${i};\nexport function use${i}(x: number): number {\n  return x * ${i} + ${i};\n}\n`;
   }
-  // 2 whitespace-only reformats (2-space → 4-space indent).
-  changes["src/fmt/alpha.ts"] = "export function alpha() {\n    return 1;\n}\n";
-  changes["src/fmt/beta.ts"] = "export function beta() {\n    return 2;\n}\n";
+  // 2 whitespace-only reformats (trailing whitespace added).
+  changes["src/fmt/alpha.ts"] = "export function alpha() {\n  return 1;  \n}\n";
+  changes["src/fmt/beta.ts"] = "export function beta() {\n  return 2;\t\n}\n";
   commitChange(dir, changes);
   return dir;
 }
@@ -261,16 +261,47 @@ describe("distill — edges", () => {
     expect(d.review_diff.diff).toContain('L1: +const sql = "select *from t";');
   });
 
-  it("still classifies a pure indentation reflow formatting, and drops it", () => {
+  // Indentation is syntax in Python/YAML/Makefiles, so a leading-whitespace edit
+  // is never provably mechanical: it is reviewed.
+  it("classifies a pure indentation reflow substantive", () => {
     const dir = baseRepo({ "src/fmt.ts": "function f() {\n  return 1;\n}\n" });
-    // Leading whitespace only: every changed line is byte-identical once trimmed.
     commitChange(dir, { "src/fmt.ts": "function f() {\n\t\treturn 1;\n}\n" });
 
-    const diff = fetchDiff({ ...BASE, cwd: dir });
-    const d = distill(diff, { rulesPaths: [], cwd: dir });
-    expect(d.strata).toEqual({ "src/fmt.ts": "formatting" });
-    expect(d.review_diff.diff).toBe("");
-    expect(d.review_diff.total_files).toBe(0);
+    const d = distill(fetchDiff({ ...BASE, cwd: dir }), { rulesPaths: [], cwd: dir });
+    expect(d.strata).toEqual({ "src/fmt.ts": "substantive" });
+  });
+
+  it("classifies a Python dedent out of a guard substantive", () => {
+    const before =
+      "def f(u):\n    if not u:\n        audit(u)\n        return None\n    return u\n";
+    const after = "def f(u):\n    if not u:\n        return None\n    audit(u)\n    return u\n";
+    const dir = baseRepo({ "auth.py": before });
+    commitChange(dir, { "auth.py": after });
+
+    const d = distill(fetchDiff({ ...BASE, cwd: dir }), { rulesPaths: [], cwd: dir });
+    expect(d.strata).toEqual({ "auth.py": "substantive" });
+    expect(splitDiffByFile(d.review_diff.diff).map((s) => s.path)).toEqual(["auth.py"]);
+  });
+
+  it("classifies a reordering of lines substantive", () => {
+    const dir = baseRepo({ "src/order.ts": "validate(x);\nuse(x);\n" });
+    commitChange(dir, { "src/order.ts": "use(x);\nvalidate(x);\n" });
+
+    const d = distill(fetchDiff({ ...BASE, cwd: dir }), { rulesPaths: [], cwd: dir });
+    expect(d.strata).toEqual({ "src/order.ts": "substantive" });
+    expect(splitDiffByFile(d.review_diff.diff).map((s) => s.path)).toEqual(["src/order.ts"]);
+  });
+
+  it("keeps a file the PR itself marks linguist-vendored substantive", () => {
+    const dir = baseRepo({ "src/x.ts": "export const x = 1;\n" });
+    commitChange(dir, {
+      ".gitattributes": "* linguist-vendored\n",
+      "src/x.ts": "export const x = 2;\n",
+    });
+
+    const d = distill(fetchDiff({ ...BASE, cwd: dir }), { rulesPaths: [], cwd: dir });
+    expect(d.strata["src/x.ts"]).toBe("substantive");
+    expect(splitDiffByFile(d.review_diff.diff).map((s) => s.path)).toContain("src/x.ts");
   });
 
   it("classifies a trailing-whitespace-only change formatting", () => {
@@ -281,6 +312,14 @@ describe("distill — edges", () => {
     const d = distill(diff, { rulesPaths: [], cwd: dir });
     expect(d.strata).toEqual({ "src/tail.ts": "formatting" });
     expect(d.review_diff.diff).toBe("");
+  });
+
+  it("classifies a CRLF → LF conversion formatting", () => {
+    const dir = baseRepo({ "src/eol.ts": "const x = 1;\r\nconst y = 2;\r\n" });
+    commitChange(dir, { "src/eol.ts": "const x = 1;\nconst y = 2;\n" });
+
+    const d = distill(fetchDiff({ ...BASE, cwd: dir }), { rulesPaths: [], cwd: dir });
+    expect(d.strata).toEqual({ "src/eol.ts": "formatting" });
   });
 
   it("returns an empty distillation for an empty diff", () => {

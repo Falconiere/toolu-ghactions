@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { splitGlobs, globMatcher, globToRegExp, anyGlobMatches } from "@/git/globs.js";
+import { splitGlobs, globMatcher, anyGlobMatches } from "@/git/globs.js";
 
 describe("splitGlobs", () => {
   it("splits on commas and newlines, trims, drops blanks", () => {
@@ -32,12 +32,29 @@ describe("globMatcher", () => {
     expect(globMatcher("a.b")("a.b")).toBe(true);
     expect(globMatcher("a.b")("axb")).toBe(false);
   });
-});
 
-describe("globToRegExp", () => {
   it("anchors the whole path", () => {
-    expect(globToRegExp("x.ts").test("x.ts")).toBe(true);
-    expect(globToRegExp("x.ts").test("ax.ts")).toBe(false);
+    expect(globMatcher("x.ts")("x.ts")).toBe(true);
+    expect(globMatcher("x.ts")("ax.ts")).toBe(false);
+    expect(globMatcher("x.ts")("x.tsx")).toBe(false);
+  });
+
+  it("matches a wildcard before a dir/** or dir/ suffix", () => {
+    expect(globMatcher("**/generated/**")("src/generated/a.ts")).toBe(true);
+    expect(globMatcher("**/generated/**")("src/gen/a.ts")).toBe(false);
+    expect(globMatcher("packages/*/dist/**")("packages/x/dist/a.js")).toBe(true);
+    expect(globMatcher("packages/*/dist/")("packages/x/dist/a.js")).toBe(true);
+    expect(globMatcher("packages/*/dist/")("packages/x/src/a.js")).toBe(false);
+    expect(globMatcher("src/**/gen/**")("src/a/gen/x.ts")).toBe(true);
+  });
+
+  it("stays fast on a deep path that cannot match", () => {
+    const deep = `${"a/".repeat(2000)}x.ts`;
+    const m = globMatcher("**/*.snap");
+    const start = performance.now();
+    expect(m(deep)).toBe(false);
+    expect(performance.now() - start).toBeLessThan(50);
+    expect(m("a/b/c.snap")).toBe(true);
   });
 });
 

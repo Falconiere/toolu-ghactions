@@ -114,7 +114,7 @@ export async function runReview(deps: ReviewDeps): Promise<ReviewResult> {
     cwd,
   });
   // Tree scope may recover the previously reviewed commit from origin.
-  const scope = incrementalScope(deps, found, reviewHead, cwd);
+  const scope = incrementalScope(deps, found, reviewHead, diff.base_sha, cwd);
   const scoped =
     treeScope === null ? { diff, carried: [] } : filterDiffToScope(diff, treeScope.inScope);
   if (scoped.carried.length > 0) {
@@ -214,6 +214,7 @@ function incrementalScope(
   deps: ReviewDeps,
   found: PriorSticky,
   reviewHead: string,
+  baseSha: string,
   cwd: string,
 ): IncrementalScope | null {
   if (!deps.inputs.reviewMemory || deps.context.eventName !== "pull_request") return null;
@@ -221,6 +222,7 @@ function incrementalScope(
     reviewedSha: found.prior?.reviewed_sha,
     reviewHead,
     excludeGlobs: deps.inputs.excludeGlobs,
+    baseSha,
     cwd,
   });
 }

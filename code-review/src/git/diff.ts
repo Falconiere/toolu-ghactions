@@ -49,6 +49,9 @@ export interface DiffData {
   total_files: number;
   truncated: boolean;
   base_sha: string;
+  /** The trusted PR base `.gitattributes` were read from, set only when the PR
+   *  edits a `.gitattributes` (see fetchDiff); distill.ts reads them the same way. */
+  attr_source?: string;
   error?: string;
   max_files?: number;
   /** Full-file read-only context for oversized chunks (set by review/chunked.ts only). */
@@ -70,6 +73,9 @@ export interface DiffOptions {
   githubBaseRef?: string;
   /** Extra path globs to exclude from the reviewed diff (← INPUT_EXCLUDE_GLOBS, split). */
   excludeGlobs?: string[];
+  /** The trusted PR base sha, when `baseBranch` is not it (the incremental
+   *  since-diff passes a reviewed PR commit as its base). Defaults to the base tip. */
+  trustedBase?: string;
   cwd?: string;
 }
 
@@ -118,8 +124,21 @@ const QUOTEPATH_OFF = ["-c", "core.quotepath=false"];
  */
 const LITERAL_PATHSPECS = ["--literal-pathspecs"];
 
+/** Keep the `a/`/`b/` header prefixes every path parser here strips, whatever the
+ *  runner's git config says (`diff.noprefix` turned `b/x.ts` into `x.ts`). */
+const DIFF_PREFIXES_ON = ["-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false"];
+
 /** Global options prepended to EVERY git invocation in this module. */
-const GIT_GLOBAL_OPTIONS = [...LITERAL_PATHSPECS, ...QUOTEPATH_OFF];
+const GIT_GLOBAL_OPTIONS = [...LITERAL_PATHSPECS, ...QUOTEPATH_OFF, ...DIFF_PREFIXES_ON];
+
+/**
+ * The global option that reads `.gitattributes` from `attrSource` (a trusted
+ * tree-ish) instead of the checked-out tree — none when no source is set. Git
+ * < 2.41 rejects the option, so a caller that sets a source fails closed there.
+ */
+export function attrSourceArgs(attrSource: string | undefined): string[] {
+  return attrSource === undefined ? [] : [`--attr-source=${attrSource}`];
+}
 
 /** Run `git` and return stdout, or null when git exits non-zero (the `|| true` idiom). */
 function gitOrNull(args: string[], cwd: string): string | null {
@@ -137,11 +156,11 @@ function gitOrNull(args: string[], cwd: string): string | null {
 /**
  * Run `git` and return stdout, THROWING DiffResolutionError when git fails.
  *
- * For the ONE call whose stdout IS the review. `gitOrNull`'s `|| true` idiom is
- * right for probes (`rev-parse --verify` answers "no" via exit code) and wrong
- * here, where a failure flattened to `""` is indistinguishable from "this PR
- * changed nothing": the pipeline short-circuits on `total_files === 0` and
- * APPROVES, the ledger marks every file `unreviewed (not-attempted)`, and with
+ * For the calls whose stdout IS the review (the numstat path list and the review
+ * diff). `gitOrNull`'s `|| true` idiom is right for probes (`rev-parse --verify`
+ * answers "no" via exit code) and wrong here, where a failure flattened to `""` is
+ * indistinguishable from "this PR changed nothing": the pipeline short-circuits on
+ * `total_files === 0` and APPROVES, the ledger marks every file `unreviewed (not-attempted)`, and with
  * the default `FAIL_ON: changes` the job still exits green having reviewed
  * nothing. Real failures that reach this call are the 1 GiB `maxBuffer`
  * (ENOBUFS on a huge PR) and E2BIG once the pathspec argv exceeds the kernel
@@ -166,6 +185,25 @@ function gitOrThrow(args: string[], cwd: string, baseBranch: string): string {
         .pop() ?? "git exited non-zero";
     throw new DiffResolutionError(
       `Cannot read the review diff: ${detail}. This is a git FAILURE, not an empty diff — the review was not performed.`,
+      baseBranch,
+    );
+  }
+}
+
+/** {@link gitOrThrow} with `.gitattributes` read from `attrSource` when set, its
+ *  failure then naming the git version `--attr-source` needs. */
+function gitAttrOrThrow(
+  args: string[],
+  attrSource: string | undefined,
+  cwd: string,
+  baseBranch: string,
+): string {
+  try {
+    return gitOrThrow([...attrSourceArgs(attrSource), ...args], cwd, baseBranch);
+  } catch (err) {
+    if (attrSource === undefined) throw err;
+    throw new DiffResolutionError(
+      `${errorMessage(err)} Reviewing a PR that changes .gitattributes needs git ≥ 2.41 (--attr-source).`,
       baseBranch,
     );
   }
@@ -464,9 +502,10 @@ export function fetchDiff(opts: DiffOptions): DiffData {
   // transitions, spaces, non-ASCII under core.quotepath=false, and C-quoted
   // names holding a tab or a newline — so the separate full-range `--name-only`
   // walk that ran here before was pure duplicate work.
-  const numstat =
-    gitOrNull(["diff", "--no-renames", "--numstat", mergeBase, reviewHead], cwd) ?? "";
-  const rows = parseNumstat(numstat);
+  //
+  // gitOrThrow: a failed numstat flattened to "" would read as "no changes" and approve.
+  const numstatArgs = ["diff", "--no-renames", "--numstat", mergeBase, reviewHead];
+  let rows = parseNumstat(gitOrThrow(numstatArgs, cwd, baseBranch));
   const changedPaths = rows.map((row) => row.path);
   const totalFiles = changedPaths.length;
 
@@ -474,11 +513,32 @@ export function fetchDiff(opts: DiffOptions): DiffData {
     return emptyResult(baseSha);
   }
 
+  // Attributes can differ from the base only where the PR edits a `.gitattributes`;
+  // then read them from the trusted PR base, never the PR's own tree, or one line
+  // of `* linguist-generated` / `* -diff` drops every file from review.
+  const prPaths =
+    opts.trustedBase === undefined
+      ? changedPaths
+      : gitOrThrow(
+          ["diff", "--no-renames", "--name-only", `${opts.trustedBase}...${reviewHead}`],
+          cwd,
+          baseBranch,
+        )
+          .split("\n")
+          .map(unquoteGitPath);
+  const attrSource = prPaths.some((p) => p === ".gitattributes" || p.endsWith("/.gitattributes"))
+    ? (opts.trustedBase ?? baseSha)
+    : undefined;
+  // Only the binary (`-diff`) column can change; the path list cannot.
+  if (attrSource !== undefined) {
+    rows = parseNumstat(gitAttrOrThrow(numstatArgs, attrSource, cwd, baseBranch));
+  }
+
   const deletedPaths = deletedInRange(mergeBase, reviewHead, cwd);
   // Exclusion (EXCLUDE_GLOBS → .gitattributes linguist-generated → static noise) runs
   // BEFORE the file-count gate, so a PR dominated by generated/vendored files is
   // reviewed on its few real files instead of being skipped wholesale.
-  const generatedPaths = gitattributesGenerated(changedPaths, cwd);
+  const generatedPaths = gitattributesGenerated(changedPaths, cwd, attrSource);
   const { binary, text, dropped } = classifyFiles(
     rows,
     reviewHead,
@@ -516,8 +576,9 @@ export function fetchDiff(opts: DiffOptions): DiffData {
     // review, so a git failure must never flatten to "" and read as "the PR
     // changed nothing" (see gitOrThrow). A genuinely empty diff still returns ""
     // here — `git diff` exits 0 with no output when nothing differs.
-    const rawDiff = gitOrThrow(
+    const rawDiff = gitAttrOrThrow(
       ["diff", "-M", mergeBase, reviewHead, "--", ...text],
+      attrSource,
       cwd,
       baseBranch,
     );
@@ -553,16 +614,22 @@ export function fetchDiff(opts: DiffOptions): DiffData {
     total_files: totalFiles,
     truncated,
     base_sha: baseSha,
+    ...(attrSource === undefined ? {} : { attr_source: attrSource }),
   };
 }
 
 /**
  * Paths the repo marks `linguist-generated` in `.gitattributes` (the signal GitHub's
- * own diff UI uses). One batched `git check-attr` over the changed paths. Degrades to
- * an empty set if check-attr is unavailable or errors — static patterns + EXCLUDE_GLOBS
- * still apply. Only `linguist-generated` suppresses diffs; `linguist-vendored` does not.
+ * own diff UI uses). One batched `git check-attr` over the changed paths, reading
+ * attributes from `attrSource` when set (see fetchDiff). Degrades to an empty set if
+ * check-attr is unavailable or errors — static patterns + EXCLUDE_GLOBS still apply.
+ * Only `linguist-generated` suppresses diffs; `linguist-vendored` does not.
  */
-function gitattributesGenerated(paths: readonly string[], cwd: string): Set<string> {
+function gitattributesGenerated(
+  paths: readonly string[],
+  cwd: string,
+  attrSource: string | undefined,
+): Set<string> {
   const out = new Set<string>();
   if (paths.length === 0) return out;
   let res: string;
@@ -570,12 +637,11 @@ function gitattributesGenerated(paths: readonly string[], cwd: string): Set<stri
     // -z makes both input and output NUL-delimited. Git paths may legally
     // contain newlines, so a newline-delimited --stdin would split one path
     // across two records and misclassify it. NUL can never appear in a path.
-    res = execFileSync("git", ["check-attr", "-z", "linguist-generated", "--stdin"], {
-      cwd,
-      input: paths.join("\0"),
-      encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024,
-    });
+    res = execFileSync(
+      "git",
+      [...attrSourceArgs(attrSource), "check-attr", "-z", "linguist-generated", "--stdin"],
+      { cwd, input: paths.join("\0"), encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+    );
   } catch {
     return out; // check-attr unavailable / no .gitattributes → skip this layer
   }

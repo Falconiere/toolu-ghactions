@@ -28803,7 +28803,8 @@ var BATCH_MAX_BUFFER = 1024 * 1024 * 1024;
 // src/git/diff.ts
 var QUOTEPATH_OFF = ["-c", "core.quotepath=false"];
 var LITERAL_PATHSPECS = ["--literal-pathspecs"];
-var GIT_GLOBAL_OPTIONS = [...LITERAL_PATHSPECS, ...QUOTEPATH_OFF];
+var DIFF_PREFIXES_ON = ["-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false"];
+var GIT_GLOBAL_OPTIONS = [...LITERAL_PATHSPECS, ...QUOTEPATH_OFF, ...DIFF_PREFIXES_ON];
 
 // src/jev/recheck.ts
 var Decision = external_exports.object({

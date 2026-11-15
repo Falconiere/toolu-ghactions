@@ -141,7 +141,12 @@ export async function reviewChunked(opts: ChunkedReviewOptions): Promise<Provide
  *  bisected, never merged — byte-identical to the un-chunked review, including the
  *  absence of a retry. Its paths are ledgered from the single result. */
 async function reviewWhole(opts: ChunkedReviewOptions): Promise<ProviderResult> {
-  const paths = opts.diff.changed_files;
+  // A MAX_DIFF_LINES cut leaves later files out of the text; they fall to the
+  // ledger's `unreviewed (not-attempted)`.
+  // shortcut: a file cut mid-hunk still counts reviewed, upgrade if partial coverage must be reported
+  const paths = opts.diff.truncated
+    ? splitDiffByFile(opts.diff.diff).map((s) => s.path)
+    : opts.diff.changed_files;
   if (deadlinePassed(opts.wallDeadline)) {
     for (const path of paths) opts.onCoverage(path, { status: "pending" });
     return mergeResults([]);
@@ -178,7 +183,9 @@ function chunkDiffData(
   const totalLines = chunk.reduce((n, s) => n + s.lines, 0);
   const sub: DiffData = {
     ...diff,
-    diff: chunk.map((s) => s.diff).join(""),
+    // The diff's last segment has no trailing newline; packing can move it ahead
+    // of another file, whose `diff --git` header would then glue onto its last line.
+    diff: chunk.map((s) => (s.diff.endsWith("\n") ? s.diff : `${s.diff}\n`)).join(""),
     changed_files: chunk.map((s) => s.path),
     total_lines: totalLines,
     // total_files stays global so the model knows it is seeing a slice; binary_files,

@@ -1,11 +1,11 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fetchDiff, DiffResolutionError } from "@/git/diff.js";
 import { splitDiffByFile } from "@/git/chunk.js";
-import { readFileAt } from "@/pipeline/git.js";
+import { readFileAt, sinceChangedLines } from "@/pipeline/git.js";
 import {
   git,
   setupGitRepo,
@@ -31,6 +31,17 @@ afterEach(() => {
 function featureRepo(): string {
   const dir = setupGitRepo();
   repos.push(dir);
+  git(dir, "checkout", "-b", "feature", "--quiet");
+  return dir;
+}
+
+/** A repo whose BASE branch carries `.gitattributes`, switched to a feature branch. */
+function attributedRepo(attributes: string): string {
+  const dir = setupGitRepo();
+  repos.push(dir);
+  writeFile(dir, ".gitattributes", attributes);
+  git(dir, "add", ".gitattributes");
+  git(dir, "commit", "-m", "attributes", "--quiet");
   git(dir, "checkout", "-b", "feature", "--quiet");
   return dir;
 }
@@ -252,8 +263,7 @@ describe("fetchDiff — generated/vendored exclusion + renames", () => {
   });
 
   it("drops a path marked linguist-generated in .gitattributes (no static match)", () => {
-    const dir = featureRepo();
-    writeFile(dir, ".gitattributes", "schema/api.yaml linguist-generated\n");
+    const dir = attributedRepo("schema/api.yaml linguist-generated\n");
     writeFile(dir, "schema/api.yaml", "openapi: 3.0.0\n");
     writeFile(dir, "src/app.ts", "export const x = 1\n");
     git(dir, "add", "-A");
@@ -268,10 +278,7 @@ describe("fetchDiff — generated/vendored exclusion + renames", () => {
   });
 
   it("drops every linguist-generated path when several are present (NUL -z parse)", () => {
-    const dir = featureRepo();
-    writeFile(
-      dir,
-      ".gitattributes",
+    const dir = attributedRepo(
       "schema/api.yaml linguist-generated\ndist/bundle.js linguist-generated\n",
     );
     writeFile(dir, "schema/api.yaml", "openapi: 3.0.0\n");
@@ -687,6 +694,20 @@ describe("fetchDiff — a FAILED review diff is never reported as an empty one",
     );
   });
 
+  it("throws DiffResolutionError when the --numstat classification pass fails", () => {
+    const dir = featureRepo();
+    writeFile(dir, "src/a.ts", "export const secret = 1;\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "add a", "--quiet");
+    // A real numstat failure: the changed file's blob is gone from the object store.
+    const blob = git(dir, "rev-parse", "HEAD:src/a.ts").trim();
+    rmSync(join(dir, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
+
+    expect(() => fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 8000 })).toThrow(
+      DiffResolutionError,
+    );
+  });
+
   it("still reports a repo with no changes as an empty review, without throwing", () => {
     // The other half of the distinction: an empty diff must stay a clean no-op.
     const dir = setupGitRepo();
@@ -822,5 +843,68 @@ describe("fetchDiff — one --numstat pass feeds the changed-path list", () => {
       "plain.ts",
       "with space.ts",
     ]);
+  });
+});
+
+// `.gitattributes` is PR-controlled text. A PR that adds `* linguist-generated` or
+// `* -diff` must not be able to drop its own files from review, so attributes are
+// read from the trusted PR base whenever the PR edits a `.gitattributes`.
+describe("fetchDiff — a PR's own .gitattributes cannot hide its files", () => {
+  it("reviews files the PR itself marks linguist-generated and -diff", () => {
+    const dir = featureRepo();
+    writeFile(dir, ".gitattributes", "src/*.ts linguist-generated\nsrc/b.ts -diff\n");
+    writeFile(dir, "src/a.ts", "export const a = 1;\n");
+    writeFile(dir, "src/b.ts", "export const b = 1;\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "hide my files", "--quiet");
+
+    const r = fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 8000 });
+    expect(r.changed_files).toEqual([".gitattributes", "src/a.ts", "src/b.ts"]);
+    expect(r.binary_files).toEqual([]);
+    expect(r.dropped_files).toEqual([]);
+    expect(r.diff).toContain("L1: +export const a = 1;");
+    expect(r.diff).toContain("L1: +export const b = 1;");
+  });
+
+  it("the incremental scope reads attributes from the PR base, not the reviewed commit", () => {
+    const dir = featureRepo();
+    writeFile(dir, ".gitattributes", "src/*.ts linguist-generated\n");
+    writeFile(dir, "src/a.ts", "export const a = 1;\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "round one", "--quiet");
+    const reviewedSha = git(dir, "rev-parse", "HEAD").trim();
+    writeFile(dir, "src/a.ts", "export const a = 2;\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "round two", "--quiet");
+
+    // The since-diff's own base is a PR commit that already carries the
+    // attributes; only the real PR base can say src/a.ts is reviewable.
+    const scope = sinceChangedLines({
+      reviewedSha,
+      reviewHead: "HEAD",
+      excludeGlobs: [],
+      baseSha: git(dir, "rev-parse", "main").trim(),
+      cwd: dir,
+    });
+    expect(scope?.get("src/a.ts")).toEqual(new Set([1]));
+  });
+});
+
+describe("fetchDiff — runner git config cannot change header prefixes", () => {
+  it("parses the same paths under diff.noprefix and diff.mnemonicPrefix", () => {
+    const dir = featureRepo();
+    writeFile(dir, "b/x.ts", "export const x = 1;\n");
+    writeFile(dir, "src/a.ts", "export const a = 1;\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "two files", "--quiet");
+    const clean = fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 8000 });
+
+    git(dir, "config", "diff.noprefix", "true");
+    git(dir, "config", "diff.mnemonicPrefix", "true");
+    const r = fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 8000 });
+    expect(r.changed_files).toEqual(clean.changed_files);
+    expect(splitDiffByFile(r.diff).map((s) => s.path)).toEqual(["b/x.ts", "src/a.ts"]);
+    expect(r.files.map((f) => f.path)).toEqual(["b/x.ts", "src/a.ts"]);
+    expect(r.diff).toBe(clean.diff);
   });
 });

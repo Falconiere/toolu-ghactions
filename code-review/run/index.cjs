@@ -39877,24 +39877,30 @@ function splitGlobs(raw) {
   return raw.split(/[,\n]/).map((e) => e.trim()).filter((e) => e !== "");
 }
 function globMatcher(entry) {
-  if (entry.endsWith("/**")) {
-    const prefix = entry.slice(0, -2);
-    return (p) => p.startsWith(prefix);
-  }
-  if (entry.endsWith("/")) {
-    return (p) => p.startsWith(entry);
-  }
-  const re2 = globToRegExp(entry);
-  return (p) => re2.test(p);
+  const glob = entry.endsWith("/") ? `${entry}*` : entry;
+  return (p) => wildcardMatch(glob, p);
 }
-function globToRegExp(glob) {
-  let out = "";
-  for (const ch of glob) {
-    if (ch === "*") out += "[\\s\\S]*";
-    else if (ch === "?") out += "[\\s\\S]";
-    else out += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+function wildcardMatch(glob, path) {
+  let g = 0;
+  let p = 0;
+  let star = -1;
+  let resume = 0;
+  while (p < path.length) {
+    if (glob[g] === "*") {
+      star = g++;
+      resume = p;
+    } else if (g < glob.length && (glob[g] === "?" || glob[g] === path[p])) {
+      g++;
+      p++;
+    } else if (star !== -1) {
+      g = star + 1;
+      p = ++resume;
+    } else {
+      return false;
+    }
   }
-  return new RegExp(`^${out}$`);
+  while (glob[g] === "*") g++;
+  return g === glob.length;
 }
 function anyGlobMatches(globs, path) {
   return globs.some((g) => globMatcher(g)(path));
@@ -40383,7 +40389,11 @@ var DiffResolutionError = class extends Error {
 };
 var QUOTEPATH_OFF = ["-c", "core.quotepath=false"];
 var LITERAL_PATHSPECS = ["--literal-pathspecs"];
-var GIT_GLOBAL_OPTIONS = [...LITERAL_PATHSPECS, ...QUOTEPATH_OFF];
+var DIFF_PREFIXES_ON = ["-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false"];
+var GIT_GLOBAL_OPTIONS = [...LITERAL_PATHSPECS, ...QUOTEPATH_OFF, ...DIFF_PREFIXES_ON];
+function attrSourceArgs(attrSource) {
+  return attrSource === void 0 ? [] : [`--attr-source=${attrSource}`];
+}
 function gitOrNull(args, cwd) {
   try {
     return (0, import_node_child_process2.execFileSync)("git", [...GIT_GLOBAL_OPTIONS, ...args], {
@@ -40406,6 +40416,17 @@ function gitOrThrow(args, cwd, baseBranch) {
     const detail = errorMessage(err).split("\n").map((line) => line.trim()).filter((line) => line !== "").pop() ?? "git exited non-zero";
     throw new DiffResolutionError(
       `Cannot read the review diff: ${detail}. This is a git FAILURE, not an empty diff \u2014 the review was not performed.`,
+      baseBranch
+    );
+  }
+}
+function gitAttrOrThrow(args, attrSource, cwd, baseBranch) {
+  try {
+    return gitOrThrow([...attrSourceArgs(attrSource), ...args], cwd, baseBranch);
+  } catch (err) {
+    if (attrSource === void 0) throw err;
+    throw new DiffResolutionError(
+      `${errorMessage(err)} Reviewing a PR that changes .gitattributes needs git \u2265 2.41 (--attr-source).`,
       baseBranch
     );
   }
@@ -40556,15 +40577,24 @@ function fetchDiff(opts) {
   const remoteBase = resolveRemoteBase(baseBranch, cwd);
   const mergeBase = resolveMergeBase(reviewHead, remoteBase, baseBranch, cwd);
   const baseSha = gitOrNull(["rev-parse", remoteBase], cwd)?.trim() ?? "";
-  const numstat = gitOrNull(["diff", "--no-renames", "--numstat", mergeBase, reviewHead], cwd) ?? "";
-  const rows = parseNumstat(numstat);
+  const numstatArgs = ["diff", "--no-renames", "--numstat", mergeBase, reviewHead];
+  let rows = parseNumstat(gitOrThrow(numstatArgs, cwd, baseBranch));
   const changedPaths = rows.map((row) => row.path);
   const totalFiles = changedPaths.length;
   if (totalFiles === 0) {
     return emptyResult(baseSha);
   }
+  const prPaths = opts.trustedBase === void 0 ? changedPaths : gitOrThrow(
+    ["diff", "--no-renames", "--name-only", `${opts.trustedBase}...${reviewHead}`],
+    cwd,
+    baseBranch
+  ).split("\n").map(unquoteGitPath);
+  const attrSource = prPaths.some((p) => p === ".gitattributes" || p.endsWith("/.gitattributes")) ? opts.trustedBase ?? baseSha : void 0;
+  if (attrSource !== void 0) {
+    rows = parseNumstat(gitAttrOrThrow(numstatArgs, attrSource, cwd, baseBranch));
+  }
   const deletedPaths = deletedInRange(mergeBase, reviewHead, cwd);
-  const generatedPaths = gitattributesGenerated(changedPaths, cwd);
+  const generatedPaths = gitattributesGenerated(changedPaths, cwd, attrSource);
   const { binary, text: text2, dropped } = classifyFiles(
     rows,
     reviewHead,
@@ -40585,8 +40615,9 @@ function fetchDiff(opts) {
   let diff = "";
   let files = [];
   if (text2.length > 0) {
-    const rawDiff = gitOrThrow(
+    const rawDiff = gitAttrOrThrow(
       ["diff", "-M", mergeBase, reviewHead, "--", ...text2],
+      attrSource,
       cwd,
       baseBranch
     );
@@ -40612,20 +40643,20 @@ function fetchDiff(opts) {
     total_lines: diffLines,
     total_files: totalFiles,
     truncated,
-    base_sha: baseSha
+    base_sha: baseSha,
+    ...attrSource === void 0 ? {} : { attr_source: attrSource }
   };
 }
-function gitattributesGenerated(paths, cwd) {
+function gitattributesGenerated(paths, cwd, attrSource) {
   const out = /* @__PURE__ */ new Set();
   if (paths.length === 0) return out;
   let res;
   try {
-    res = (0, import_node_child_process2.execFileSync)("git", ["check-attr", "-z", "linguist-generated", "--stdin"], {
-      cwd,
-      input: paths.join("\0"),
-      encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024
-    });
+    res = (0, import_node_child_process2.execFileSync)(
+      "git",
+      [...attrSourceArgs(attrSource), "check-attr", "-z", "linguist-generated", "--stdin"],
+      { cwd, input: paths.join("\0"), encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
+    );
   } catch {
     return out;
   }
@@ -41168,8 +41199,8 @@ function resolveHeadSha(reviewHead, contextSha, cwd) {
   return gitOrNull2(["rev-parse", reviewHead], cwd) ?? contextSha;
 }
 function sinceChangedLines(opts) {
-  const { reviewedSha, reviewHead, excludeGlobs, cwd } = opts;
-  if (reviewedSha === void 0 || reviewedSha === "") return null;
+  const { reviewedSha, reviewHead, excludeGlobs, baseSha, cwd } = opts;
+  if (reviewedSha === void 0 || reviewedSha === "" || baseSha === "") return null;
   if (gitOrNull2(["rev-parse", "--verify", `${reviewedSha}^{commit}`], cwd) === null) return null;
   if (gitOrNull2(["merge-base", "--is-ancestor", reviewedSha, reviewHead], cwd) === null) {
     process.stderr.write(
@@ -41183,6 +41214,7 @@ function sinceChangedLines(opts) {
       baseBranch: reviewedSha,
       reviewHead,
       githubBaseRef: reviewedSha,
+      trustedBase: baseSha,
       excludeGlobs,
       maxFiles: 0,
       maxDiffLines: 0,
@@ -41262,7 +41294,10 @@ function parsePath(segment) {
     const path = headerOperandPath(minus);
     if (path !== "/dev/null") return path;
   }
-  return "";
+  const renameTo = segment.match(/^rename to (.+)$/m)?.[1];
+  if (renameTo !== void 0) return unquoteGitPath(renameTo);
+  const operands = segment.match(/^diff --git (.+)$/m)?.[1] ?? "";
+  return headerOperandPath(operands.slice(Math.ceil(operands.length / 2)));
 }
 
 // src/pipeline/scope.ts
@@ -44183,7 +44218,7 @@ async function reviewChunked(opts) {
   return mergeResults([first, ...rest]);
 }
 async function reviewWhole(opts) {
-  const paths = opts.diff.changed_files;
+  const paths = opts.diff.truncated ? splitDiffByFile(opts.diff.diff).map((s) => s.path) : opts.diff.changed_files;
   if (deadlinePassed(opts.wallDeadline)) {
     for (const path of paths) opts.onCoverage(path, { status: "pending" });
     return mergeResults([]);
@@ -44209,7 +44244,10 @@ function chunkDiffData(diff, chunk2, maxChunkLines, readFile) {
   const totalLines = chunk2.reduce((n, s) => n + s.lines, 0);
   const sub = {
     ...diff,
-    diff: chunk2.map((s) => s.diff).join(""),
+    // The diff's last segment has no trailing newline; packing can move it ahead
+    // of another file, whose `diff --git` header would then glue onto its last line.
+    diff: chunk2.map((s) => s.diff.endsWith("\n") ? s.diff : `${s.diff}
+`).join(""),
     changed_files: chunk2.map((s) => s.path),
     total_lines: totalLines,
     // total_files stays global so the model knows it is seeing a slice; binary_files,
@@ -44288,8 +44326,6 @@ var LINE_PREFIX = /^L(?:[0-9]+|---): /;
 var HUNK_COORDS = /^@@ -[0-9]+(?:,[0-9]+)? \+[0-9]+(?:,[0-9]+)? @@/;
 function parseHunkBody(segmentDiff) {
   const normalized = [];
-  const removed = [];
-  const added = [];
   let started = false;
   let additions = 0;
   let deletions = 0;
@@ -44308,22 +44344,13 @@ function parseHunkBody(segmentDiff) {
       noNewlineMarker = true;
     } else if (line.startsWith("+")) {
       additions++;
-      added.push(trimEnds(line.slice(1)));
     } else if (line.startsWith("-")) {
       deletions++;
-      removed.push(trimEnds(line.slice(1)));
     }
     normalized.push(line);
   }
   if (!started) return null;
-  return {
-    normalized: normalized.join("\n"),
-    additions,
-    deletions,
-    removed,
-    added,
-    noNewlineMarker
-  };
+  return { normalized: normalized.join("\n"), additions, deletions, noNewlineMarker };
 }
 function hunkHash(body) {
   return (0, import_node_crypto2.createHash)("sha1").update(body.normalized, "utf8").digest("hex");
@@ -44356,9 +44383,6 @@ function summarize(body, memberCount) {
   const kind = body.deletions === 0 ? "insertion" : body.additions === 0 ? "deletion" : "change";
   return `identical ${changed}-line ${kind} in ${memberCount} files`;
 }
-function trimEnds(content) {
-  return content.replace(/^\s+/, "").replace(/\s+$/, "");
-}
 
 // src/git/distill.ts
 var DROPPED_STRATA = /* @__PURE__ */ new Set([
@@ -44368,12 +44392,12 @@ var DROPPED_STRATA = /* @__PURE__ */ new Set([
   "generated"
 ]);
 function distill(diff, opts) {
-  const segments = splitDiffByFile(diff.diff).map(withRenameTarget);
+  const segments = splitDiffByFile(diff.diff);
   const bodies = /* @__PURE__ */ new Map();
   for (const segment of segments) bodies.set(segment.path, parseHunkBody(segment.diff));
   const strata = /* @__PURE__ */ new Map();
   classifyRenames(diff, segments, bodies, strata);
-  for (const [path, stratum] of linguistStrata(diff.changed_files, opts.cwd)) {
+  for (const [path, stratum] of linguistStrata(diff.changed_files, opts.cwd, diff.attr_source)) {
     if (!strata.has(path)) strata.set(path, stratum);
   }
   for (const segment of segments) {
@@ -44400,11 +44424,6 @@ function distill(diff, opts) {
     rules_changed: opts.rulesPaths.length === 0 ? [] : diff.changed_files.filter((p) => anyGlobMatches(opts.rulesPaths, p))
   };
 }
-function withRenameTarget(segment) {
-  if (segment.path !== "") return segment;
-  const to = segment.diff.match(/^rename to (.+)$/m)?.[1];
-  return to === void 0 ? segment : { ...segment, path: unquoteGitPath(to) };
-}
 function classifyRenames(diff, segments, bodies, strata) {
   for (const rename2 of diff.renames) strata.set(rename2.from, "rename");
   for (const segment of segments) {
@@ -44417,9 +44436,19 @@ function classifyRenames(diff, segments, bodies, strata) {
   }
 }
 function isWhitespaceOnly(body) {
-  if (body.noNewlineMarker) return false;
-  if (body.added.length === 0 || body.added.length !== body.removed.length) return false;
-  return body.added.every((line, i) => line === body.removed[i]);
+  if (body.noNewlineMarker || body.additions === 0) return false;
+  let removed = [];
+  let added = [];
+  for (const line of [...body.normalized.split("\n"), ""]) {
+    if (line.startsWith("-")) removed.push(line.slice(1).trimEnd());
+    else if (line.startsWith("+")) added.push(line.slice(1).trimEnd());
+    else {
+      if (removed.length !== added.length || removed.some((r, i) => r !== added[i])) return false;
+      removed = [];
+      added = [];
+    }
+  }
+  return true;
 }
 function isKept(segment, stratum, exemplars) {
   if (exemplars.has(segment.path)) return true;
@@ -44447,14 +44476,21 @@ function shrinkDiff(diff, kept) {
     total_files: keptPaths.size
   };
 }
-function linguistStrata(paths, cwd) {
+function linguistStrata(paths, cwd, attrSource) {
   const out = /* @__PURE__ */ new Map();
   if (paths.length === 0) return out;
   let res;
   try {
     res = (0, import_node_child_process5.execFileSync)(
       "git",
-      ["check-attr", "-z", "linguist-generated", "linguist-vendored", "--stdin"],
+      [
+        ...attrSourceArgs(attrSource),
+        "check-attr",
+        "-z",
+        "linguist-generated",
+        "linguist-vendored",
+        "--stdin"
+      ],
       { cwd, input: paths.join("\0"), encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
     );
   } catch {
@@ -46965,7 +47001,7 @@ async function runReview(deps) {
     reviewHead,
     cwd
   });
-  const scope = incrementalScope(deps, found, reviewHead, cwd);
+  const scope = incrementalScope(deps, found, reviewHead, diff.base_sha, cwd);
   const scoped = treeScope === null ? { diff, carried: [] } : filterDiffToScope(diff, treeScope.inScope);
   if (scoped.carried.length > 0) {
     process.stdout.write(
@@ -47034,12 +47070,13 @@ function prText(context3) {
     prBody: pr?.body ?? issue2?.body ?? ""
   };
 }
-function incrementalScope(deps, found, reviewHead, cwd) {
+function incrementalScope(deps, found, reviewHead, baseSha, cwd) {
   if (!deps.inputs.reviewMemory || deps.context.eventName !== "pull_request") return null;
   return sinceChangedLines({
     reviewedSha: found.prior?.reviewed_sha,
     reviewHead,
     excludeGlobs: deps.inputs.excludeGlobs,
+    baseSha,
     cwd
   });
 }

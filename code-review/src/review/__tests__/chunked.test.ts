@@ -219,6 +219,67 @@ describe("reviewChunked", () => {
     expect(parentCall?.paths).toContain("tests/helpers/live_harness_api.rs");
   });
 
+  it("never glues a reordered last segment onto the next file's diff --git header", async () => {
+    // src/z.rs is the diff's LAST (unterminated) segment; grouped with its parent
+    // src/a.rs it is packed ahead of src/b.ts in the same chunk.
+    const dir = setupGitRepo();
+    repos.push(dir);
+    git(dir, "checkout", "-b", "feature", "--quiet");
+    writeFile(dir, "src/a.rs", "mod z;\nfn a() {}\n");
+    writeFile(dir, "src/z.rs", "pub fn z() {}\n");
+    writeFile(dir, "src/b.ts", "export const b = 1;\n");
+    writeFile(dir, "src/c.ts", "export const c = 1;\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "c", "--quiet");
+    const diff = fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 0 });
+
+    const seen: DiffData[] = [];
+    await reviewChunked({
+      diff,
+      maxChunkLines: 22,
+      maxChunks: 0,
+      mechanical: [],
+      brief: null,
+      onCoverage: () => {},
+      buildEnvelope: (d) => {
+        seen.push(d);
+        return STUB_ENVELOPE;
+      },
+      review: async () => APPROVED,
+    });
+    expect(seen.some((d) => d.changed_files.join() === "src/a.rs,src/z.rs,src/b.ts")).toBe(true);
+    for (const d of seen) expect(d.diff).not.toMatch(/[^\n]diff --git /);
+  });
+
+  it("does not report a file cut off by MAX_DIFF_LINES as reviewed", async () => {
+    const dir = setupGitRepo();
+    repos.push(dir);
+    git(dir, "checkout", "-b", "feature", "--quiet");
+    // 11 primed lines per file: a 17-line budget ends inside src/b.ts, so the cut
+    // lands at src/c.ts's header.
+    const body = (name: string) =>
+      Array.from({ length: 5 }, (_, n) => `export const ${name}${n} = ${n};`).join("\n");
+    for (const name of ["a", "b", "c"]) writeFile(dir, `src/${name}.ts`, `${body(name)}\n`);
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "c", "--quiet");
+    const diff = fetchDiff({ ...BASE, cwd: dir, maxFiles: 0, maxDiffLines: 17 });
+    expect(diff.truncated).toBe(true);
+    expect(splitDiffByFile(diff.diff).map((s) => s.path)).toEqual(["src/a.ts", "src/b.ts"]);
+
+    const coverage = new Map<string, CoverageEntry>();
+    await reviewChunked({
+      diff,
+      maxChunkLines: 0,
+      maxChunks: 0,
+      mechanical: [],
+      brief: null,
+      onCoverage: (path, entry) => coverage.set(path, entry),
+      buildEnvelope: () => STUB_ENVELOPE,
+      review: async () => APPROVED,
+    });
+    expect([...coverage.keys()]).toEqual(["src/a.ts", "src/b.ts"]);
+  });
+
   it("attaches the FULL file content to an over-budget chunk (raw string never truncated)", async () => {
     const dir = setupGitRepo();
     repos.push(dir);
