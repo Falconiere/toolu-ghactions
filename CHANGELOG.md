@@ -1,5 +1,13 @@
 # Changelog
 
+## [8.6.3](https://github.com/Falconiere/toolu-ghactions/compare/v8.6.2...v8.6.3) (2026-11-15)
+
+
+### Bug Fixes
+
+* **code-review:** close review bypasses and coverage gaps from audit 2 ([#147](https://github.com/Falconiere/toolu-ghactions/issues/147)) ([8d44603](https://github.com/Falconiere/toolu-ghactions/commit/8d44603c8374d66d754c12b05b4b071bd41e92e3))
+* **merge-gate:** remove the merge-gate action ([#149](https://github.com/Falconiere/toolu-ghactions/issues/149)) ([1317550](https://github.com/Falconiere/toolu-ghactions/commit/1317550c0beb514e559d9a0a7f43174245447a99))
+
 ## [8.6.2](https://github.com/Falconiere/toolu-ghactions/compare/v8.6.1...v8.6.2) (2026-11-15)
 
 
