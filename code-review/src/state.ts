@@ -78,6 +78,12 @@ const ReviewStateSchema = z.object({
   pending_paths: z.array(z.string()).optional().catch(undefined),
   // Cluster identity, persisted across rounds: member finding fp -> exemplar fp.
   clusters: z.record(z.string(), z.string()).optional().catch(undefined),
+  // Monotonic count of COMPLETE review rounds — the MAX_ROUNDS counter. `history`
+  // is display-capped to the last 10, so it cannot carry a round number past that
+  // and a MAX_ROUNDS of 12+ would never fire. Optional/additive: still `version: 1`,
+  // and a marker written before this field decodes to `undefined`, which every read
+  // site turns into `history.length` via `completedRounds` — today's behaviour.
+  rounds: z.number().int().min(0).optional().catch(undefined),
 });
 
 /** The persisted cross-push review memory carried in the sticky-comment marker. */
@@ -96,6 +102,22 @@ export interface ReviewState {
   pending_paths?: string[] | undefined;
   /** Cluster identity: member finding fp -> exemplar fp. */
   clusters?: Record<string, string> | undefined;
+  /** Monotonic count of COMPLETE review rounds — the MAX_ROUNDS counter. Absent in
+   *  markers written before this field; read it through {@link completedRounds}, never
+   *  directly, so that fallback stays in one place. */
+  rounds?: number | undefined;
+}
+
+/**
+ * How many COMPLETE review rounds a state records: the monotonic `rounds` counter,
+ * or — for a marker written before that field existed — the `history` length, which
+ * is what MAX_ROUNDS compared against before. `history` is display-capped to the
+ * last 10, so the fallback under-counts from round 11 on; keeping it unchanged is
+ * what makes an old marker behave exactly as it does today. `null` (no marker at
+ * all) is round 0.
+ */
+export function completedRounds(state: ReviewState | null | undefined): number {
+  return state?.rounds ?? state?.history?.length ?? 0;
 }
 
 /**
@@ -206,10 +228,11 @@ export interface DiffInput {
   now?: () => number;
   /**
    * Whether this run reached COMPLETE coverage. Only a complete run advances
-   * `reviewed_sha`/`reviewed_tree` and appends a history entry — a partial run
-   * (wall-clock budget, resume in progress) preserves the prior `reviewed_sha`/
-   * `reviewed_tree` and does not burn a `MAX_ROUNDS` slot. `diffState` is the ONLY
-   * carrier into `next_state`: a field not threaded here is dropped next round.
+   * `reviewed_sha`/`reviewed_tree`, appends a history entry, and advances the
+   * `rounds` counter — a partial run (wall-clock budget, resume in progress)
+   * preserves the prior `reviewed_sha`/`reviewed_tree` and does not burn a
+   * `MAX_ROUNDS` slot. `diffState` is the ONLY carrier into `next_state`: a field
+   * not threaded here is dropped next round.
    */
   complete: boolean;
   /** Root tree sha to record when `complete` is true (ignored otherwise). Absent on
@@ -237,7 +260,9 @@ export interface DiffResult {
 /**
  * Partition current findings against the prior state by fingerprint:
  * new (not seen before), open (seen), resolved (prior, gone now — only when
- * `full_review` AND the path is in scope). History is capped to the last 10.
+ * `full_review` AND the path is in scope). History is capped to the last 10 for
+ * display; the monotonic `rounds` counter beside it is NOT capped, so MAX_ROUNDS
+ * keeps counting past the display window.
  */
 export function diffState(input: DiffInput): DiffResult {
   const current = attachFps(input.current_findings);
@@ -273,6 +298,14 @@ export function diffState(input: DiffInput): DiffResult {
   const history = input.complete
     ? [...(input.prior?.history ?? []), history_entry].slice(-10)
     : (input.prior?.history ?? []);
+  // The MAX_ROUNDS counter, persisted SEPARATELY because `history` above is capped
+  // to the last 10 for display: deriving the round number from that capped array
+  // meant round 11 onward looked like round 10 forever, so a MAX_ROUNDS of 12 or
+  // more could never fire and the PR stayed red on every push. It advances on
+  // exactly the condition the history entry does — a COMPLETE round only — so a
+  // resumed run still never burns a slot.
+  const priorRounds = completedRounds(input.prior);
+  const rounds = input.complete ? priorRounds + 1 : priorRounds;
 
   return {
     new: fresh,
@@ -285,6 +318,7 @@ export function diffState(input: DiffInput): DiffResult {
       version: 1,
       findings: current,
       history,
+      rounds,
       // reviewed_sha/reviewed_tree ADVANCE only on a complete-coverage run; a partial
       // run preserves the prior values, so the next round's incremental scope keys
       // off the last head that was FULLY reviewed, not a half-finished one.

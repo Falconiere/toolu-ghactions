@@ -118,6 +118,36 @@ function history(n: number): HistoryEntry[] {
   }));
 }
 
+const CLUSTER_TEXT = "the same defect repeated in every module of this layer";
+const CLUSTER_PATHS = ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"];
+
+/** The path `pinExemplarFp` will pick — the lowest fingerprint, which has nothing
+ *  to do with severity, so it has to be computed rather than assumed. */
+function exemplarPath(): string {
+  const ranked = CLUSTER_PATHS.map((path) => ({
+    path,
+    fp: fingerprint({ path, category: "correctness", text: CLUSTER_TEXT }),
+  })).sort((x, y) => x.fp.localeCompare(y.fp));
+  const lowest = ranked[0]?.path;
+  if (lowest === undefined) throw new Error("fixture: no paths to rank");
+  return lowest;
+}
+
+/**
+ * Four findings sharing category+text across four paths — exactly ONE cluster. Every
+ * member is `low` except that, when `withBlocker` is set, one NON-exemplar member is
+ * a `blocker`. That is the shape the cluster key makes routine: severity is not part
+ * of the key, and the exemplar is chosen by lowest fingerprint.
+ */
+function clusteredFindings(withBlocker: boolean): StampedFinding[] {
+  const exemplar = exemplarPath();
+  const blockerPath = CLUSTER_PATHS.find((p) => p !== exemplar);
+  if (blockerPath === undefined) throw new Error("fixture: no non-exemplar path");
+  return CLUSTER_PATHS.map((path) =>
+    stamp(path, withBlocker && path === blockerPath ? "blocker" : "low", CLUSTER_TEXT),
+  );
+}
+
 /** A round ledger over `reviewed` ∪ `unreviewed` ∪ `carried` paths, built the real way. */
 function ledgerOf(reviewed: string[], unreviewed: string[], carried: string[] = []) {
   const paths = [...reviewed, ...unreviewed, ...carried];
@@ -154,6 +184,10 @@ function settle(opts: {
   /** Count the source-evidence gate dropped as unverifiable quotes (default none). */
   unverifiedEvidence?: number;
   jevDismissed?: number;
+  /** The marker's monotonic completed-round counter (state.ts `rounds`). Omit it to
+   *  build a marker written BEFORE that field existed, whose round count falls back
+   *  to the (display-capped) history length. */
+  rounds?: number;
 }) {
   const ledger = ledgerOf(opts.reviewed, opts.unreviewed, opts.carried ?? []);
   const prior: ReviewState = {
@@ -161,6 +195,7 @@ function settle(opts: {
     version: 1,
     findings: opts.priorFindings ?? [],
     history: history(opts.priorRounds),
+    ...(opts.rounds === undefined ? {} : { rounds: opts.rounds }),
   };
   const reduction = reduceFindings({ modelFindings: opts.findings, prior, ledger });
   const input: PublishInput = {
@@ -542,4 +577,103 @@ it("Jev dismissal accounting does not clear scanner or carried findings", () => 
   });
   expect(out.findings.map((f) => f.fp)).toContain(historical.fp);
   expect(out.verdict).toBe("changes");
+});
+
+// Severity is deliberately NOT part of the cluster key and `pinExemplarFp` picks the
+// LOWEST FINGERPRINT, so a cluster's representative is routinely less severe than one
+// of its own members. The round cap asks "is any remaining finding a blocker?" — fed
+// representatives only, it asked that of the exemplar and got "no" while a blocker
+// member stood right behind it, downgrading a live "changes" to "approved". settle.ts
+// now expands to full member lists before the gate, the way review/recompute.ts always
+// did before its own label gate, so the two paths agree.
+describe("settleVerdict — the round cap sees cluster MEMBERS, not just the exemplar", () => {
+  it("a blocker hiding behind a `low` exemplar still disables the cap", () => {
+    const findings = clusteredFindings(true);
+    const settled = settle({
+      findings,
+      reviewed: CLUSTER_PATHS,
+      unreviewed: [],
+      maxRounds: 3,
+      priorRounds: 2,
+    });
+
+    // The premise: the representative the comment lists really is the `low` one.
+    expect(settled.findings).toHaveLength(1);
+    expect(settled.findings[0]?.severity).toBe("low");
+    expect(settled.findings[0]?.path).toBe(exemplarPath());
+
+    expect(settled.capped).toBe(false);
+    expect(settled.verdict).toBe("changes");
+    expect(settled.validated.verdict).toBe("changes");
+    expect(settled.capNote).toBe("");
+  });
+
+  it("the same cluster with NO blocker member is still capped (the control)", () => {
+    // Identical shape, every member sub-blocker: the cap must keep firing, so the
+    // case above turns on the hidden blocker and not on clusters being exempt.
+    const settled = settle({
+      findings: clusteredFindings(false),
+      reviewed: CLUSTER_PATHS,
+      unreviewed: [],
+      maxRounds: 3,
+      priorRounds: 2,
+    });
+
+    expect(settled.findings).toHaveLength(1);
+    expect(settled.capped).toBe(true);
+    expect(settled.verdict).toBe("approved");
+    expect(settled.capNote).toContain("Round cap reached (MAX_ROUNDS=3)");
+  });
+});
+
+// `history` is display-capped to the last 10 entries (state.ts), so deriving the round
+// number from its length meant round 11 onward looked like round 10 forever: with
+// MAX_ROUNDS=12, `priorRounds + 1 < maxRounds` stayed true on every push and the cap
+// could never fire. state.ts now persists a monotonic `rounds` counter beside history
+// and settle.ts reads that.
+describe("settleVerdict — MAX_ROUNDS past the history display cap", () => {
+  it("fires at round 13 when the marker counted 12 rounds but history only shows 10", () => {
+    const settled = settle({
+      findings: [stamp("src/a.ts", "medium", "prefer a named constant here")],
+      reviewed: ["src/a.ts"],
+      unreviewed: [],
+      maxRounds: 12,
+      priorRounds: 10, // what the capped history array can show…
+      rounds: 12, // …and what the marker actually counted
+    });
+
+    expect(settled.capped).toBe(true);
+    expect(settled.verdict).toBe("approved");
+    expect(settled.validated.verdict).toBe("approved");
+    expect(settled.capNote).toContain("Round cap reached (MAX_ROUNDS=12)");
+  });
+
+  it("an OLD marker with no `rounds` field keeps today's history-length behaviour", () => {
+    // Back-compat half of the same change: without the counter the round number is
+    // the history length, exactly as before, so a marker in the wild is unaffected.
+    const settled = settle({
+      findings: [stamp("src/a.ts", "medium", "prefer a named constant here")],
+      reviewed: ["src/a.ts"],
+      unreviewed: [],
+      maxRounds: 12,
+      priorRounds: 10,
+    });
+
+    expect(settled.capped).toBe(false);
+    expect(settled.verdict).toBe("changes");
+  });
+
+  it("a blocker still overrides the counter at round 13", () => {
+    const settled = settle({
+      findings: [stamp("src/a.ts", "blocker", "this bypasses the auth check")],
+      reviewed: ["src/a.ts"],
+      unreviewed: [],
+      maxRounds: 12,
+      priorRounds: 10,
+      rounds: 12,
+    });
+
+    expect(settled.capped).toBe(false);
+    expect(settled.verdict).toBe("changes");
+  });
 });

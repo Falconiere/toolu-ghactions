@@ -7,9 +7,12 @@ import {
   decodeMarker,
   extractMarker,
   diffState,
+  completedRounds,
   type ReviewState,
+  type HistoryEntry,
   type Finding,
 } from "@/state.js";
+import { asReviewState } from "@/pipeline/sticky.js";
 
 const sampleState: ReviewState = {
   schema: "toolu-review-state",
@@ -363,5 +366,113 @@ describe("extractMarker", () => {
 
   it("returns null when the body carries no marker", () => {
     expect(extractMarker("### PR Review in Progress\n- [ ] steps")).toBeNull();
+  });
+});
+
+// MAX_ROUNDS COULD NEVER REACH 12. `history` is display-capped to the last 10 entries
+// and settle.ts derived the round number from its length, so `priorRounds` topped out at
+// 10, `priorRounds + 1` at 11, and `11 < 12` stayed true on every push forever — the
+// surrender cap silently never fired and the PR stayed red indefinitely. `rounds` is
+// persisted beside history, uncapped, and advances on exactly the same condition the
+// history entry does (a COMPLETE round), so a resume still never burns a slot.
+describe("diffState — the monotonic `rounds` counter", () => {
+  /** A prior state with `historyLength` entries and an optional `rounds` counter. */
+  function stateWith(historyLength: number, rounds?: number): ReviewState {
+    const history: HistoryEntry[] = Array.from({ length: historyLength }, (_, i) => ({
+      sha: `sha${i}`,
+      ts: 1_700_000_000 + i,
+      verdict: "changes",
+      counts: { new: 0, open: 0, resolved: 0, total: 0 },
+    }));
+    return {
+      schema: "toolu-review-state",
+      version: 1,
+      findings: [],
+      history,
+      ...(rounds === undefined ? {} : { rounds }),
+    };
+  }
+
+  /** Run diffState over `prior` with nothing but the completeness flag varying. */
+  function diff(prior: ReviewState | null, complete: boolean) {
+    return diffState({
+      prior,
+      current_findings: [{ path: "src/a.ts", text: "finding A", category: "c" }],
+      scope: { in_scope_paths: ["src/a.ts"], full_review: true },
+      head_sha: "deadbeefcafe",
+      verdict: "changes",
+      complete,
+    });
+  }
+
+  it("advances by one on a COMPLETE round", () => {
+    expect(diff(stateWith(4, 4), true).next_state.rounds).toBe(5);
+  });
+
+  it("does NOT advance on a partial round — a resume never burns a MAX_ROUNDS slot", () => {
+    expect(diff(stateWith(4, 4), false).next_state.rounds).toBe(4);
+  });
+
+  it("keeps counting while history stays display-capped at 10", () => {
+    const r = diff(stateWith(10, 12), true);
+    expect(r.next_state.rounds).toBe(13);
+    expect(r.next_state.history).toHaveLength(10); // the display cap is unchanged
+  });
+
+  it("counts up from the history length for a prior marker that predates the field", () => {
+    // The additive half: an old marker carries no `rounds`, so the counter starts from
+    // the only evidence available — the same number MAX_ROUNDS compared against before.
+    expect(diff(stateWith(7), true).next_state.rounds).toBe(8);
+    expect(diff(stateWith(7), false).next_state.rounds).toBe(7);
+  });
+
+  it("starts at 1 on the first complete round with no prior state", () => {
+    expect(diff(null, true).next_state.rounds).toBe(1);
+    expect(diff(null, false).next_state.rounds).toBe(0);
+  });
+
+  it("survives the marker round-trip", () => {
+    const next = diff(stateWith(10, 12), true).next_state;
+    const decoded = asReviewState(decodeMarker(encodeMarker(next)));
+    if (decoded === null) throw new Error("re-encoded marker did not decode");
+    expect(decoded.rounds).toBe(13);
+    expect(completedRounds(decoded)).toBe(13);
+  });
+});
+
+describe("completedRounds — the one place the `rounds` fallback lives", () => {
+  const history10: HistoryEntry[] = Array.from({ length: 10 }, (_, i) => ({
+    sha: `sha${i}`,
+    ts: i,
+    verdict: "changes",
+    counts: { new: 0, open: 0, resolved: 0, total: 0 },
+  }));
+
+  it("prefers the monotonic counter over the capped history length", () => {
+    expect(
+      completedRounds({
+        schema: "toolu-review-state",
+        version: 1,
+        findings: [],
+        history: history10,
+        rounds: 12,
+      }),
+    ).toBe(12);
+  });
+
+  it("falls back to history.length for a marker written before `rounds` existed", () => {
+    expect(
+      completedRounds({
+        schema: "toolu-review-state",
+        version: 1,
+        findings: [],
+        history: history10,
+      }),
+    ).toBe(10);
+  });
+
+  it("is 0 when there is no state at all", () => {
+    expect(completedRounds(null)).toBe(0);
+    expect(completedRounds(undefined)).toBe(0);
   });
 });

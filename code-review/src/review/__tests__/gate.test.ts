@@ -123,6 +123,40 @@ describe("applyRoundCap", () => {
       expect(d).toEqual({ verdict, capped: false });
     }
   });
+
+  it("sees a blocker a `low` cluster exemplar would otherwise hide", () => {
+    // The contract callers depend on: `findings` must be the cluster's FULL member
+    // list, not its representative. Severity is deliberately not part of the cluster
+    // key and the exemplar is picked by lowest fingerprint, so the exemplar is
+    // routinely the LEAST severe member of its own cluster. pipeline/settle.ts
+    // expands via reduce.ts's expandForSeverityGate before calling this.
+    const members = applyRoundCap({
+      verdict: "changes",
+      findings: [{ severity: "low" }, { severity: "blocker" }, { severity: "low" }],
+      priorRounds: 9,
+      maxRounds: 5,
+    });
+    expect(members).toEqual({ verdict: "changes", capped: false });
+
+    // The representative-only list this must never be handed again: it approves.
+    const exemplarOnly = applyRoundCap({
+      verdict: "changes",
+      findings: [{ severity: "low" }],
+      priorRounds: 9,
+      maxRounds: 5,
+    });
+    expect(exemplarOnly).toEqual({ verdict: "approved", capped: true });
+  });
+
+  it("caps past round 10 — the round number is not derived from the capped history", () => {
+    // state.ts persists a monotonic `rounds` counter because `history` is capped to
+    // the last 10; a round number read off that array stops at 10 and MAX_ROUNDS=12
+    // could never fire. The gate itself must stay correct well past 10.
+    for (const priorRounds of [11, 12, 40]) {
+      const d = applyRoundCap({ verdict: "changes", findings, priorRounds, maxRounds: 12 });
+      expect(d).toEqual({ verdict: "approved", capped: true });
+    }
+  });
 });
 
 describe("parseApproveBelow", () => {
@@ -198,5 +232,25 @@ describe("resolveLabelVerdict", () => {
       approveBelow: "high",
     });
     expect(result).toBe("changes");
+  });
+
+  it("ranks every cluster MEMBER, so a `low` exemplar cannot hide a blocker", () => {
+    // Same contract applyRoundCap has: callers must expand cluster representatives to
+    // their member lists first. Under APPROVE_BELOW=medium a `low` exemplar ranks
+    // below the threshold on its own — which is exactly how the chip flipped to
+    // merge-approved while a blocker member of the same cluster survived.
+    const exemplarOnly = resolveLabelVerdict({
+      verdict: "changes",
+      findings: [{ severity: "low" }],
+      approveBelow: "medium",
+    });
+    expect(exemplarOnly).toBe("approved");
+
+    const members = resolveLabelVerdict({
+      verdict: "changes",
+      findings: [{ severity: "low" }, { severity: "blocker" }, { severity: "low" }],
+      approveBelow: "medium",
+    });
+    expect(members).toBe("changes");
   });
 });

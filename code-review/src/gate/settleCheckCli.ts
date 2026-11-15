@@ -14,6 +14,11 @@ import type { ThreadClient } from "@/github/threads.js";
 import { headShaLookup, permissionLookup } from "@/github/lookups.js";
 import type { LookupClient } from "@/github/lookups.js";
 import { parseApproveBelow } from "@/review/gate.js";
+// The SAME three pure parsers readInputs() uses (inputs.ts). This action gets no argv,
+// so it reads raw `INPUT_*` env strings and calls the parsers directly — which is why
+// they are exported pure rather than folded into readInputs(): a hand-copied default
+// here is how the merge-gate and the review run drift apart on what settles a finding.
+import { parseMinTriggerPermission, parseTriggerPhrase } from "@/inputs.js";
 import { runSettleCheck } from "./settleCheck.js";
 import type { SettleCheckOutputs } from "./settleCheck.js";
 
@@ -40,9 +45,8 @@ export async function runSettleCheckCli(
     outputs = await runSettleCheck({
       octokit: client,
       target: { ...coords, prNumber: Number(pr) },
-      triggerPhrase: env["INPUT_TRIGGER_PHRASE"]?.trim() || "@toolu",
-      minPermission:
-        env["INPUT_MIN_TRIGGER_PERMISSION"]?.trim().toLowerCase() === "admin" ? "admin" : "write",
+      triggerPhrase: parseTriggerPhrase(env["INPUT_TRIGGER_PHRASE"] ?? ""),
+      minPermission: parseMinTriggerPermission(env["INPUT_MIN_TRIGGER_PERMISSION"] ?? ""),
       approveBelow: parseApproveBelow(env["INPUT_APPROVE_BELOW"] ?? ""),
       lookupPermission: permissionLookup(client, coords),
       lookupHeadSha: headShaLookup(client, coords),

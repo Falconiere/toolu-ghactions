@@ -38,8 +38,10 @@ import { jobUrl, formatDuration } from "./bodies.js";
 import {
   decorateExemplars,
   expandApplied,
+  expandForSeverityGate,
   expandRepresentatives,
   reduceFindings,
+  spansFiles,
   undecorate,
   withCarriedWithoutFinding,
 } from "./reduce.js";
@@ -160,7 +162,12 @@ export async function publish(input: PublishInput): Promise<ReviewResult> {
     ledgerSummary: renderLedgerSummary(ledger),
     unanchored: inline.unanchored,
     dropped: inline.dropped,
-    clusters: reduction.clustered.filter((c) => findings.some((f) => f.fp === c.exemplar.fp)),
+    // `spansFiles`: the section is "Repeated findings … in N files", and one cluster
+    // can now hold two findings that share a fingerprint (same defect, two lines of
+    // one file) without repeating across any files — see pipeline/reduce.ts.
+    clusters: reduction.clustered.filter(
+      (c) => spansFiles(c.members) && findings.some((f) => f.fp === c.exemplar.fp),
+    ),
   });
 
   const commentUrl = await upsertComment(octokit, target, body, input.stickyId);
@@ -168,9 +175,13 @@ export async function publish(input: PublishInput): Promise<ReviewResult> {
   // strictly below the threshold still reads "changes" in the comment/outputs
   // (`verdict` below, unchanged), but the label itself may read "approved" — see
   // review/gate.ts's resolveLabelVerdict doc for why this stays a separate value.
+  // It is fed FULL cluster member lists, not representatives: severity is not part
+  // of the cluster key, so a `low` exemplar must not hide a `blocker` member and
+  // flip the label to merge-approved. This is what review/recompute.ts already did,
+  // so the review path and the merge-gate recompute now agree.
   const labelVerdict = resolveLabelVerdict({
     verdict,
-    findings,
+    findings: expandForSeverityGate(findings, reduction),
     approveBelow: inputs.approveBelow,
   });
   // setVerdictLabel never throws — every labels-API call is caught inside

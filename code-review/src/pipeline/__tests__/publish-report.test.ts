@@ -15,6 +15,7 @@ import type { PublishInput, PublishTarget } from "@/pipeline/publish.js";
 import type { GithubContext, PipelineOctokit } from "@/pipeline/types.js";
 import type { ActionInputs } from "@/inputs.js";
 import type { BlockableVerdict } from "@/review/gate.js";
+import type { StampedFinding } from "@/pipeline/reviewCall.js";
 import { thread } from "@/review/__tests__/reconcile-helpers.js";
 import { fingerprint } from "@/state.js";
 import { POST_TIMEOUT_MS } from "@/report/post.js";
@@ -65,8 +66,13 @@ function baseInputs(over: Partial<ActionInputs> = {}): ActionInputs {
 /** A minimal in-memory PipelineOctokit. `calls` records, in order, every
  *  externally-observable mutation so ordering (AC-26) is assertable against the
  *  injected `fetch`'s own push into the same array; `bodies`, when passed,
- *  collects each posted sticky-comment body. */
-function fakeOctokit(calls: string[], bodies: string[] = []): PipelineOctokit {
+ *  collects each posted sticky-comment body; `labels`, when passed, collects each
+ *  verdict label chip the run asked GitHub to add. */
+function fakeOctokit(
+  calls: string[],
+  bodies: string[] = [],
+  labels: string[] = [],
+): PipelineOctokit {
   return {
     rest: {
       issues: {
@@ -78,7 +84,10 @@ function fakeOctokit(calls: string[], bodies: string[] = []): PipelineOctokit {
         updateComment: async () => ({ data: { html_url: "https://github.com/o/r/issues/1#c1" } }),
         createLabel: async () => ({}),
         removeLabel: async () => ({}),
-        addLabels: async () => ({}),
+        addLabels: async (p) => {
+          labels.push(...p.labels);
+          return {};
+        },
       },
       pulls: {
         createReview: async () => {
@@ -388,5 +397,88 @@ describe("publish — cluster members are expanded on BOTH sides of the report p
     expect(comment).toContain("_Dismissing this thread dismisses the pattern (3 files)._");
     // The findings list itself shows the cluster ONCE, not three times.
     expect(comment).toContain("### Findings (1)");
+  });
+});
+
+// APPROVE_BELOW ranks each surviving finding against a threshold and flips the LABEL to
+// merge-approved when all of them fall below it. It was fed cluster REPRESENTATIVES, and
+// severity is not part of the cluster key while the exemplar is picked by lowest
+// fingerprint — so a `low` exemplar ranked below a `medium` threshold and flipped the
+// chip to merge-approved while a `blocker` member of its own cluster survived.
+// review/recompute.ts already expanded to members before this same gate, which is why
+// the review path and the merge-gate recompute disagreed about identical commit state.
+describe("publish — the APPROVE_BELOW label reads cluster MEMBERS, not just the exemplar", () => {
+  const TEXT = "Unwrap on a Result that can be an Err in this handler.";
+  const PATHS = ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"];
+
+  /** The four members of ONE cluster: every one `low` except, when `hideBlocker` is
+   *  set, a single `blocker` on a NON-exemplar path. The exemplar is whichever path
+   *  hashes lowest (review/cluster.ts's pinExemplarFp), so it is computed here. */
+  function clusteredFindings(hideBlocker: boolean): StampedFinding[] {
+    const fpOf = (path: string): string =>
+      fingerprint({ path, category: "correctness", text: TEXT });
+    const exemplar = [...PATHS].sort((a, b) => fpOf(a).localeCompare(fpOf(b)))[0];
+    if (exemplar === undefined) throw new Error("fixture: no exemplar path");
+    const blockerPath = PATHS.find((p) => p !== exemplar);
+    return PATHS.map((path) => ({
+      path,
+      line: 12,
+      severity: hideBlocker && path === blockerPath ? "blocker" : "low",
+      category: "correctness",
+      text: TEXT,
+      fp: fpOf(path),
+    }));
+  }
+
+  /** Publish one cluster with MANAGE_LABELS on, returning the chips GitHub was asked
+   *  to add plus the sticky-comment body. */
+  async function publishForLabels(hideBlocker: boolean): Promise<{
+    labels: string[];
+    comment: string;
+    verdict: string;
+  }> {
+    const labels: string[] = [];
+    const bodies: string[] = [];
+    const stamped = clusteredFindings(hideBlocker);
+    const out = await publish(
+      basePublishInput(fakeOctokit([], bodies, labels), {
+        inputs: baseInputs({
+          touluApiKey: "",
+          inlineComments: false,
+          manageLabels: true,
+          approveBelow: "medium",
+        }),
+        stamped,
+        result: { verdict: "changes", findings: stamped },
+        priorThreads: [],
+        ledger: {
+          entries: Object.fromEntries(PATHS.map((p) => [p, { status: "reviewed" as const }])),
+        },
+      }),
+    );
+    return { labels, comment: bodies.at(-1) ?? "", verdict: out.verdict };
+  }
+
+  it("a blocker behind a `low` exemplar keeps the chip at request-changes", async () => {
+    const { labels, comment, verdict } = await publishForLabels(true);
+
+    // THE BUG: this came back ["merge-approved"] — the `low` exemplar ranked below
+    // the `medium` threshold and the blocker member was never consulted.
+    expect(labels).toEqual(["request-changes"]);
+    // The comment verdict is untouched either way: resolveLabelVerdict only ever
+    // moves the LABEL, which is why the two are separate values.
+    expect(verdict).toBe("changes");
+    // Rendering still speaks in representatives — the fix is scoped to the gate.
+    expect(comment).toContain("### Findings (1)");
+    expect(comment).not.toContain("merge-approved");
+  });
+
+  it("an all-`low` cluster still earns merge-approved (the control)", async () => {
+    // Identical shape minus the hidden blocker: the threshold rule must keep firing,
+    // so the case above turns on the member severity and not on clusters being exempt.
+    const { labels, verdict } = await publishForLabels(false);
+
+    expect(labels).toEqual(["merge-approved"]);
+    expect(verdict).toBe("changes");
   });
 });

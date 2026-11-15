@@ -78,20 +78,27 @@ export function renderRecapSection(diff: DiffResult, opts: RecapOptions): string
 
 /**
  * The collapsed "<details>📜 Review history" table. Empty string when there are
- * no history entries. Newest last; the Pass number is the 1-based row index.
+ * no history entries. Newest last.
+ *
+ * `history` is capped at its last 10 entries (state.ts's `.slice(-10)`), so the Pass
+ * number is NOT the row index once a PR passes 10 rounds — it would silently restart
+ * at 1. `firstPass` is the 1-based pass number of `history[0]`; rows count up from it
+ * and the summary reports the true total. It defaults to 1, which is correct for every
+ * PR at or under the cap and for a marker written before the round counter existed.
  */
-export function renderHistorySection(history: HistoryEntry[]): string {
+export function renderHistorySection(history: HistoryEntry[], firstPass = 1): string {
   if (history.length === 0) return "";
 
+  const totalPasses = firstPass + history.length - 1;
   const lines: string[] = [];
-  lines.push(`<details><summary>📜 Review history (${history.length} passes)</summary>`);
+  lines.push(`<details><summary>📜 Review history (${totalPasses} passes)</summary>`);
   lines.push("");
   lines.push("| Pass | Commit | Verdict | New | Open | Resolved |");
   lines.push("| --- | --- | --- | --- | --- | --- |");
   history.forEach((e, i) => {
     const c = e.counts ?? { new: 0, open: 0, resolved: 0, total: 0 };
     lines.push(
-      `| ${i + 1} | \`${e.sha || "?"}\` | ${e.verdict || "?"} | ${c.new ?? 0} | ${c.open ?? 0} | ${c.resolved ?? 0} |`,
+      `| ${firstPass + i} | \`${e.sha || "?"}\` | ${e.verdict || "?"} | ${c.new ?? 0} | ${c.open ?? 0} | ${c.resolved ?? 0} |`,
     );
   });
   lines.push("");

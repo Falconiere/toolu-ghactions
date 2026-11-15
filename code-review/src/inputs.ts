@@ -212,11 +212,39 @@ function readRulesRef(): "base" | "merge" {
   return "base";
 }
 
-/** Read MIN_TRIGGER_PERMISSION, defaulting to "write"; only "admin" tightens it. */
-function readMinTriggerPermission(): "write" | "admin" {
-  return core.getInput("MIN_TRIGGER_PERMISSION").trim().toLowerCase() === "admin"
-    ? "admin"
-    : "write";
+/** The @mention phrase that re-triggers a review when TRIGGER_PHRASE is unset. */
+export const DEFAULT_TRIGGER_PHRASE = "@toolu";
+
+/**
+ * Parse TRIGGER_PHRASE: trimmed, falling back to {@link DEFAULT_TRIGGER_PHRASE} when
+ * empty. PURE (no `core.getInput`) on purpose — gate/settleCheckCli.ts is a node-type
+ * action, which gets no argv and reads its inputs off `process.env` as `INPUT_*`, so
+ * it cannot go through `readInputs()` and used to hand-duplicate this default. One
+ * parser, two call sites: the merge-gate recompute can no longer drift from the
+ * review run on which phrase settles a finding.
+ */
+export function parseTriggerPhrase(raw: string): string {
+  return raw.trim() || DEFAULT_TRIGGER_PHRASE;
+}
+
+/**
+ * Parse MIN_TRIGGER_PERMISSION: only an explicit "admin" (trimmed, case-insensitive)
+ * tightens the @mention permission gate; everything else is "write". An unrecognized
+ * non-empty value is a config typo, so warn before falling back — the shape
+ * {@link readVerbosity} and {@link readRulesRef} use — rather than silently failing
+ * OPEN to the looser gate, which is how a `MIN_TRIGGER_PERMISSION: "maintain"` typo
+ * would quietly let any write-level commenter dismiss a blocker. An empty value is
+ * the normal default and stays silent. Pure, for the same reason
+ * {@link parseTriggerPhrase} is.
+ */
+export function parseMinTriggerPermission(raw: string): "write" | "admin" {
+  const token = raw.trim().toLowerCase();
+  if (token === "" || token === "write") return "write";
+  if (token === "admin") return "admin";
+  core.warning(
+    `MIN_TRIGGER_PERMISSION="${token}" is not "write" or "admin"; falling back to write.`,
+  );
+  return "write";
 }
 
 /** Resolve the explicit backend, preserving OpenRouter as the default. */
@@ -341,8 +369,8 @@ export function readInputs(): ActionInputs {
     token: core.getInput("TOKEN") || (process.env["GITHUB_TOKEN"] ?? ""),
     appId: core.getInput("APP_ID").trim(),
     appPrivateKey: core.getInput("APP_PRIVATE_KEY"),
-    triggerPhrase: core.getInput("TRIGGER_PHRASE").trim() || "@toolu",
-    minTriggerPermission: readMinTriggerPermission(),
+    triggerPhrase: parseTriggerPhrase(core.getInput("TRIGGER_PHRASE")),
+    minTriggerPermission: parseMinTriggerPermission(core.getInput("MIN_TRIGGER_PERMISSION")),
     botName: core.getInput("BOT_NAME") || "Toolu — Code Review",
     botLogoUrl:
       core.getInput("BOT_LOGO_URL") ||

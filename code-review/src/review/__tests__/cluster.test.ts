@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { clusterFindings } from "@/review/cluster.js";
+import type { FindingCluster } from "@/review/cluster.js";
 import { fingerprint, type Finding as StateFinding } from "@/state.js";
 import type { StampedFinding } from "@/pipeline/reviewCall.js";
 
@@ -226,5 +227,112 @@ describe("clusterFindings — determinism", () => {
     expect(b.length).toBe(1);
     expect(a[0]?.members.map((m) => m.fp)).toEqual(b[0]?.members.map((m) => m.fp));
     expect(a[0]?.exemplar.fp).toBe(b[0]?.exemplar.fp);
+  });
+});
+
+// TWO FINDINGS CAN SHARE ONE FINGERPRINT. `fp` is sha1(path + category + normText(text))
+// and deliberately EXCLUDES `line` (state.ts) so it survives line drift across edits —
+// but validate.ts's `dedupKey` DOES include the line. So one defect the model reports at
+// two different lines of the same file survives dedup as two findings carrying the SAME
+// fp. clusterFindings used to emit one singleton cluster per finding, and the
+// `new Map(clustered.map((c) => [c.exemplar.fp, c.members]))` that both pipeline/reduce.ts
+// and pipeline/reviewCall.ts build from that COLLIDED on the shared fp — the second
+// cluster silently overwrote the first. reconcile.ts then mapped both prior threads onto
+// one cluster index, resolved the loser as "Re-reviewed — this no longer applies" and
+// re-created the same finding as a fresh inline comment, repeating on every push forever.
+// One cluster per fingerprint is what makes that map injective again.
+describe("clusterFindings — one cluster per fingerprint (same defect, two lines of one file)", () => {
+  const TEXT = "The returned promise is never awaited, so its rejection goes unhandled.";
+
+  /** The exact pair validate.ts's line-aware dedup key lets through with one shared fp. */
+  function sameFpPair(): StampedFinding[] {
+    return [
+      stamp({ path: "src/handler.ts", line: 10, category: "correctness", text: TEXT }),
+      stamp({ path: "src/handler.ts", line: 42, category: "correctness", text: TEXT }),
+    ];
+  }
+
+  /** The exemplar→members map pipeline/reduce.ts builds from the returned clusters. */
+  function memberMap(clusters: FindingCluster[]): Map<string, StampedFinding[]> {
+    return new Map(clusters.map((c) => [c.exemplar.fp, c.members]));
+  }
+
+  it("lands both in ONE cluster carrying BOTH as members", () => {
+    const [first, second] = sameFpPair();
+    if (!first || !second) throw new Error("fixture: pair missing");
+    // The premise of the whole case, asserted rather than assumed.
+    expect(first.fp).toBe(second.fp);
+    expect(first.line).not.toBe(second.line);
+
+    const clusters = clusterFindings(sameFpPair());
+    expect(clusters).toHaveLength(1);
+    const cluster = clusters[0];
+    if (!cluster) throw new Error("fixture: no cluster");
+    expect(cluster.members).toHaveLength(2);
+    expect(cluster.members.map((m) => m.line).sort((a, b) => a - b)).toEqual([10, 42]);
+    // The exemplar is one of the two, not a third synthesized finding.
+    expect(cluster.members).toContain(cluster.exemplar);
+    expect(cluster.exemplar.fp).toBe(first.fp);
+  });
+
+  it("gives the member map ONE entry covering both — the collision that broke reconcile", () => {
+    const map = memberMap(clusterFindings(sameFpPair()));
+    expect(map.size).toBe(1);
+    const members = [...map.values()][0];
+    expect(members?.map((m) => m.line).sort((a, b) => a - b)).toEqual([10, 42]);
+  });
+
+  it("still yields one singleton per DISTINCT fp sharing a category+text bucket", () => {
+    // The other half of the rule: grouping by fp must not merge findings that merely
+    // share the bucket key. Two paths → two fingerprints → two singleton clusters,
+    // exactly as before, and the member map stays one entry per cluster.
+    const clusters = clusterFindings([
+      stamp({ path: "src/a.ts", line: 1, category: "correctness", text: TEXT }),
+      stamp({ path: "src/b.ts", line: 1, category: "correctness", text: TEXT }),
+    ]);
+    expect(clusters).toHaveLength(2);
+    for (const c of clusters) {
+      expect(c.members).toHaveLength(1);
+      expect(c.exemplar).toBe(c.members[0]);
+    }
+    expect(memberMap(clusters).size).toBe(2);
+  });
+
+  /** A ≥3-distinct-path cluster that ALSO holds a same-fp pair (one file, two lines). */
+  function pairInsideBigCluster(): StampedFinding[] {
+    return [
+      stamp({ path: "src/a.ts", line: 10, category: "correctness", text: TEXT }),
+      stamp({ path: "src/a.ts", line: 42, category: "correctness", text: TEXT }),
+      stamp({ path: "src/b.ts", line: 7, category: "correctness", text: TEXT }),
+      stamp({ path: "src/c.ts", line: 3, category: "correctness", text: TEXT }),
+    ];
+  }
+
+  it("keeps all four members when the multi-path branch holds a same-fp pair", () => {
+    const clusters = clusterFindings(pairInsideBigCluster());
+    expect(clusters).toHaveLength(1);
+    const cluster = clusters[0];
+    if (!cluster) throw new Error("fixture: no cluster");
+    expect(cluster.members).toHaveLength(4);
+    // buildCluster sorts members by fp, so the shared-fp pair sits adjacent.
+    const fps = cluster.members.map((m) => m.fp);
+    expect(fps).toEqual([...fps].sort());
+    expect(new Set(fps).size).toBe(3); // 4 findings, 3 distinct fingerprints
+    expect(memberMap(clusters).size).toBe(1);
+  });
+
+  it("pinExemplarFp still pins a prior exemplar when members share a fp", () => {
+    const findings = pairInsideBigCluster();
+    const distinct = [...new Set(findings.map((f) => f.fp))].sort();
+    const pinned = distinct[distinct.length - 1];
+    if (pinned === undefined) throw new Error("fixture: no fp");
+    const priorClusters: Record<string, string> = {};
+    for (const fp of distinct) priorClusters[fp] = pinned;
+
+    const clusters = clusterFindings(findings, priorClusters);
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0]?.exemplar.fp).toBe(pinned);
+    // Pinning did not drop the shared-fp sibling.
+    expect(clusters[0]?.members).toHaveLength(4);
   });
 });

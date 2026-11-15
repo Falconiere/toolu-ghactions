@@ -64,9 +64,17 @@ export interface RoundCapDecision {
  * listed, the label flips, and FAIL_ON stops failing the job. A single blocker
  * disables the cap: a real showstopper must keep blocking no matter the round.
  *
- * `priorRounds` is the persisted history length (one entry per completed
- * review), so `priorRounds + 1` is THIS round's number. `maxRounds <= 0`
- * disables the cap entirely.
+ * `priorRounds` is the number of COMPLETE reviews before this one, so
+ * `priorRounds + 1` is THIS round's number. Read it from state.ts's monotonic
+ * `rounds` counter (its `completedRounds` helper), never from `history.length`:
+ * history is display-capped to the last 10, so a round number derived from it
+ * stops at 10 and `maxRounds` of 12 or more could never be reached.
+ * `maxRounds <= 0` disables the cap entirely.
+ *
+ * `findings` must carry every CLUSTER MEMBER, not just each cluster's exemplar
+ * representative: severity is deliberately not part of the cluster key, so an
+ * exemplar chosen by lowest fingerprint can be `low` while a member is a
+ * `blocker`. Callers expand first (pipeline/reduce.ts `expandForSeverityGate`).
  */
 export function applyRoundCap(opts: {
   verdict: "approved" | "changes" | "skip" | "error";
@@ -122,6 +130,12 @@ export function parseApproveBelow(raw: string): Severity {
  * A finding whose severity does not resolve to a known rank (should not happen
  * post-schema-validation) is treated as blocking, so malformed input fails closed
  * rather than silently going advisory.
+ *
+ * As with {@link applyRoundCap}, `findings` must carry every cluster MEMBER, not
+ * each cluster's exemplar: a `low` exemplar ranks below any threshold above it, so
+ * representative-only input flipped the label to merge-approved while a `blocker`
+ * member of its own cluster survived. review/recompute.ts expands for exactly this
+ * reason, and pipeline/publish.ts now matches it.
  */
 export function resolveLabelVerdict(opts: {
   verdict: "approved" | "changes" | "skip" | "error";

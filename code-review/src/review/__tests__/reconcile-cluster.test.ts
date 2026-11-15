@@ -394,6 +394,93 @@ describe("dropSettled — cluster settlement", () => {
   });
 });
 
+// THE SHARED-FINGERPRINT CHURN. `fp` excludes `line` (state.ts) but validate.ts's dedup
+// key includes it, so one defect the model reports at two lines of the same file arrives
+// as TWO findings with the SAME fp. clusterFindings used to make each its own singleton
+// cluster, and `contextOf`'s `new Map(...[c.exemplar.fp, c.members])` then collapsed them
+// onto one key — so `clusterFor` mapped EVERY thread carrying that fp onto the same
+// cluster index. The first thread claimed the cluster, the second looked like a duplicate
+// of a one-member group and was resolved as "no longer applies", while the cluster's own
+// representative was re-posted as a fresh inline comment. Every push, forever.
+describe("reconcile — two findings sharing one fingerprint (same defect, two lines)", () => {
+  const SHARED_TEXT = "The returned promise is never awaited, so its rejection goes unhandled.";
+
+  /** One of the two lines the model cites for the same defect in the same file. */
+  function pairMember(
+    line: number,
+    severity: StampedFinding["severity"] = "medium",
+  ): StampedFinding {
+    const f = {
+      path: "src/handler.ts",
+      line,
+      severity,
+      category: "correctness",
+      text: SHARED_TEXT,
+    };
+    return { ...f, fp: fingerprint(f) };
+  }
+
+  /** The pair, with the shared-fp premise asserted rather than assumed. */
+  function sharedFpPair(): [StampedFinding, StampedFinding] {
+    const first = pairMember(10);
+    const second = pairMember(42);
+    if (first.fp !== second.fp) throw new Error("fixture: expected one shared fingerprint");
+    return [first, second];
+  }
+
+  it("keeps BOTH prior threads open and creates nothing", () => {
+    const [first, second] = sharedFpPair();
+    const clusters = clusterFindings([first, second]);
+
+    // The shape found in the wild: an earlier run posted one inline comment per
+    // finding, so two live bot threads carry the SAME fp marker.
+    const threads = [
+      thread({ threadId: "T_line10", fp: first.fp, path: first.path, line: first.line }),
+      thread({
+        threadId: "T_line42",
+        rootCommentId: 200,
+        fp: second.fp,
+        path: second.path,
+        line: second.line,
+      }),
+    ];
+
+    const plan = reconcile(
+      clusters.map((c) => c.exemplar),
+      threads,
+      contextOf(clusters),
+    );
+    // The churn, asserted directly: nothing is re-posted, nothing is closed.
+    expect(plan.toCreate).toEqual([]); // never re-posted as a "new" finding
+    expect(plan.toResolve).toEqual([]); // never closed as "no longer applies"
+    expect(plan.toReply).toEqual([]); // the author has said nothing, so nothing is owed
+    // One cluster per fingerprint is what makes all three empty; cluster.test.ts
+    // pins the clustering itself.
+    expect(clusters).toHaveLength(1);
+  });
+
+  it("suppresses the shared-fp cluster ONCE when either of its threads is settled", () => {
+    const [, second] = sharedFpPair();
+    const clusters = clusterFindings(sharedFpPair());
+    const resolved = thread({
+      threadId: "T_line42",
+      fp: second.fp,
+      path: second.path,
+      line: second.line,
+      isResolved: true,
+    });
+
+    const { kept, suppressed } = dropSettled(
+      clusters.map((c) => c.exemplar),
+      [resolved],
+      contextOf(clusters),
+    );
+    expect(kept).toEqual([]);
+    // One cluster → one suppressed representative, not one per finding that shares its fp.
+    expect(suppressed).toHaveLength(1);
+  });
+});
+
 describe("reconcile — unclustered goldens (byte-identical to the pre-cluster plan)", () => {
   const kept = finding({ fp: "fp-keep", path: "src/k.ts", line: 1 });
   const fresh = finding({ fp: "fp-fresh", path: "src/f.ts", line: 2 });

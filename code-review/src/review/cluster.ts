@@ -20,8 +20,10 @@ export interface FindingCluster {
   members: StampedFinding[];
 }
 
-/** Minimum distinct paths sharing (category, normText) for a cluster to form;
- *  smaller groups stay singleton clusters (`members = [exemplar]`). */
+/** Minimum distinct paths sharing (category, normText) for a cluster to form.
+ *  A smaller group is split by fingerprint — one cluster per distinct `fp`, so a
+ *  group of unrelated findings still yields one singleton (`members = [exemplar]`)
+ *  each, while findings that share a fp share one cluster. */
 const MIN_CLUSTER_PATHS = 3;
 
 /**
@@ -35,6 +37,10 @@ const MIN_CLUSTER_PATHS = 3;
  * last round): the prior exemplar fp if it is still a member this round, else
  * the lowest member fp (lexicographic). Members are sorted by fp for
  * determinism; each keeps its own `.fp` untouched.
+ *
+ * ONE CLUSTER PER FINGERPRINT, always: a sub-threshold bucket is split by `fp`
+ * ({@link oneClusterPerFp}), never into one singleton per finding, because two
+ * findings can share a fingerprint — see that function for why.
  */
 export function clusterFindings(
   findings: StampedFinding[],
@@ -48,11 +54,40 @@ export function clusterFindings(
     if (distinctPaths.size >= MIN_CLUSTER_PATHS) {
       clusters.push(buildCluster(group, priorClusters));
     } else {
-      for (const finding of group) clusters.push({ exemplar: finding, members: [finding] });
+      clusters.push(...oneClusterPerFp(group));
     }
   }
 
   return clusters;
+}
+
+/**
+ * The sub-threshold fallback: ONE cluster per distinct `fp` in `group`, carrying
+ * every finding that shares it (first occurrence leads, so a bucket of distinct
+ * fingerprints still yields one singleton per finding, exactly as before).
+ *
+ * Two findings CAN share a fingerprint: `fp` is sha1(path + category + normText)
+ * and deliberately excludes `line` (state.ts), while validate.ts's dedup key
+ * includes it — so one defect the model reports at two different lines of the
+ * same file survives dedup as two findings with the SAME fp. Emitting one
+ * singleton cluster per finding there made the exemplar→members map both
+ * pipeline/reduce.ts and pipeline/reviewCall.ts build from these clusters
+ * (`new Map(clustered.map((c) => [c.exemplar.fp, c.members]))`) collide on that
+ * fp, so the second cluster silently overwrote the first and reconcile resolved
+ * one thread while re-creating the other — forever, on every push.
+ *
+ * Grouping by fp instead makes that map injective: every finding sharing a
+ * fingerprint lands in the same bucket (same path + category + normText means the
+ * same grouping key by construction), so no two clusters can claim one fp.
+ */
+function oneClusterPerFp(group: StampedFinding[]): FindingCluster[] {
+  const byFp = new Map<string, FindingCluster>();
+  for (const finding of group) {
+    const cluster = byFp.get(finding.fp);
+    if (cluster) cluster.members.push(finding);
+    else byFp.set(finding.fp, { exemplar: finding, members: [finding] });
+  }
+  return [...byFp.values()];
 }
 
 /** Group findings by `${category}\0${normText(text)}` — the "near-identical"
